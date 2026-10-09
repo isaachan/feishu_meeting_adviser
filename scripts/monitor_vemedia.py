@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Observe a live .vemedia, save readable bytes and incrementally extract AAC.
 
-Start AFTER Feishu begins local recording; Ctrl-C BEFORE stopping recording.
+Start AFTER Feishu begins local recording; Ctrl-C is optional. If the source
+vanishes, wait briefly for it to reappear before exiting (meeting end or fault).
 Produces events.jsonl, observed.vemedia (bytes seen), audio.aac, and periodic
 AAC->WAV decode checks. Does not use the final MP4 or its moov index.
 """
@@ -23,7 +24,7 @@ def log(fp, event, **fields):
            "wall_time": datetime.now().astimezone().isoformat(timespec="milliseconds"), **fields}
     fp.write(json.dumps(row, ensure_ascii=False) + "\n")
     fp.flush()
-    if event in ("start", "change", "decode", "error", "stop"):
+    if event in ("start", "change", "decode", "error", "source_missing", "source_resumed", "stop"):
         print(row, flush=True)
 
 
@@ -35,9 +36,11 @@ def main():
     ap.add_argument('--interval', type=float, default=0.2)
     ap.add_argument('--decode-every', type=float, default=10.0,
                     help='Seconds between afconvert checks (0 disables)')
+    ap.add_argument('--missing-grace', type=float, default=10.0,
+                    help='Wait this many seconds after a seen source vanishes (default: 10)')
     args = ap.parse_args()
-    if args.interval <= 0 or args.decode_every < 0:
-        ap.error('interval must be positive and decode-every nonnegative')
+    if args.interval <= 0 or args.decode_every < 0 or args.missing_grace <= 0:
+        ap.error('interval and missing-grace must be positive; decode-every nonnegative')
     args.outdir = args.outdir or (Path(__file__).resolve().parent.parent / 'material' /
                                    f'monitor_{datetime.now():%Y%m%d_%H%M%S_%f}')
     args.outdir.mkdir(parents=True, exist_ok=False)
@@ -50,6 +53,8 @@ def main():
     rate = None
     asc = None
     last_decode = time.monotonic()
+    missing_since = None
+    stop_reason = 'interrupted'
     # The observed file is an exact copy of the bytes once seen, assuming no rewrite.
     with (args.outdir / 'events.jsonl').open('w') as events, \
          (args.outdir / 'observed.vemedia').open('wb') as observed, \
@@ -64,10 +69,17 @@ def main():
                         st_after = os.fstat(fp.fileno())
                 except FileNotFoundError:
                     if last is not None:
-                        log(events, 'error', reason='source_disappeared')
-                        break
+                        if missing_since is None:
+                            missing_since = time.monotonic()
+                            log(events, 'source_missing', size=len(last))
+                        if time.monotonic() - missing_since >= args.missing_grace:
+                            stop_reason = 'source_missing_timeout'
+                            break
                     time.sleep(args.interval)
                     continue
+                if missing_since is not None:
+                    log(events, 'source_resumed', missing_s=time.monotonic()-missing_since)
+                    missing_since = None
                 ident = (st_after.st_dev, st_after.st_ino)
                 if st_before.st_size != st_after.st_size or len(data) != st_after.st_size:
                     log(events, 'unstable_read', before=st_before.st_size, after=st_after.st_size,
@@ -158,7 +170,7 @@ def main():
                 time.sleep(args.interval)
         except KeyboardInterrupt:
             pass
-        log(events, 'stop', size=len(last) if last else 0, frames=frames,
+        log(events, 'stop', reason=stop_reason, size=len(last) if last else 0, frames=frames,
             last_pts=last_pts, last_pts_seconds=last_pts/rate if rate and last_pts is not None else None)
     return 0
 
