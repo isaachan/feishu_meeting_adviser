@@ -1,0 +1,2 @@
+# Bundled FFmpeg executable on macOS/Linux/Windows for persistent AAC -> PCM decoding.
+imageio-ffmpeg>=0.6,<1
