@@ -1,0 +1,4 @@
+-r requirements.txt
+# Local streaming sherpa-onnx transducer on Apple Silicon (CPU provider).
+numpy>=2,<3
+sherpa-onnx>=1.13.8,<2

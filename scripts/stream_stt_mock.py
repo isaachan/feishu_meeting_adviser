@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
-"""Incrementally extract .vemedia AAC -> persistent FFmpeg -> 16k mono PCM -> mock STT.
+"""Incrementally extract .vemedia AAC -> persistent FFmpeg -> 16k PCM -> STT.
 
 Install: python3 -m pip install -r requirements.txt
-Live: python3 scripts/stream_stt_mock.py /path/to/growing.vemedia
+Live: python3 scripts/stream_stt_mock.py /path/to/growing.vemedia --stt-provider local --local-model-dir models/MODEL
 Offline smoke test: python3 scripts/stream_stt_mock.py material/FILE.vemedia --replay
-Mock text is a receipt, NOT speech recognition. No final MP4/moov is used.
+Default mock text is a receipt, NOT speech recognition. No final MP4/moov is used.
 """
 import argparse
-from collections import deque
 from datetime import datetime
 import json
 import os
@@ -20,6 +19,7 @@ import threading
 import time
 
 from extract_vemedia_audio import adts_header
+from stt_providers import MockSTT, create_stt_session
 
 SAMPLE_RATE = 16000
 BYTES_PER_SAMPLE = 2  # PCM s16le mono
@@ -154,10 +154,17 @@ class FFmpegDecoder:
     def close_input(self, drain):
         self._enqueue(None, drain)
 
+    def finish_process(self):
+        code = self.proc.wait(timeout=10)
+        self.reader.join(timeout=1)
+        self.proc.stdout.close()
+        return code
+
     def terminate(self):
         if self.proc.poll() is None:
             self.proc.kill()
         self.proc.wait(timeout=5)
+        self.proc.stdout.close()
 
 
 class PCMChunker:
@@ -190,45 +197,23 @@ class PCMChunker:
         return chunk
 
 
-class MockSTT:
-    """Replace this adapter with a real streaming STT session later.
-
-    Results prove transport/chunking only; they are NOT recognized speech.
-    """
-    def __init__(self):
-        self.chunks = 0
-        self.pcm_bytes = 0
-
-    def send_pcm(self, pcm, sample_rate):
-        if sample_rate != SAMPLE_RATE or not pcm or len(pcm) % BYTES_PER_SAMPLE:
-            raise ValueError('Expected nonempty 16k s16le mono PCM samples')
-        self.chunks += 1
-        self.pcm_bytes += len(pcm)
-        return {'type': 'mock_receipt', 'seq': self.chunks,
-                'text': f'[MOCK] received {self.pcm_bytes / (SAMPLE_RATE * BYTES_PER_SAMPLE):.3f}s PCM',
-                'duration_s': len(pcm) / (SAMPLE_RATE * BYTES_PER_SAMPLE)}
-
-    def finish(self):
-        return {'type': 'mock_done', 'chunks': self.chunks,
-                'audio_seconds': self.pcm_bytes / (SAMPLE_RATE * BYTES_PER_SAMPLE)}
-
-
 def event(log, kind, **kwargs):
     record = {'type': kind, 'monotonic_ns': time.monotonic_ns(), **kwargs}
     log.write(json.dumps(record, ensure_ascii=False) + '\n')
     log.flush()
 
 
-def run(args):
+def run(args, stt_factory=create_stt_session):
     if args.poll_ms <= 0 or args.missing_grace <= 0 or args.max_chunk_wait_ms <= 0:
         raise ValueError('poll-ms, missing-grace and max-chunk-wait-ms must be positive')
     chunker = PCMChunker(args.target_chunk_ms)
     outdir = args.outdir or (Path(__file__).resolve().parent.parent / 'material' /
-                             f'stt_mock_{datetime.now():%Y%m%d_%H%M%S_%f}')
+                             f'stt_{args.stt_provider}_{datetime.now():%Y%m%d_%H%M%S_%f}')
     outdir.mkdir(parents=True, exist_ok=False)
     source = args.source.expanduser()
     parser = VemediaParser()
-    stt = MockSTT()
+    stt = stt_factory(args.stt_provider, model_dir=args.local_model_dir,
+                      local_threads=args.local_threads)
     decoder = None
     inode = None
     position = 0
@@ -237,18 +222,23 @@ def run(args):
 
     with (outdir / 'events.jsonl').open('w') as log, (outdir / 'pcm_s16le_16k_mono.raw').open('wb') as pcm_out:
         event(log, 'start', source=str(source), outdir=str(outdir), target_chunk_ms=args.target_chunk_ms,
-              replay=args.replay)
+              stt_provider=args.stt_provider, replay=args.replay)
         print(f'outdir={outdir}', flush=True)
+        def emit(responses):
+            for response in responses:
+                event(log, 'stt', **response)
+                if response.get('type') == 'transcript':
+                    print(f"[{response['status']}] {response['text']}", flush=True)
+
         def dispatch(pcm):
             pcm_out.write(pcm)
             for part in chunker.feed(pcm):
-                response = stt.send_pcm(part, SAMPLE_RATE)
-                event(log, 'stt', **response)
+                emit(stt.send_pcm(part, SAMPLE_RATE))
 
         def flush_if_overdue():
             if chunker.pending_since is not None and (time.monotonic() - chunker.pending_since) * 1000 >= args.max_chunk_wait_ms:
                 remainder = chunker.flush()
-                event(log, 'stt', **stt.send_pcm(remainder, SAMPLE_RATE))
+                emit(stt.send_pcm(remainder, SAMPLE_RATE))
 
         def drain(block=False):
             if decoder is None:
@@ -265,6 +255,9 @@ def run(args):
                 dispatch(item)
 
         try:
+            stt.start()
+            event(log, 'provider_ready', provider=args.stt_provider,
+                  model_dir=str(args.local_model_dir) if args.local_model_dir else None)
             while True:
                 try:
                     with source.open('rb') as f:
@@ -317,21 +310,34 @@ def run(args):
             raise
         finally:
             if decoder is not None:
+                if stop_reason == 'error':
+                    decoder.terminate()  # never deliver additional audio after an error
+                else:
+                    try:
+                        decoder.close_input(drain)
+                        while not drain(block=True):
+                            pass
+                        if decoder.finish_process() != 0:
+                            raise RuntimeError(f'FFmpeg exited with {decoder.proc.returncode}')
+                    except Exception as exc:
+                        stop_reason = 'decoder_error'
+                        event(log, 'error', detail=str(exc))
+                        decoder.terminate()
+                        stt.cancel()
+                        raise
+            if stop_reason == 'error':
+                stt.cancel()
+            else:
                 try:
-                    decoder.close_input(drain)
-                    while not drain(block=True):
-                        pass
-                    if decoder.proc.wait(timeout=10) != 0:
-                        raise RuntimeError(f'FFmpeg exited with {decoder.proc.returncode}')
+                    remainder = chunker.flush()
+                    if remainder:
+                        emit(stt.send_pcm(remainder, SAMPLE_RATE))
+                    emit(stt.finish())
                 except Exception as exc:
-                    stop_reason = 'decoder_error'
+                    stop_reason = 'stt_error'
                     event(log, 'error', detail=str(exc))
-                    decoder.terminate()
+                    stt.cancel()
                     raise
-            remainder = chunker.flush()
-            if remainder:
-                event(log, 'stt', **stt.send_pcm(remainder, SAMPLE_RATE))
-            event(log, 'stt', **stt.finish())
             event(log, 'stop', reason=stop_reason, frames=parser.frames,
                   pts_discontinuities=parser.pts_discontinuities,
                   trailing_incomplete_bytes=parser.pending_bytes,
@@ -351,6 +357,9 @@ def main():
     ap.add_argument('--missing-grace', type=float, default=10)
     ap.add_argument('--outdir', type=Path)
     ap.add_argument('--ffmpeg', help='FFmpeg executable (default: PATH or imageio-ffmpeg package)')
+    ap.add_argument('--stt-provider', choices=('mock', 'local'), default='mock')
+    ap.add_argument('--local-model-dir', type=Path, help='Streaming sherpa-onnx model directory')
+    ap.add_argument('--local-threads', type=int, default=2, help='CPU inference threads for local STT')
     ap.add_argument('--replay', action='store_true', help='Read a static snapshot once, no live waiting')
     args = ap.parse_args()
     try:

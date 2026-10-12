@@ -42,10 +42,11 @@ class ParserTests(unittest.TestCase):
 
     def test_mock_returns_receipt_not_recognition(self):
         stt = MockSTT()
-        reply = stt.send_pcm(bytes(6400), 16000)
+        stt.start()
+        reply = stt.send_pcm(bytes(6400), 16000)[0]
         self.assertEqual(reply['type'], 'mock_receipt')
         self.assertIn('[MOCK]', reply['text'])
-        self.assertEqual(stt.finish()['audio_seconds'], .2)
+        self.assertEqual(stt.finish()[0]['audio_seconds'], .2)
 
 
 class IntegrationTests(unittest.TestCase):
