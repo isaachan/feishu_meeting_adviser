@@ -1,6 +1,7 @@
 """Shared Feishu HTTP and local configuration helpers. Credentials never read from env."""
 
 import json
+import re
 from pathlib import Path
 import stat
 from urllib import error, parse, request
@@ -39,7 +40,32 @@ def required(section, key):
     return value.strip()
 
 
-def call(path, *, token=None, payload=None, query=None, timeout=10, opener=None):
+_SAFE_ID = re.compile(r"[A-Za-z0-9_.:-]{1,128}\Z")
+
+
+def diagnostic_details(data, headers, *, secrets=()):
+    """Explicit local-only error hint; never include raw token, cursor or meeting ID."""
+    msg = data.get("msg")
+    if not isinstance(msg, str):
+        msg = "<not provided>"
+    for value in secrets:
+        if isinstance(value, str) and value:
+            msg = msg.replace(value, "[REDACTED]")
+    msg = msg.replace("\r", " ").replace("\n", " ")[:500]
+    ids = {}
+    for key in ("request_id", "log_id"):
+        value = data.get(key)
+        if isinstance(value, str) and _SAFE_ID.fullmatch(value):
+            ids[key] = value
+    for key in ("X-Request-Id", "X-Tt-Logid"):
+        value = headers.get(key) if headers is not None else None
+        if isinstance(value, str) and _SAFE_ID.fullmatch(value):
+            ids[key.lower()] = value
+    return {"msg": msg, "ids": ids}
+
+
+def call(path, *, token=None, payload=None, query=None, timeout=10, opener=None,
+         diagnose=False, redact_values=()):
     if query:
         path += "?" + parse.urlencode(query)
     headers = {"Accept": "application/json"}
@@ -50,12 +76,24 @@ def call(path, *, token=None, payload=None, query=None, timeout=10, opener=None)
         headers["Content-Type"] = "application/json; charset=utf-8"
         body = json.dumps(payload).encode("utf-8")
     req = request.Request(API + path, data=body, headers=headers, method="POST" if body is not None else "GET")
+    secrets = (token, (payload or {}).get("app_secret") if isinstance(payload, dict) else None,
+               *(str(v) for v in (query or {}).values()), *redact_values)
     try:
         response = (opener or request.urlopen)(req, timeout=timeout)
         with response:
             data = json.load(response)
+            response_headers = response.headers
+            status = getattr(response, "status", None)
     except error.HTTPError as exc:
-        raise ProbeError(f"HTTP {exc.code} ({path.split('?')[0]}); response hidden") from None
+        detail = ""
+        if diagnose:
+            try:
+                err_data = json.load(exc)
+                if isinstance(err_data, dict):
+                    detail = "; diagnostic=" + json.dumps(diagnostic_details(err_data, exc.headers, secrets=secrets), ensure_ascii=False)
+            except (ValueError, OSError):
+                pass
+        raise ProbeError(f"HTTP {exc.code} ({path.split('?')[0]}){detail}; response body hidden") from None
     except (error.URLError, TimeoutError, OSError, ValueError):
         raise ProbeError(f"network or invalid JSON response ({path.split('?')[0]}); details hidden") from None
     if not isinstance(data, dict):
@@ -64,6 +102,10 @@ def call(path, *, token=None, payload=None, query=None, timeout=10, opener=None)
         # Never print server msg: it can contain request parameters / user data.
         code = data.get("code")
         safe_code = code if type(code) is int else "unknown"
+        if diagnose:
+            details = diagnostic_details(data, response_headers, secrets=secrets)
+            raise ProbeError(f"Feishu API error code={safe_code}, HTTP {status} ({path.split('?')[0]}); diagnostic="
+                             + json.dumps(details, ensure_ascii=False))
         raise ProbeError(f"Feishu API error code={safe_code} ({path.split('?')[0]}); msg hidden")
     return data
 

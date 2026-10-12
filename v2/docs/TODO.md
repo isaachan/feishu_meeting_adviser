@@ -1,20 +1,22 @@
 # v2 TODO — 官方会中字幕路线
 
-依据：[v2 计划](../PLAN_OFFICIAL_MEETING_EVENTS.md)。以下均为**待办**；员工提供的接口线索尚未在本项目完成官方契约核对和真实会议验证。按阶段执行；阶段 0 不通过时暂停主线实现，不将 v1 的文件采集默认为自动降级。
+依据：[v2 计划](../PLAN_OFFICIAL_MEETING_EVENTS.md)。已完成项只代表相应文档/代码或单次验证，不代表阶段 0 整体验收。当前路线：`tenant_access_token` → `bots/join`（9 位会议号，返回内部 ID）→ `bots/events`；用户 OAuth 与 `list_by_no` 不是主路径。阶段 0 未通过门槛前不将 v1 文件采集默认为自动降级。
 
 ## 阶段 0：接口与准入验证（阻塞后续开发）
 
-- [ ] **0.1 核对接口契约和灰度。** 官方 [join](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/vc-v1/bot/join.md) 与 [events](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/vc-v1/bot/events.md) 文档已确认：应用 token、`vc:meeting.bot.join:write`、入会响应 ID 及嵌套的字幕子类型。仍须核验灰度资格、分页/空页语义、事件留存、错误码与真实响应；留存日期/版本，不以文档存在代替实际可用。
-- [ ] **0.2 打通应用身份。** 确认自建应用已获 `vc:meeting.bot.join:write` 应用身份权限（events 文档亦推荐此权限）；App ID/Secret 写在本地 `config.yaml`，脚本获取 `tenant_access_token`；核对过期/再次获取。不做用户 OAuth，不提交 token。
-- [ ] **0.3 核验机器人入会。** 获同意的测试会议中在 `config.yaml` 配 9 位 `lookup.meeting_no` 与可选 `join.password`；执行 `stage0.py join`，用入会响应的内部 ID 创建本地 session；测试「AI 总结」、会议安全开关、灰度及应用机器人权限。`list_by_no` 仅作可选诊断，不是入会前置。
-- [ ] **0.4 会中最小验证。** 执行 `stage0.py probe`，使用**入会响应**的 ID 获取 `meeting.activity` 事件，筛 `payload.activity_event_type=transcript_received`，核对 `transcript_received_items` 字段；在私有环境验证正文、语言、起止时间和 `sentence_id`。分别测未入会、权限不足、token 失效、切会/结束等场景，仅留脱敏证据；探测不是持续轮询。
-- [ ] **G0 决策。** 只有已入会应用机器人能在会中稳定读取新句子、权限和开关可用才进入阶段 1；否则记录原因，按需另行评估用户身份或 v1 路线。
+- [x] **0.1 官方契约核对（主路径）。** [join](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/vc-v1/bot/join.md) 和 [events](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/vc-v1/bot/events.md) 文档确认：应用身份 `tenant_access_token`、推荐 `vc:meeting.bot.join:write`、`join` 返回 `data.meeting.id`、`events` 中 `meeting.activity` 的 `payload.activity_event_type=transcript_received` 和 `transcript_received_items`；均处于灰度。代码已按此实现。
+- [x] **0.2 阶段 0 脚本与模拟测试。** `scripts/stage0.py join|probe|transcripts`：从本地 `config.yaml` 读凭据和 9 位会议号，入会返回 ID 写入被忽略的 `session.yaml`；`probe` 统计顶层 `event_type=transcript_received`（用户会中返回的格式）并兼容文档的 `meeting.activity` 子类型；显式执行 `transcripts` 才会在本地 stdout 逐句打印字幕正文（敏感、纯文本）。脚本不读取环境变量，不输出 token 或会议 ID；模拟测试已通过；用户确认在真实会议中看到了 `transcripts` 打印的字幕内容（正文未提供给本仓库）；`lookup_meeting_id.py` 仅供可选诊断。
+- [x] **0.3 单次真实会中探测（用户提供的脱敏终端输出）。** `probe` 返回 19 位会议 ID、1 页共 5 个事件，其中 `transcript_received` 1 条；后续会中诊断观察到 1 页 5 个事件包含**顶层 `event_type=transcript_received` 4 条**（原解析器只识别 `meeting.activity`，因此错误报告为 0 条；现已修正，用户随后确认真实字幕正文已在本机输出）。首轮探测所见字段类型包括 `speaker`、`text`、`language`、`start_time_ms`、`end_time_ms`、`sentence_id`。这表明当前测试会话曾成功以应用身份取得字幕事件；**未记录实际字幕内容、join 命令原始回执或发言/请求时刻，不推断连续可用、无漏句或时延达标**。
+- [ ] **0.4 补齐文档/灰度证据。** 记录官方文档核验日期/版本、分页及空页游标规则、事件留存/限流/错误码；确认目标租户和其他目标会议是否具备开关与权限，不把单场试通等同于全量开放。
+- [ ] **0.5 准入与 token 生命周期。** 在获同意的会议中确认 `vc:meeting.bot.join:write` 实际授权和 `bots/join` 成功回执，核查会议「AI 总结」「允许智能体加入会议」与参会者知情；测试 token 到期后重新获取、权限不足、入会失败（如密码错误、已在会/其他通话）的安全行为。凭据只存本地忽略配置。
+- [ ] **0.6 多轮会中验证与负例。** 让远端参会者产生多条可标注字幕，分别检查句子数量、实际字段类型/时间单位、重复/漏句；测试 bot 未入会、离会/会议结束、切会、空页和多页/游标。保留脱敏证据和测量时刻；现有 `probe`/`transcripts` 都不持续轮询、不会自动离会，重复运行不能替代增量性验收。
+- [ ] **G0 决策。** 在多场获授权会议中稳定读取新句、准入条件可复现并明确缺口/错误处理后，再决定进入阶段 1；否则按原因评估用户身份或 v1 路线。当前**尚未通过 G0**。
 
 ## 阶段 1：最小增量采集器（G0 通过后）
 
 - [ ] **1.1 设计 `MeetingTranscriptSource` 与事件语义。** 定义启动/停止、会议 ID、确认字幕、状态及错误输出；与 v1 下游语义可对接。官方字幕暂按确认句处理，不假造 `partial`；若实际提供修订再设计更新规则。
 - [ ] **1.2 实现会议生命周期。** 使用 bots/join 返回的 `meeting_id`，补充 bots/leave、机器人离会、结束/切会处理；不同 `meeting_id` 隔离游标和去重状态。
-- [ ] **1.3 实现分页和游标。** 基于 0.1 实测/文档确定首次启动、空页、续页、重启及游标过期行为；按接口顺序处理，成功交付后再提交游标。设计幂等键（优先会议 ID + `sentence_id`，必要时结合实际事件字段），避免重试导致重复或漏句。
+- [ ] **1.3 实现分页和游标。** 基于 0.4、0.6 的文档核对与实测确定首次启动、空页、续页、重启及游标过期行为；按接口顺序处理，成功交付后再提交游标。设计幂等键（优先会议 ID + `sentence_id`，必要时结合实际事件字段），避免重试导致重复或漏句。
 - [ ] **1.4 实现轮询和异常处理。** 区分追赶分页与无新事件时的可配置轮询间隔；遵守限流；429/5xx/网络异常退避，401/403 排查应用凭证、权限及 bot 入会状态，游标过期报告缺口。不把聊天、进出事件当字幕。
 - [ ] **1.5 加入脱敏可观测性及安全保护。** 记录请求耗时、轮询间隔、最近字幕年龄、重复/缺口、错误及会议切换；不记录凭据或未经授权的完整会议内容。
 - [ ] **1.6 自动化测试与会中回归。** 使用脱敏 fixture、假客户端和可控时钟覆盖分页、空页、重复、乱序/修订、缺字段、重启、限流、token 失效、游标过期、切会；在授权真实会议中核对增量输出，不只凭模拟响应判定通过。

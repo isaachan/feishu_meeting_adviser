@@ -8,5 +8,7 @@ join:
   password: ""            # 如会议设置了密码，请填写；没设密码则留空
 probe:
   # 先运行 stage0.py join；probe 自动使用 bots/join 返回的内部 ID
-  max_pages: 3           # 单次探测页数上限，避免无界访问
+  max_pages: 3           # 单次获取页数上限（最多 10）；历史事件过多时可指定时间范围
+  # start_time: "1700000000"  # 可选：10 位 Unix 秒；与下方 end_time 一起限制历史事件
+  # end_time: "1700003600"
   timeout_seconds: 10
