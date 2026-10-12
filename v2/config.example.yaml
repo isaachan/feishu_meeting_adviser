@@ -1,0 +1,14 @@
+# 复制为 config.yaml（已被 Git 忽略），仅填写获授权的测试账号资料。
+app:
+  id: ""
+  secret: ""
+oauth:
+  redirect_uri: ""           # 与开放平台配置一致的 HTTPS 回调地址
+  state: ""                  # auth-url 命令自动生成，不要自行复用
+  code: ""                   # 回调 URL 的 code，只填在本文件
+  returned_state: ""         # 回调 URL 的 state；必须与上面的 state 一致
+  user_access_token: ""      # 若已有合法用户 token，可直接填这里运行 probe
+  refresh_token: ""          # 刷新时使用；刷新后由脚本更新
+probe:
+  max_pages: 3               # 单次探测页数上限，避免无界访问
+  timeout_seconds: 10
