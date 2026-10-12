@@ -1,6 +1,6 @@
 """Join the app bot, inspect events or explicitly display meeting subtitles.
 
-Run: python3 v2/scripts/stage0.py join  # then: probe, transcripts or diagnose
+Run: python3 v2/scripts/stage0.py join  # then: probe, transcripts or diagnose; leave when done
 User-provided inputs come only from v2/config.yaml. The join response meeting ID
 is stored locally in ignored v2/session.yaml. `transcripts` prints sensitive text.
 """
@@ -197,13 +197,16 @@ def subtitle_line(row):
 
 def main():
     parser = argparse.ArgumentParser(description="Feishu bot join and event probe; inputs only in v2/config.yaml")
-    parser.add_argument("command", choices=("join", "probe", "transcripts", "diagnose"))
+    parser.add_argument("command", choices=("join", "probe", "transcripts", "diagnose", "leave"))
     args = parser.parse_args()
     try:
         config = load_config()
         if args.command == "join":
             bot_join.join_and_save(config)
             print("Bot joined; meeting ID saved to local ignored v2/session.yaml (not printed).")
+        elif args.command == "leave":
+            bot_join.leave(config)
+            print("Bot left the meeting; local session removed.")
         elif args.command == "probe":
             print(json.dumps(probe(config), ensure_ascii=False, indent=2))
         elif args.command == "diagnose":

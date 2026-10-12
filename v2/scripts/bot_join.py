@@ -12,6 +12,7 @@ import feishu_client as client
 import lookup_meeting_id
 
 JOIN = "/open-apis/vc/v1/bots/join"
+LEAVE = "/open-apis/vc/v1/bots/leave"
 SESSION = Path(__file__).resolve().parents[1] / "session.yaml"  # generated, gitignored
 
 
@@ -68,6 +69,16 @@ def load_session(config, path=SESSION):
         raise client.ProbeError("session meeting number mismatch; run stage0.py join for this meeting")
     meeting_id(data.get("meeting_id"))
     return data["meeting_id"]
+
+
+def leave(config, *, api=client.call, path=SESSION):
+    meeting = load_session(config, path)
+    token = client.tenant_token(config, api=api)
+    api(LEAVE, token=token, payload={"meeting_id": meeting}, timeout=client.timeout(config))
+    # Only invalidate the session after confirmed server-side success.
+    if load_session(config, path) != meeting:
+        raise client.ProbeError("session changed during leave; check local session before proceeding")
+    path.unlink()
 
 
 def join_and_save(config, *, api=client.call, path=SESSION, now_fn=time.time):

@@ -12,3 +12,14 @@ probe:
   # start_time: "1700000000"  # 可选：10 位 Unix 秒；与下方 end_time 一起限制历史事件
   # end_time: "1700003600"
   timeout_seconds: 10
+# 仅供持续字幕采集使用；现有 config.yaml 可不加 stream 块，使用以下默认值。
+stream:
+  poll_seconds: 2               # 扫描结束后等待秒数；不是端到端延迟承诺
+  request_seconds: 1            # 同一进程两次 events 请求的最短间隔，遵守 100 次/分钟限流
+  initial_lookback_seconds: 600 # 首次启动回看 10 分钟；更早的内容不会自动回补
+  overlap_seconds: 120          # 两次扫描重叠窗口，防止边界丢句
+  page_size: 100                # 官方允许 20–100
+  max_pages_per_cycle: 10       # 追赶历史时逐页检查点，下一轮继续
+  max_seen: 5000                # 状态里最近去重键的上限
+  max_log_bytes: 10000000       # 每个日志文件每次运行最多约 10 MB，达到上限停机
+  capture_failed_page: false    # 默认不存原始事件；排查解析失败时经参会者同意才显式改为 true

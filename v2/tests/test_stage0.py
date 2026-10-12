@@ -199,6 +199,27 @@ class Stage0Tests(unittest.TestCase):
             self.fail("provided token must avoid extra call")
         self.assertEqual(bot_join.join(self.cfg, api=api, token="tenant-token")["meeting_id"], "987654321012345678")
 
+    def test_leave_only_invalidates_session_after_success(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "session.yaml"
+            session = {"meeting_no": "012345678", "meeting_id": "987654321012345678"}
+            bot_join.save_session(session, path)
+            def broken(api_path, **kwargs):
+                if api_path == stage0.TENANT_TOKEN:
+                    return {"tenant_access_token": "tenant-token"}
+                raise stage0.ProbeError("HTTP 503")
+            with self.assertRaises(stage0.ProbeError):
+                bot_join.leave(self.cfg, api=broken, path=path)
+            self.assertTrue(path.exists())
+            def good(api_path, **kwargs):
+                if api_path == stage0.TENANT_TOKEN:
+                    return {"tenant_access_token": "tenant-token"}
+                self.assertEqual(api_path, bot_join.LEAVE)
+                self.assertEqual(kwargs["payload"], {"meeting_id": session["meeting_id"]})
+                return {"data": {}}
+            bot_join.leave(self.cfg, api=good, path=path)
+            self.assertFalse(path.exists())
+
     def test_invalid_join_response_does_not_save_session(self):
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / "session.yaml"

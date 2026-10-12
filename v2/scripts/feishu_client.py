@@ -86,13 +86,16 @@ def call(path, *, token=None, payload=None, query=None, timeout=10, opener=None,
             status = getattr(response, "status", None)
     except error.HTTPError as exc:
         detail = ""
-        if diagnose:
-            try:
-                err_data = json.load(exc)
-                if isinstance(err_data, dict):
-                    detail = "; diagnostic=" + json.dumps(diagnostic_details(err_data, exc.headers, secrets=secrets), ensure_ascii=False)
-            except (ValueError, OSError):
-                pass
+        try:
+            if diagnose:
+                try:
+                    err_data = json.load(exc)
+                    if isinstance(err_data, dict):
+                        detail = "; diagnostic=" + json.dumps(diagnostic_details(err_data, exc.headers, secrets=secrets), ensure_ascii=False)
+                except (ValueError, OSError):
+                    pass
+        finally:
+            exc.close()
         raise ProbeError(f"HTTP {exc.code} ({path.split('?')[0]}){detail}; response body hidden") from None
     except (error.URLError, TimeoutError, OSError, ValueError):
         raise ProbeError(f"network or invalid JSON response ({path.split('?')[0]}); details hidden") from None
