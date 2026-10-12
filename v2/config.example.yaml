@@ -1,14 +1,12 @@
-# 复制为 config.yaml（已被 Git 忽略），仅填写获授权的测试账号资料。
+# 复制为 config.yaml（已被 Git 忽略）；不要提交 App Secret 或会议 ID。
 app:
-  id: ""
-  secret: ""
-oauth:
-  redirect_uri: ""           # 与开放平台配置一致的 HTTPS 回调地址
-  state: ""                  # auth-url 命令自动生成，不要自行复用
-  code: ""                   # 回调 URL 的 code，只填在本文件
-  returned_state: ""         # 回调 URL 的 state；必须与上面的 state 一致
-  user_access_token: ""      # 若已有合法用户 token，可直接填这里运行 probe
-  refresh_token: ""          # 刷新时使用；刷新后由脚本更新
+  id: ""                 # 自建应用 App ID
+  secret: ""             # 自建应用 App Secret
+lookup:
+  meeting_no: ""          # 9 位会议号，务必加引号以保留前导 0
+join:
+  password: ""            # 如会议设置了密码，请填写；没设密码则留空
 probe:
-  max_pages: 3               # 单次探测页数上限，避免无界访问
+  # 先运行 stage0.py join；probe 自动使用 bots/join 返回的内部 ID
+  max_pages: 3           # 单次探测页数上限，避免无界访问
   timeout_seconds: 10

@@ -1,4 +1,5 @@
 config.yaml
+session.yaml
 .venv/
 __pycache__/
 *.pyc
