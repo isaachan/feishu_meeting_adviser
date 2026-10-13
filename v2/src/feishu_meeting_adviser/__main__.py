@@ -43,9 +43,6 @@ def parser():
     delete.add_argument('--confirm', action='store_true', required=True)
     inspect = commands.add_parser('conflicts', help='list unresolved candidate hashes; text requires explicit flag')
     inspect.add_argument('--show-text', action='store_true')
-    transcripts = commands.add_parser('transcripts', help='preview recent locally saved captions without consuming')
-    transcripts.add_argument('--show-text', action='store_true', help='explicitly display sensitive speaker names and text locally')
-    transcripts.add_argument('--limit', type=int, default=20, help='recent captions to preview, 1..1000 (default 20)')
     return root
 
 
@@ -122,15 +119,6 @@ def main(argv=None):
                 finally:
                     consumer.close()
             print(json.dumps({'offered': len(rows), 'newly_persisted': accepted, 'acknowledged': bool(rows)}))
-        elif args.command == 'transcripts':
-            session = manager.saved_meeting()
-            captions = store.recent_captions(session['meeting_id'], limit=args.limit)
-            print(json.dumps({'recent_caption_count': len(captions), 'text_hidden': not args.show_text}))
-            if args.show_text:
-                for caption in captions:
-                    print(json.dumps({'received_at': caption.received_at,
-                                      'speaker': caption.speaker_name or '未知说话人',
-                                      'text': caption.text}, ensure_ascii=False))
         elif args.command == 'resolve-conflict':
             with manager.application_lock():
                 session = manager.saved_meeting()

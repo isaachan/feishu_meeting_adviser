@@ -212,14 +212,6 @@ class Store:
         row = self.db.execute('SELECT body FROM captions WHERE meeting_id=? AND sentence_key=?', (meeting_id, key)).fetchone()
         return caption_from_json(row['body']) if row else None
 
-    def recent_captions(self, meeting_id: str, *, limit: int = 20) -> list[Caption]:
-        """Preview accepted captions in insertion order, without offering or acknowledging input."""
-        if type(limit) is not int or not 1 <= limit <= 1000:
-            raise StorageError('transcript preview limit must be 1..1000')
-        rows = self.db.execute('SELECT body FROM captions WHERE meeting_id=? ORDER BY rowid DESC LIMIT ?',
-                               (meeting_id, limit)).fetchall()
-        return [caption_from_json(row['body']) for row in reversed(rows)]
-
     def _deliver(self, meeting_id: str, kind: ChangeKind, body: dict, identity) -> bool:
         result = self.db.execute('INSERT OR IGNORE INTO deliveries(meeting_id,delivery_id,kind,body,created_ns) VALUES (?,?,?,?,?)',
                                 (meeting_id, digest(identity), kind.value, encode(body), time.time_ns()))
