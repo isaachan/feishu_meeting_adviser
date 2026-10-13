@@ -2,7 +2,7 @@
 
 [计划](PLAN_OFFICIAL_MEETING_EVENTS.md) · [TODO](docs/TODO.md)
 
-依据飞书[加入会议](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/vc-v1/bot/join.md)及[会议事件列表](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/vc-v1/bot/events.md)接口：用应用身份执行 `bots/join`（输入 9 位会议号），**从入会响应直接获取内部会议 ID**，然后用相同应用身份拉事件。无需用户 OAuth，也不再使用 `list_by_no` 查 ID。接口处于灰度开放阶段；用户已在真实会议中观察到 `transcript_received`，并确认 `transcripts` 在本机打印出字幕正文；持续增量与端到端时延尚未验证。
+依据飞书[加入会议](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/vc-v1/bot/join.md)及[会议事件列表](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/vc-v1/bot/events.md)接口：用应用身份执行 `bots/join`（输入 9 位会议号），**从入会响应直接获取内部会议 ID**，然后用相同应用身份拉事件。无需用户 OAuth，也不再使用 `list_by_no` 查 ID。接口处于灰度开放阶段；用户已在真实会议中观察到 `transcript_received`，并完成一场持续采集/双人脚本对照；多场增量可靠性与问答端到端时延尚未验收。**v2 是当前唯一方案，v1 因无可靠说话人信息、上下文不足而放弃。原 6 秒目标已撤销；新的规划目标是提问结束到可用回答 20 秒，暂分配约 15 秒获取字幕、5 秒 LLM 生成/输出。**这不是达标承诺：单场测试字幕片段的接收差值中位约 15 秒、最大约 24 秒，完整问答链路尚未实现。计时终点及统计口径见 [TODO](docs/TODO.md)。
 
 ## 准备
 
@@ -50,4 +50,4 @@
 - 时间窗口以最新事件时间向前重叠 120 秒，每页写入后更新游标/去重状态，重启会尝试继续。但**飞书空页/历史留存与跨轮询游标语义尚未充分实测**：依赖重叠窗口减少漏句，而非保证零漏句；无时间戳/句子 ID 时只能降级去重，旧数据超过重叠窗口或去重上限也可能重现/漏掉。若进程在日志写入与状态提交之间崩溃，重启可能在日志里重复一条（日志至少一次语义）；若在状态提交与终端打印之间崩溃，终端可能少显示，但字幕仍可从本机日志核对。检查 `sentence_id`、时间与日志确认。
 - 遇到限流/网络/5xx 最多退避重试 5 次，认证/权限/解析错误会停机并记录脱敏错误信息；普通模式仍隐藏服务端 `msg`；可独立运行 `stage0.py diagnose` 在本机排查，但它不一定带采集器当时相同的时间窗口和游标（采集器原游标仅保存在私有 `state.json`），所以不保证能复现相同错误。Ctrl-C **仅停采集，不退会**；`stage0.py leave` 成功后才删除本地 session。新会议需要重新 `join`，将生成隔离的会话状态。输出中有敏感会议资料，请确保同事同意并设定保留/删除期限。
 
-旧的 `scripts/lookup_meeting_id.py` 仅保留作独立诊断工具，它使用会议列表接口并需要**额外权限**；正常入会→采集流程不需要它。持续采集**只有模拟测试，尚未在真实会中完成延迟、漏句和长期稳定性验收**。自动化测试（不访问飞书）：`.venv/bin/python -m unittest discover -s tests -v`。
+旧的 `scripts/lookup_meeting_id.py` 仅保留作独立诊断工具，它使用会议列表接口并需要**额外权限**；正常入会→采集流程不需要它。持续采集已在**一场**获授权的真实会议中完成双人脚本对照，但尚未完成多场会议的严格延迟、漏句、分页和长期稳定性验收；详见 [TODO](docs/TODO.md)。自动化测试（不访问飞书）：`.venv/bin/python -m unittest discover -s tests -v`。
