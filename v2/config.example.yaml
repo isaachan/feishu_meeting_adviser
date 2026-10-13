@@ -6,6 +6,10 @@ lookup:
   meeting_no: ""          # 9 位会议号，务必加引号以保留前导 0
 join:
   password: ""            # 如会议设置了密码，请填写；没设密码则留空
+# 仅供显式执行 stage0.py send-message；正文来自可选的命令参数，不从 config.yaml 读取。
+# 如需在不确定是否送达时安全重试，可在这里选填固定 UUID；换新消息时须换新 UUID。
+# message:
+#   uuid: "18b20efc-d99a-43e7-8799-c5b7be69a46c"
 probe:
   # 先运行 stage0.py join；probe 自动使用 bots/join 返回的内部 ID
   max_pages: 3           # 单次获取页数上限（最多 10）；历史事件过多时可指定时间范围

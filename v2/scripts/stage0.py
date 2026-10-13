@@ -1,19 +1,22 @@
-"""Join the app bot, inspect events or explicitly display meeting subtitles.
+"""Join a bot, read events or explicitly send one in-meeting text message.
 
-Run: python3 v2/scripts/stage0.py join  # then: probe, transcripts or diagnose; leave when done
-User-provided inputs come only from v2/config.yaml. The join response meeting ID
-is stored locally in ignored v2/session.yaml. `transcripts` prints sensitive text.
+Run: python3 v2/scripts/stage0.py send-message "text"  # omit text for a fixed default
+Credentials and meeting number come only from v2/config.yaml; only this command
+accepts an optional message body argument. Meeting ID stays in ignored session.yaml.
 """
 
 import argparse
 import json
 import re
 import sys
+import uuid as uuidlib
 
 from feishu_client import CONFIG, TENANT_TOKEN, ProbeError, call, load_config, tenant_token, timeout
 import bot_join
 
 EVENTS = "/open-apis/vc/v1/bots/events"
+MESSAGE = "/open-apis/vc/v1/bots/message"
+DEFAULT_MESSAGE = "这是一条机器人会中消息测试，请忽略。"
 _SAFE_EVENT_TYPE = re.compile(r"[A-Za-z][A-Za-z0-9_.:-]{0,63}\Z")
 
 
@@ -195,10 +198,43 @@ def subtitle_line(row):
     return row["text"].replace("\r", " ").replace("\n", " ")
 
 
+def send_message(config, *, content=None, api=call, session_path=bot_join.SESSION):
+    """One explicit send; no automatic retry and no message body in diagnostics."""
+    content = DEFAULT_MESSAGE if content is None else content
+    if not isinstance(content, str) or not content.strip() or len(content.encode("utf-8")) > 4000:
+        raise ProbeError("message must be nonempty UTF-8 text of at most 4000 bytes")
+    settings = config.get("message", {})
+    if not isinstance(settings, dict):
+        raise ProbeError("message settings must be a mapping in v2/config.yaml")
+    fixed_uuid = settings.get("uuid")
+    if fixed_uuid is not None:
+        try:
+            if not isinstance(fixed_uuid, str) or str(uuidlib.UUID(fixed_uuid)) != fixed_uuid:
+                raise ValueError("invalid UUID")
+        except (ValueError, AttributeError):
+            raise ProbeError("message.uuid must be a canonical UUID, or omitted") from None
+    # Refuse stale/missing sessions before acquiring a token or sending a message.
+    meeting_id = bot_join.load_session(config, session_path)
+    msg_uuid = fixed_uuid or str(uuidlib.uuid4())
+    token = tenant_token(config, api=api)
+    result = api(MESSAGE, token=token, payload={"meeting_id": meeting_id,
+                 "msg_type": "text", "content": content, "uuid": msg_uuid}, timeout=timeout(config))
+    data = result.get("data")
+    if not isinstance(data, dict) or data.get("uuid") != msg_uuid:
+        raise ProbeError("message response missing/mismatched uuid; delivery uncertain, check meeting UI before retry")
+    return True
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Feishu bot join and event probe; inputs only in v2/config.yaml")
-    parser.add_argument("command", choices=("join", "probe", "transcripts", "diagnose", "leave"))
-    args = parser.parse_args()
+    parser = argparse.ArgumentParser(description="Feishu bot commands; only send-message accepts optional text")
+    parser.add_argument("command", choices=("join", "probe", "transcripts", "diagnose", "send-message", "leave"))
+    parser.add_argument("message_text", nargs="?")
+    args, extra = parser.parse_known_args()
+    # Do not echo an unquoted message via argparse's default 'unrecognized arguments' error.
+    if extra:
+        parser.error("unexpected extra arguments; quote the message as one argument")
+    if args.message_text is not None and args.command != "send-message":
+        parser.error("message text is only accepted by send-message")
     try:
         config = load_config()
         if args.command == "join":
@@ -207,6 +243,9 @@ def main():
         elif args.command == "leave":
             bot_join.leave(config)
             print("Bot left the meeting; local session removed.")
+        elif args.command == "send-message":
+            send_message(config, content=args.message_text)
+            print("Message request accepted; confirm visibility in the meeting UI (content not printed).")
         elif args.command == "probe":
             print(json.dumps(probe(config), ensure_ascii=False, indent=2))
         elif args.command == "diagnose":

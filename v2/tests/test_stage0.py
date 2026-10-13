@@ -5,6 +5,8 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
+from contextlib import redirect_stdout
 from urllib import error
 
 import yaml
@@ -219,6 +221,91 @@ class Stage0Tests(unittest.TestCase):
                 return {"data": {}}
             bot_join.leave(self.cfg, api=good, path=path)
             self.assertFalse(path.exists())
+
+    def test_send_message_uses_argument_and_verified_session(self):
+        self.cfg["message"] = {"text": "stale-config-text-must-be-ignored", "uuid": "18b20efc-d99a-43e7-8799-c5b7be69a46c"}
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "session.yaml"
+            bot_join.save_session({"meeting_no": "012345678", "meeting_id": "987654321012345678"}, path)
+            calls = []
+            def api(endpoint, **kwargs):
+                calls.append((endpoint, kwargs))
+                if endpoint == stage0.TENANT_TOKEN:
+                    return {"tenant_access_token": "tenant-token"}
+                self.assertEqual(endpoint, stage0.MESSAGE)
+                self.assertEqual(kwargs["token"], "tenant-token")
+                self.assertEqual(kwargs["payload"], {"meeting_id": "987654321012345678",
+                    "msg_type": "text", "content": "受控测试文字", "uuid": self.cfg["message"]["uuid"]})
+                return {"data": {"uuid": self.cfg["message"]["uuid"]}}
+            self.assertTrue(stage0.send_message(self.cfg, content="受控测试文字", api=api, session_path=path))
+            self.assertEqual(len(calls), 2)
+            self.assertTrue(path.exists())  # sending does not leave the meeting
+
+    def test_send_message_uses_harmless_default_without_custom_text(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "session.yaml"
+            bot_join.save_session({"meeting_no": "012345678", "meeting_id": "987654321012345678"}, path)
+            sent = []
+            def api(endpoint, **kwargs):
+                if endpoint == stage0.TENANT_TOKEN:
+                    return {"tenant_access_token": "tenant-token"}
+                sent.append(kwargs["payload"])
+                return {"data": {"uuid": kwargs["payload"]["uuid"]}}
+            stage0.send_message(self.cfg, api=api, session_path=path)
+            self.cfg["message"] = {"text": "stale-config-text-must-be-ignored"}
+            stage0.send_message(self.cfg, api=api, session_path=path)
+            self.assertEqual([v["content"] for v in sent], [stage0.DEFAULT_MESSAGE] * 2)
+            self.assertNotEqual(sent[0]["uuid"], sent[1]["uuid"])
+
+    def test_send_message_refuses_bad_input_session_or_uncertain_response(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "session.yaml"
+            def no_network(*args, **kwargs):
+                self.fail("invalid message/session must not call the API")
+            with self.assertRaisesRegex(stage0.ProbeError, "session"):
+                stage0.send_message(self.cfg, api=no_network, session_path=path)
+            for value in ("", " ", 123, "x" * 4001):
+                with self.assertRaises(stage0.ProbeError):
+                    stage0.send_message(self.cfg, content=value, api=no_network, session_path=path)
+            self.cfg["message"] = {"uuid": "invalid"}
+            with self.assertRaisesRegex(stage0.ProbeError, "message.uuid"):
+                stage0.send_message(self.cfg, content="private-message", api=no_network, session_path=path)
+            self.cfg.pop("message")
+            with self.assertRaisesRegex(stage0.ProbeError, "session"):
+                stage0.send_message(self.cfg, content="private-message", api=no_network, session_path=path)
+            bot_join.save_session({"meeting_no": "123456789", "meeting_id": "987654321012345678"}, path)
+            with self.assertRaisesRegex(stage0.ProbeError, "mismatch"):
+                stage0.send_message(self.cfg, content="private-message", api=no_network, session_path=path)
+            bot_join.save_session({"meeting_no": "012345678", "meeting_id": "987654321012345678"}, path)
+            def uncertain(endpoint, **kwargs):
+                if endpoint == stage0.TENANT_TOKEN:
+                    return {"tenant_access_token": "tenant-token"}
+                return {"data": {"uuid": "different"}}
+            with self.assertRaisesRegex(stage0.ProbeError, "delivery uncertain") as caught:
+                stage0.send_message(self.cfg, content="private-message", api=uncertain, session_path=path)
+            for value in ("private-message", "987654321012345678", "tenant-token"):
+                self.assertNotIn(value, str(caught.exception))
+
+    def test_send_message_command_accepts_one_quoted_text_or_default(self):
+        for argv, expected in ((["stage0.py", "send-message"], None),
+                               (["stage0.py", "send-message", "private-cli-message"], "private-cli-message")):
+            with patch.object(sys, "argv", argv), \
+                 patch.object(stage0, "load_config", return_value=self.cfg), \
+                 patch.object(stage0, "send_message", return_value=True) as send, \
+                 redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(stage0.main(), 0)
+                send.assert_called_once_with(self.cfg, content=expected)
+                self.assertNotIn("private-cli-message", output.getvalue())
+        for argv in (["stage0.py", "send-message", "unquoted", "private-extra"],
+                     ["stage0.py", "probe", "private-cli-message"]):
+            with patch.object(sys, "argv", argv), \
+                 patch.object(stage0, "load_config") as load, \
+                 patch.object(sys, "stderr", io.StringIO()) as errors:
+                with self.assertRaises(SystemExit):
+                    stage0.main()
+                load.assert_not_called()
+                self.assertNotIn("private-extra", errors.getvalue())
+                self.assertNotIn("private-cli-message", errors.getvalue())
 
     def test_invalid_join_response_does_not_save_session(self):
         with tempfile.TemporaryDirectory() as d:
