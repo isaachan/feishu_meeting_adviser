@@ -2,7 +2,7 @@
 
 [计划](PLAN_OFFICIAL_MEETING_EVENTS.md) · [TODO](docs/TODO.md) · [Spike 实验与复现](reference/spike/README.md)
 
-当前唯一路线是应用身份 `tenant_access_token` → `bots/join` → `bots/events`。接口可行性和单场连续采集已试通，证据见 [阶段 0 实测笔记](docs/STAGE0_FINDINGS.md)。阶段 1 的产品实现与自动化验证已完成至 1.8，65 个产品测试通过；真实会议回归和 G1 尚待完成，见 [验证记录](docs/STAGE1_VALIDATION.md)。历史代码和测试已隔离到 `reference/spike/`，产品不导入它们。真实问答尚未实现，20 秒端到端目标仍待阶段 2 验收，不回退 v1。
+当前唯一路线是应用身份 `tenant_access_token` → `bots/join` → `bots/events`。接口可行性和单场连续采集已试通，证据见 [阶段 0 实测笔记](docs/STAGE0_FINDINGS.md)。阶段 1 的产品实现与自动化验证已完成至 1.8，68 个产品测试通过；真实会议回归和 G1 尚待完成，见 [验证记录](docs/STAGE1_VALIDATION.md)。历史代码和测试已隔离到 `reference/spike/`，产品不导入它们。真实问答尚未实现，20 秒端到端目标仍待阶段 2 验收，不回退 v1。
 
 ## 目录与安装
 
@@ -34,6 +34,14 @@ python3 -m venv .venv  # 已有环境可直接使用
 .venv/bin/python -m feishu_meeting_adviser consume  # 持久化给假消费者后确认，不调用 LLM、不发送消息
 .venv/bin/python -m feishu_meeting_adviser leave
 ```
+
+测试时可在终端 B 只读查看当前保存会议的最近 20 句字幕：
+
+```bash
+.venv/bin/python -m feishu_meeting_adviser transcripts --show-text
+```
+
+它显示本机保存的接收时间、说话人名称和正文，不请求飞书、不读取音频、不改变消费进度；已消费的字幕也能查看。省略 `--show-text` 只显示计数，`--limit 50` 可调整条数（最多 1000）。按首次入库顺序显示已接受句子，修订候选另用 `conflicts --show-text` 查看。终端 A 可保持运行，无需重启或重新入会。
 
 `collect` 重启自动恢复产品检查点与未确认输入；`collect --once` 只完成一个页数预算周期，仍可能有待追赶页。源和消费进度独立，同句无可靠版本的变化保留为冲突，已有上下文不自动覆盖；本机核对候选后可用 `resolve-conflict --delivery-id <候选交付哈希>` 显式选择。候选和正文仅在私有数据库中，终端默认只显示计数/状态。源码接口和时间规则见 [输入契约](docs/TRANSCRIPT_SOURCE_CONTRACT.md)，上游未知行为见 [接口笔记](docs/API_CONTRACT_NOTES.md)，日志、容量、保留和删除操作见 [资料管理](docs/DATA_OPERATIONS.md)。
 
