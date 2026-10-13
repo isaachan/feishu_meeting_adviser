@@ -14,6 +14,8 @@
 
 ```bash
 .venv/bin/python -m feishu_meeting_adviser status
+# 采集时显式显示新入库字幕、说话人和时间；不确认消费。
+.venv/bin/python -m feishu_meeting_adviser collect --show-text
 # 明确在本机显示最近字幕及说话人；只读，不影响消费进度。
 .venv/bin/python -m feishu_meeting_adviser transcripts --show-text
 # 手动维护前先停止采集；正常采集会自动维护。

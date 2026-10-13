@@ -150,7 +150,7 @@ class ScanSettings:
 
 
 class Collector:
-    def __init__(self, store: Store, meeting_id: str, client: EventsClient, *, settings=ScanSettings(), clock=time.time, should_stop=None, page_status=None, diagnose=None):
+    def __init__(self, store: Store, meeting_id: str, client: EventsClient, *, settings=ScanSettings(), clock=time.time, should_stop=None, page_status=None, diagnose=None, on_caption=None):
         self.store = store
         self.meeting_id = meeting_id
         self.client = client
@@ -159,6 +159,7 @@ class Collector:
         self.should_stop = should_stop or (lambda: False)
         self.page_status = page_status or (lambda page: None)
         self.diagnose = diagnose or (lambda record: None)
+        self.on_caption = on_caption or (lambda kind, caption: None)
         now = int(clock())
         start = max(1_000_000_000, now - settings.initial_lookback_seconds)
         checkpoint = {'schema': 1, 'initial_start': start, 'query_start': start, 'query_end': now,
@@ -231,6 +232,9 @@ class Collector:
                 next_cp['cursor_reset_count'] = 0
             status = self.page_status(page)
             counts = self.store.commit_page(self.meeting_id, page.captions, next_cp, statuses=(status,) if status else ())
+            # Output is best effort after durable commit, never a consumer acknowledgement.
+            for kind, caption in self.store.last_commit_changes:
+                self.on_caption(kind, caption)
             def latency(values):
                 known = sorted(values)
                 return ({'count': len(known), 'min': known[0], 'median': statistics.median(known),

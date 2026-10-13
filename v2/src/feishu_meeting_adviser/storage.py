@@ -85,6 +85,7 @@ class Store:
         self.opened_ns = time.time_ns()
         self.max_database_bytes = max_database_bytes
         self.last_commit_captions = []
+        self.last_commit_changes = []
         self.db = connect_private(self.path, max_database_bytes=max_database_bytes)
         try:
             self._initialize()
@@ -266,6 +267,7 @@ class Store:
                     fault: Callable[[str], None] | None = None, statuses: tuple[Status, ...] = ()) -> dict[str, int]:
         counts = {'added': 0, 'updated': 0, 'conflict': 0, 'duplicates': 0, 'older': 0}
         emitted = []
+        changes = []
         with self.transaction():
             if not self.db.execute('SELECT 1 FROM meetings WHERE meeting_id=?', (meeting_id,)).fetchone():
                 raise StorageError('unknown meeting')
@@ -294,6 +296,7 @@ class Store:
                     continue
                 counts[kind.value] += 1
                 emitted.append(candidate)
+                changes.append((kind, candidate))
                 if kind != ChangeKind.CONFLICT:
                     self.db.execute('INSERT INTO captions(meeting_id,sentence_key,fingerprint,body) VALUES (?,?,?,?) '
                                     'ON CONFLICT(meeting_id,sentence_key) DO UPDATE SET fingerprint=excluded.fingerprint,body=excluded.body',
@@ -314,6 +317,7 @@ class Store:
         if fault:
             fault('after_commit')
         self.last_commit_captions = emitted
+        self.last_commit_changes = changes
         return counts
 
     def session(self, app_key: str) -> dict | None:

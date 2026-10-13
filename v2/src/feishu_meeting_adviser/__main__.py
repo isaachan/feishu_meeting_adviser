@@ -28,6 +28,7 @@ def parser():
     leave.add_argument('--retry-uncertain', action='store_true', help='retry only after checking meeting UI')
     collect = commands.add_parser('collect', help='collect continuously; Ctrl-C stops polling only')
     collect.add_argument('--once', action='store_true', help='one successful page-budget cycle (may leave pending pages)')
+    collect.add_argument('--show-text', action='store_true', help='print new captions with speaker and timestamps locally after commit')
     status = commands.add_parser('status', help='show safe session and backlog statistics')
     status.add_argument('--consumer', default='fake-qa')
     consume = commands.add_parser('consume', help='persist a batch in the local fake consumer and acknowledge')
@@ -73,7 +74,14 @@ def main(argv=None):
             manager.reset_uncertain(confirmed_bot_left=args.confirmed_bot_left)
             print('Uncertain session reset using your explicit confirmation.')
         elif args.command == 'collect':
-            source = MeetingSource(store, manager, diagnose=diagnostics.write)
+            def print_caption(kind, caption):
+                print(json.dumps({'kind': kind.value, 'timestamp': caption.received_at,
+                                  'speaker': caption.speaker_name or '未知说话人',
+                                  'event_time': caption.event_time, 'start_time': caption.start_time,
+                                  'end_time': caption.end_time, 'text': caption.text,
+                                  'mode': caption.mode.value}, ensure_ascii=False), flush=True)
+            source = MeetingSource(store, manager, diagnose=diagnostics.write,
+                                   on_caption=print_caption if args.show_text else None)
             previous = {}
             if threading.current_thread() is threading.main_thread():
                 for signum in (signal.SIGINT, signal.SIGTERM):

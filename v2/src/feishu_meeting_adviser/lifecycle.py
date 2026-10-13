@@ -141,7 +141,7 @@ class SessionManager:
 
 class MeetingSource:
     """One worker connection; caller reads/acks using its own SQLite connection."""
-    def __init__(self, store: Store, manager: SessionManager, client=None, *, clock=time.time, diagnose=None):
+    def __init__(self, store: Store, manager: SessionManager, client=None, *, clock=time.time, diagnose=None, on_caption=None):
         self.store = store
         self._owner_thread = threading.get_ident()
         self.manager = manager
@@ -153,6 +153,7 @@ class MeetingSource:
         self.client = client or FeishuClient(self.config.credentials, timeout=self.config.timeout_seconds,
                                              request_seconds=self.config.request_seconds, wait=self.stop_event.wait)
         self.diagnose = diagnose or (lambda record: None)
+        self.on_caption = on_caption
         self.thread = None
         self.failure = None
         self.failure_reason = None
@@ -220,7 +221,8 @@ class MeetingSource:
                     maintenance.run_due()
                 return reason
             collector = Collector(worker_store, self.meeting_id, self.client, settings=self.config.scan,
-                                  clock=self.clock, should_stop=self.stop_event.is_set, page_status=self._page_status, diagnose=self.diagnose)
+                                  clock=self.clock, should_stop=self.stop_event.is_set, page_status=self._page_status,
+                                  diagnose=self.diagnose, on_caption=self.on_caption)
             loop = RecoveryLoop(collector, stop_event=self.stop_event, poll_seconds=self.config.poll_seconds,
                                 cooldown_seconds=self.config.cooldown_seconds, diagnose=self.diagnose,
                                 before_cycle=before_cycle)
