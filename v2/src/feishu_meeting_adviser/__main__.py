@@ -15,6 +15,7 @@ from .lifecycle import LifecycleError, MeetingSource, SessionManager
 from .diagnostics import Diagnostics
 from .maintenance import Maintenance
 from .models import SourceState, digest
+from .rules import deadline_reply
 from .storage import DurableFakeConsumer, StorageError, Store
 
 
@@ -31,7 +32,7 @@ def parser():
     collect.add_argument('--show-text', action='store_true', help='print new captions with speaker and timestamps locally after commit')
     status = commands.add_parser('status', help='show safe session and backlog statistics')
     status.add_argument('--consumer', default='fake-qa')
-    consume = commands.add_parser('consume', help='persist a batch in the local fake consumer and acknowledge')
+    consume = commands.add_parser('consume', help='persist a batch, send matching deadline-rule replies in the meeting, then acknowledge')
     consume.add_argument('--consumer', default='fake-qa')
     consume.add_argument('--limit', type=int, default=100)
     reset = commands.add_parser('reset-session', help='reset stale/uncertain session after manually verifying bot absence')
@@ -113,12 +114,24 @@ def main(argv=None):
                 consumer = DurableFakeConsumer(config.data_directory / 'fake_consumers' / (digest(args.consumer) + '.sqlite3'),
                                                 max_database_bytes=config.database_capacity_bytes)
                 try:
-                    accepted = sum(consumer.accept(row) for row in rows)
-                    if rows:
-                        store.acknowledge(session['meeting_id'], args.consumer, rows[-1].sequence)
+                    accepted = replied = 0
+                    for row in rows:
+                        reply = deadline_reply(row)
+                        accepted += consumer.accept(row, reply=reply)
+                        pending = consumer.pending_reply(reply[0]) if reply else None
+                        if pending:
+                            manager.saved_meeting(require_joined=True)
+                            try:
+                                client.send_message(pending['meeting_id'], pending['content'], reply[0])
+                            except (ApiError, StopRequested):
+                                print('Reply not confirmed; input remains unacknowledged. Check meeting UI before rerunning consume; the same UUID will be reused.', file=sys.stderr)
+                                raise
+                            consumer.mark_reply_sent(reply[0])
+                            replied += 1
+                        store.acknowledge(session['meeting_id'], args.consumer, row.sequence)
                 finally:
                     consumer.close()
-            print(json.dumps({'offered': len(rows), 'newly_persisted': accepted, 'acknowledged': bool(rows)}))
+            print(json.dumps({'offered': len(rows), 'newly_persisted': accepted, 'replied': replied, 'acknowledged': bool(rows)}))
         elif args.command == 'resolve-conflict':
             with manager.application_lock():
                 session = manager.saved_meeting()

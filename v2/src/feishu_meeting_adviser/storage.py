@@ -472,9 +472,11 @@ class DurableFakeConsumer:
             CREATE TABLE IF NOT EXISTS accepted (delivery_id TEXT PRIMARY KEY, body TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS context (meeting_id TEXT, sentence_key TEXT, body TEXT NOT NULL,
                                                PRIMARY KEY (meeting_id,sentence_key));
+            CREATE TABLE IF NOT EXISTS rule_replies (uuid TEXT PRIMARY KEY, meeting_id TEXT NOT NULL,
+                                                     content TEXT NOT NULL, sent INTEGER NOT NULL DEFAULT 0);
         ''')
 
-    def accept(self, delivery: Delivery) -> bool:
+    def accept(self, delivery: Delivery, *, reply: tuple[str, str] | None = None) -> bool:
         try:
             self.db.execute('BEGIN IMMEDIATE')
             inserted = self.db.execute('INSERT OR IGNORE INTO accepted VALUES (?,?)',
@@ -483,12 +485,25 @@ class DurableFakeConsumer:
                 caption = delivery.caption
                 self.db.execute('INSERT INTO context VALUES (?,?,?) ON CONFLICT(meeting_id,sentence_key) DO UPDATE SET body=excluded.body',
                                 (caption.meeting_id, caption.sentence_key, encode(asdict(caption))))
+            if reply is not None and delivery.caption and delivery.kind in (ChangeKind.ADDED, ChangeKind.UPDATED):
+                self.db.execute('INSERT OR IGNORE INTO rule_replies(uuid,meeting_id,content) VALUES (?,?,?)',
+                                (reply[0], delivery.caption.meeting_id, reply[1]))
             self.db.execute('COMMIT')
             return bool(inserted)
         except sqlite3.Error:
             if self.db.in_transaction:
                 self.db.execute('ROLLBACK')
             raise StorageError('fake consumer persistence failed; input not acknowledged') from None
+
+    def pending_reply(self, message_uuid: str):
+        return self.db.execute('SELECT meeting_id,content FROM rule_replies WHERE uuid=? AND sent=0',
+                               (message_uuid,)).fetchone()
+
+    def mark_reply_sent(self, message_uuid: str) -> None:
+        try:
+            self.db.execute('UPDATE rule_replies SET sent=1 WHERE uuid=?', (message_uuid,))
+        except sqlite3.Error:
+            raise StorageError('reply confirmation persistence failed; check meeting UI before retrying consume') from None
 
     def context(self, meeting_id: str) -> list[Caption]:
         return [caption_from_json(row['body']) for row in self.db.execute('SELECT body FROM context WHERE meeting_id=? ORDER BY sentence_key', (meeting_id,))]
@@ -505,6 +520,7 @@ class DurableFakeConsumer:
                 if input_body.get('meeting_id') == meeting_id:
                     self.db.execute('DELETE FROM accepted WHERE delivery_id=?', (row['delivery_id'],))
             self.db.execute('DELETE FROM context WHERE meeting_id=?', (meeting_id,))
+            self.db.execute('DELETE FROM rule_replies WHERE meeting_id=?', (meeting_id,))
             self.db.execute('COMMIT')
             self.db.execute('PRAGMA wal_checkpoint(TRUNCATE)')
             self.db.execute('VACUUM')
@@ -516,6 +532,7 @@ class DurableFakeConsumer:
 
     def forget_deleted_meetings(self, identities: set[str]) -> None:
         meetings = {row['meeting_id'] for row in self.db.execute('SELECT meeting_id FROM context')}
+        meetings.update(row['meeting_id'] for row in self.db.execute('SELECT meeting_id FROM rule_replies'))
         for row in self.db.execute('SELECT body FROM accepted'):
             value = json.loads(row['body'])
             mid = (value.get('caption') or value.get('status') or {}).get('meeting_id')

@@ -1,6 +1,6 @@
 # 阶段 1 输入契约
 
-产品包不依赖 spike。`MeetingTranscriptSource` 的 `start/stop` 管理采集，`read(consumer_id, limit)` 读取本会议的持久化交付，`acknowledge(consumer_id, sequence)` 确认已持久化消费的连续前缀；读取本身不代表消费成功。真实 LLM、唤起和消息发送属于阶段 2。
+产品包不依赖 spike。`MeetingTranscriptSource` 的 `start/stop` 管理采集，`read(consumer_id, limit)` 读取本会议的持久化交付，`acknowledge(consumer_id, sequence)` 确认已持久化消费的连续前缀；读取本身不代表消费成功。真实 LLM 和唤起属于阶段 2；当前 CLI consume 已增加固定截止日期测试规则的会中消息发送。
 
 每条 `Delivery` 有会议内采集顺序号和稳定交付 ID，类型为 `added/updated/conflict/status`。采集顺序是交付顺序；事件时间和发言时间用于上下文排序，未知时间不能补成当前时间。句子身份按会议隔离。没有句子 ID 的回退身份标记 `identity_degraded`，不能宣称同等去重可靠性。
 
@@ -8,7 +8,7 @@
 
 飞书事件当前没有已核实的单调修订版本字段。`source_revision` 默认未知；适配器只有在有可核实版本契约时才能填入。不同内容的同一句没有可靠新旧依据时输出 `conflict`，保留已接受内容与候选，不静默丢候选，不通过事件时间猜测官方版本。可靠版本更新产生 `updated`；旧版重放不能覆盖新版。消费者按句子键替换上下文，冲突进入不完整状态，不能当作另一句追加。需要人工选择候选时通过显式操作解决，不能自动挑一个版本宣称正确。
 
-采集模式为 `live/initial_replay/recovery_backfill`，重新投递另设 `replayed`。历史输入可以补上下文，但不能直接触发对旧问题的回答。首版假消费者的 `fresh_inputs` 仅演示分类，不能作为业务唤起策略；阶段 2 还要检查发言/接收时间的新鲜度、明确唤起及状态。恢复后的未确认输入必须可重放，消费者按交付 ID 幂等；处理成功后确认连续前缀，不跨过未处理记录。
+采集模式为 `live/initial_replay/recovery_backfill`，重新投递另设 `replayed`。历史输入可以补上下文，正式问答不能直接触发对旧问题的回答。当前手动 consume 的固定测试规则处理所有未确认字幕（含回放/回补），用于验证消费至会中输出链路，不具备正式问答的新鲜度判断。首版假消费者的 `fresh_inputs` 仅演示分类，不能作为业务唤起策略；阶段 2 还要检查发言/接收时间的新鲜度、明确唤起及状态。恢复后的未确认输入必须可重放，消费者按交付 ID 幂等；处理成功后确认连续前缀，不跨过未处理记录。
 
 状态为 `collecting/recovering/incomplete/action_required/stopped/ended`，带固定原因枚举、时间和可选疑似缺口区间。区间表示完整性风险，不等于测量出的漏句。空页只代表本次没有事件，不证明会议结束。状态变化也需持久化交付，不能只在终端显示。
 

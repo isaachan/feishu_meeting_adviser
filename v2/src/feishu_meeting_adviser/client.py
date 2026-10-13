@@ -10,6 +10,7 @@ from http.client import HTTPException
 import math
 import re
 import time
+import uuid as uuidlib
 from urllib import error, parse, request
 
 API = 'https://open.feishu.cn'
@@ -17,6 +18,7 @@ TOKEN = '/open-apis/auth/v3/tenant_access_token/internal'
 EVENTS = '/open-apis/vc/v1/bots/events'
 JOIN = '/open-apis/vc/v1/bots/join'
 LEAVE = '/open-apis/vc/v1/bots/leave'
+MESSAGE = '/open-apis/vc/v1/bots/message'
 
 
 class ErrorKind(StrEnum):
@@ -112,7 +114,7 @@ class FeishuClient:
         self._last_request = self.monotonic()
 
     def _request(self, path, *, payload=None, query=None, token=None):
-        if path not in (TOKEN, EVENTS, JOIN, LEAVE):
+        if path not in (TOKEN, EVENTS, JOIN, LEAVE, MESSAGE):
             raise ValueError('unsupported API endpoint')
         url = API + path + ('?' + parse.urlencode(query) if query else '')
         headers = {'Accept': 'application/json'}
@@ -208,3 +210,14 @@ class FeishuClient:
 
     def leave(self, meeting_id: str) -> dict:
         return self.authenticated(LEAVE, payload={'meeting_id': meeting_id})
+
+    def send_message(self, meeting_id: str, content: str, message_uuid: str) -> None:
+        if not isinstance(content, str) or not content.strip() or len(content.encode('utf-8')) > 4000:
+            raise ValueError('message must be nonempty UTF-8 text of at most 4000 bytes')
+        if str(uuidlib.UUID(message_uuid)) != message_uuid:
+            raise ValueError('message UUID must be canonical')
+        result = self.authenticated(MESSAGE, payload={'meeting_id': meeting_id, 'msg_type': 'text',
+                                                     'content': content, 'uuid': message_uuid})
+        data = result.get('data')
+        if not isinstance(data, dict) or data.get('uuid') != message_uuid:
+            raise ApiError(ErrorKind.RESPONSE)

@@ -41,6 +41,25 @@ class ClientTests(unittest.TestCase):
     def success(self):
         return Response({'code': 0, **page()})
 
+    def test_message_payload_and_confirmed_uuid(self):
+        message_uuid = '7f3b7fd2-1b64-4f5d-9e8b-2f2d8d3b0c11'
+        client = self.client([self.token(), Response({'code': 0, 'data': {'uuid': message_uuid}})])
+        client.send_message('synthetic-meeting', '合成说话人，项目截止日期是今天。', message_uuid)
+        req = self.requests[-1]
+        self.assertTrue(req.full_url.endswith('/vc/v1/bots/message'))
+        self.assertEqual(req.method, 'POST')
+        self.assertEqual(json.loads(req.data), {'meeting_id': 'synthetic-meeting', 'msg_type': 'text',
+                                              'content': '合成说话人，项目截止日期是今天。', 'uuid': message_uuid})
+
+    def test_message_timeout_and_wrong_uuid_are_not_replayed(self):
+        message_uuid = '7f3b7fd2-1b64-4f5d-9e8b-2f2d8d3b0c11'
+        for response in (URLError('private response'), Response({'code': 0, 'data': {'uuid': 'wrong'}})):
+            self.requests.clear()
+            client = self.client([self.token(), response])
+            with self.assertRaises(ApiError):
+                client.send_message('synthetic-meeting', 'synthetic reply', message_uuid)
+            self.assertEqual(len(self.requests), 2)
+
     def test_token_refresh_on_actual_expiry_and_one_auth_replay(self):
         client = self.client([self.token(expire=10), self.success(), self.token('new-token'),
                               Response({'code':99991663}), self.token('fresh-token'), self.success()])

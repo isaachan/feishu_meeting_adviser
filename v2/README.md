@@ -2,7 +2,7 @@
 
 [计划](PLAN_OFFICIAL_MEETING_EVENTS.md) · [TODO](docs/TODO.md) · [Spike 实验与复现](reference/spike/README.md)
 
-当前唯一路线是应用身份 `tenant_access_token` → `bots/join` → `bots/events`。接口可行性和单场连续采集已试通，证据见 [阶段 0 实测笔记](docs/STAGE0_FINDINGS.md)。阶段 1 的产品实现与自动化验证已完成至 1.8，70 个产品测试通过；真实会议回归和 G1 尚待完成，见 [验证记录](docs/STAGE1_VALIDATION.md)。历史代码和测试已隔离到 `reference/spike/`，产品不导入它们。真实问答尚未实现，20 秒端到端目标仍待阶段 2 验收，不回退 v1。
+当前唯一路线是应用身份 `tenant_access_token` → `bots/join` → `bots/events`。接口可行性和单场连续采集已试通，证据见 [阶段 0 实测笔记](docs/STAGE0_FINDINGS.md)。阶段 1 的产品实现与自动化验证已完成至 1.8，79 个产品测试通过；真实会议回归和 G1 尚待完成，见 [验证记录](docs/STAGE1_VALIDATION.md)。历史代码和测试已隔离到 `reference/spike/`，产品不导入它们。已增加固定截止日期测试回复；模型问答尚未实现，20 秒端到端目标仍待阶段 2 验收，不回退 v1。
 
 ## 目录与安装
 
@@ -31,7 +31,7 @@ python3 -m venv .venv  # 已有环境可直接使用
 .venv/bin/python -m feishu_meeting_adviser collect
 # Ctrl-C / SIGTERM 仅停止采集，bot 仍在会中；不要在采集中调用 leave。
 .venv/bin/python -m feishu_meeting_adviser status
-.venv/bin/python -m feishu_meeting_adviser consume  # 持久化给假消费者后确认，不调用 LLM、不发送消息
+.venv/bin/python -m feishu_meeting_adviser consume  # 持久化消费；匹配截止日期规则时发送会中回复，不调用 LLM
 .venv/bin/python -m feishu_meeting_adviser leave
 ```
 
@@ -42,6 +42,10 @@ python3 -m venv .venv  # 已有环境可直接使用
 ```
 
 每条新入库字幕立即输出一行 JSON，包含 `speaker`、`timestamp`、`text`，以及 `event_time`、`start_time`、`end_time`、`mode` 和 `kind`。`timestamp` 是本机接收时间（UTC），不是发言时间；其余时间保留上游原值，缺失为 `null`。`kind` 为 `added`（新增）、`updated`（已接受修订）或 `conflict`（待核对候选）。重复扫描不重复打印；重启后显示新入库内容，可能包括回补字幕。终端输出不改变消费进度，诊断日志仍隐藏正文。已有 `collect` 进程需先 Ctrl-C，再带开关重启，无需重新 join。
+
+`consume` 增加一条固定测试规则：单条已接受字幕包含「项目截止日期是明天」（忽略空白）且有说话人姓名时，在当前已验证且仍为 joined 的会议发送「{实际说话人}，项目截止日期是今天。」。无需额外开关，不调用模型。没有姓名或未解决的冲突候选不回复；不跨字幕拼句。同一会议同一句字幕只回复一次，不同句子分别处理。这是关键词测试，不分析否定或引用语义。
+
+每次 `consume` 仍处理一批待确认输入，包含尚未消费的首次回放/回补字幕；已确认的输入不会重新触发。输出中的 `replied` 是本次 API 已确认的发送数量，参会者实际看到消息仍需现场核对。回复正文和固定 UUID 在私有消费者数据库中与输入原子保存，API 确认后保存发送结果，再确认源输入。失败时保留该条及后续未确认记录，已完成的前缀正常确认；请求不会自动重试。超时或响应异常时先检查会议 UI，再按提示重试 `consume`，复用同一 UUID；服务端去重的有效范围仍待实测。当前需具备已试通的 `vc:meeting.message:write` 权限，接口依据见[会中输出](docs/MEETING_OUTPUT_RESEARCH.md)。
 
 `collect` 重启自动恢复产品检查点与未确认输入；`collect --once` 只完成一个页数预算周期，仍可能有待追赶页。源和消费进度独立，同句无可靠版本的变化保留为冲突，已有上下文不自动覆盖；本机核对候选后可用 `resolve-conflict --delivery-id <候选交付哈希>` 显式选择。候选和正文保存于私有数据库中，终端默认只显示计数/状态，显式 `--show-text` 才显示内容。源码接口和时间规则见 [输入契约](docs/TRANSCRIPT_SOURCE_CONTRACT.md)，上游未知行为见 [接口笔记](docs/API_CONTRACT_NOTES.md)，日志、容量、保留和删除操作见 [资料管理](docs/DATA_OPERATIONS.md)。
 
