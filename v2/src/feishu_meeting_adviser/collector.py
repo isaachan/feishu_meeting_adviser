@@ -201,6 +201,7 @@ class Collector:
                 if cp['mode'] in (IngestMode.INITIAL, IngestMode.BACKFILL):
                     next_cp['last_reconciled'] = int(self.clock())
                 next_cp['query_end'] = None
+                next_cp['cursor_reset_count'] = 0
             counts = self.store.commit_page(self.meeting_id, page.captions, next_cp)
             summaries.append({'kind': 'page', 'event_count': page.event_count, 'kinds': page.kinds,
                               'has_more': page.has_more, 'unknown_times': page.unknown_times,
@@ -219,7 +220,4 @@ class Collector:
         cp['cursor_history'] = []
         cp['mode'] = IngestMode.BACKFILL.value
         # Preserve the original bounded query and every downstream acknowledgement.
-        with self.store.transaction():
-            self.store._status(status)
-            self.store.db.execute('UPDATE meetings SET checkpoint=? WHERE meeting_id=?',
-                                  (json.dumps(cp), self.meeting_id))
+        self.store.commit_page(self.meeting_id, [], cp, statuses=(status,))

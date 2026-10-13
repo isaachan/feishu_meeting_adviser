@@ -60,7 +60,7 @@ class Store:
         self.opened_ns = time.time_ns()
         self.db = connect_private(self.path)
         version = self.db.execute('PRAGMA user_version').fetchone()[0]
-        if version not in (0, 1):
+        if version not in (0, 1, 2):
             self.close()
             raise StorageError('unsupported database schema; do not discard existing data')
         self.db.executescript('''
@@ -89,7 +89,11 @@ class Store:
                 sequence INTEGER NOT NULL REFERENCES deliveries(sequence) ON DELETE CASCADE,
                 count INTEGER NOT NULL, PRIMARY KEY (meeting_id, consumer_id, sequence)
             );
-            PRAGMA user_version=1;
+            CREATE TABLE IF NOT EXISTS risks (
+                meeting_id TEXT NOT NULL REFERENCES meetings(meeting_id), identity TEXT NOT NULL,
+                body TEXT NOT NULL, PRIMARY KEY (meeting_id,identity)
+            );
+            PRAGMA user_version=2;
         ''')
 
     def close(self) -> None:
@@ -113,7 +117,7 @@ class Store:
 
     def payload_bytes(self) -> int:
         total = 0
-        for table, columns in (('meetings', ('checkpoint', 'state')), ('captions', ('body',)), ('deliveries', ('body',))):
+        for table, columns in (('meetings', ('checkpoint', 'state')), ('captions', ('body',)), ('deliveries', ('body',)), ('risks', ('body',))):
             for column in columns:
                 total += self.db.execute(f'SELECT COALESCE(SUM(length(CAST({column} AS BLOB))),0) FROM {table}').fetchone()[0]
         return total
@@ -144,6 +148,10 @@ class Store:
         return result.rowcount == 1
 
     def _status(self, status: Status) -> None:
+        if status.state == SourceState.INCOMPLETE:
+            identity = digest([status.reason, status.gap_start, status.gap_end])
+            self.db.execute('INSERT OR IGNORE INTO risks VALUES (?,?,?)',
+                            (status.meeting_id, identity, encode(asdict(status))))
         previous = self.current_state(status.meeting_id)
         if previous and (previous.state, previous.reason, previous.gap_start, previous.gap_end) == (
                 status.state, status.reason, status.gap_start, status.gap_end):
@@ -165,8 +173,17 @@ class Store:
         value['state'] = SourceState(value['state'])
         return Status(**value)
 
+    def active_status(self, meeting_id: str, at: str) -> Status:
+        row = self.db.execute('SELECT body FROM risks WHERE meeting_id=? ORDER BY rowid DESC LIMIT 1', (meeting_id,)).fetchone()
+        if row:
+            value = json.loads(row['body'])
+            value['state'] = SourceState.INCOMPLETE
+            value['at'] = at
+            return Status(**value)
+        return Status(meeting_id, SourceState.COLLECTING, 'scan_success', at)
+
     def commit_page(self, meeting_id: str, captions: list[Caption], checkpoint: dict, *,
-                    fault: Callable[[str], None] | None = None) -> dict[str, int]:
+                    fault: Callable[[str], None] | None = None, statuses: tuple[Status, ...] = ()) -> dict[str, int]:
         counts = {'added': 0, 'updated': 0, 'conflict': 0, 'duplicates': 0, 'older': 0}
         with self.transaction():
             if not self.db.execute('SELECT 1 FROM meetings WHERE meeting_id=?', (meeting_id,)).fetchone():
@@ -204,6 +221,10 @@ class Store:
             if fault:
                 fault('after_captions')
             self.db.execute('UPDATE meetings SET checkpoint=? WHERE meeting_id=?', (encode(checkpoint), meeting_id))
+            for status in statuses:
+                if status.meeting_id != meeting_id:
+                    raise StorageError('status meeting mismatch; page not committed')
+                self._status(status)
             if fault:
                 fault('after_checkpoint')
         if fault:
