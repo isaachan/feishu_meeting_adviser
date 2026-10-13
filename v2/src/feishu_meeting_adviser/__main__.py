@@ -33,7 +33,7 @@ def parser():
     consume = commands.add_parser('consume', help='persist a batch in the local fake consumer and acknowledge')
     consume.add_argument('--consumer', default='fake-qa')
     consume.add_argument('--limit', type=int, default=100)
-    reset = commands.add_parser('reset-session', help='reset an uncertain session after manually verifying bot absence')
+    reset = commands.add_parser('reset-session', help='reset stale/uncertain session after manually verifying bot absence')
     reset.add_argument('--confirmed-bot-left', action='store_true', required=True)
     resolve = commands.add_parser('resolve-conflict', help='explicitly accept a stored candidate after local review')
     resolve.add_argument('--delivery-id', required=True)

@@ -2,7 +2,7 @@
 
 [计划](PLAN_OFFICIAL_MEETING_EVENTS.md) · [TODO](docs/TODO.md) · [Spike 实验与复现](reference/spike/README.md)
 
-当前唯一路线是应用身份 `tenant_access_token` → `bots/join` → `bots/events`。接口可行性和单场连续采集已试通，证据见 [阶段 0 实测笔记](docs/STAGE0_FINDINGS.md)。产品正在按阶段 1 重新实现；历史代码和测试已隔离到 `reference/spike/`，产品不导入它们。真实问答尚未实现，20 秒端到端目标仍待阶段 2 验收，不回退 v1。
+当前唯一路线是应用身份 `tenant_access_token` → `bots/join` → `bots/events`。接口可行性和单场连续采集已试通，证据见 [阶段 0 实测笔记](docs/STAGE0_FINDINGS.md)。阶段 1 的产品实现与自动化验证已完成至 1.8，65 个产品测试通过；真实会议回归和 G1 尚待完成，见 [验证记录](docs/STAGE1_VALIDATION.md)。历史代码和测试已隔离到 `reference/spike/`，产品不导入它们。真实问答尚未实现，20 秒端到端目标仍待阶段 2 验收，不回退 v1。
 
 ## 目录与安装
 
@@ -37,9 +37,9 @@ python3 -m venv .venv  # 已有环境可直接使用
 
 `collect` 重启自动恢复产品检查点与未确认输入；`collect --once` 只完成一个页数预算周期，仍可能有待追赶页。源和消费进度独立，同句无可靠版本的变化保留为冲突，已有上下文不自动覆盖；本机核对候选后可用 `resolve-conflict --delivery-id <候选交付哈希>` 显式选择。候选和正文仅在私有数据库中，终端默认只显示计数/状态。源码接口和时间规则见 [输入契约](docs/TRANSCRIPT_SOURCE_CONTRACT.md)，上游未知行为见 [接口笔记](docs/API_CONTRACT_NOTES.md)，日志、容量、保留和删除操作见 [资料管理](docs/DATA_OPERATIONS.md)。
 
-同应用的采集与入离会操作互斥；重复 join/leave 会使用已确认的本地结果。切换会议前先停止采集、离开保存的旧会议，再修改会议号并 join。`leave` 始终针对保存的已验证会议 ID，配置改变不会让它猜测另一个 ID。配置在运行中变化时停止采集，需重新启动。
+同一应用共用一个产品数据目录，目录内的采集与入离会操作互斥；重复 join/leave 会使用已确认的本地结果。切换会议前先停止采集、离开保存的旧会议，再修改会议号并 join。`leave` 始终针对保存的已验证会议 ID，配置改变不会让它猜测另一个 ID。配置在运行中变化时停止采集，需重新启动。
 
-入离会超时会保留不确定状态，不能用本地 session 推断机器人已入会或离会。先在会议界面核对；离会仍需重试时显式使用 `leave --retry-uncertain`，只有已确认机器人离会后才能用 `reset-session --confirmed-bot-left` 清理不确定状态。不会自动重新入会。权限撤销、机器人离会和无法识别的格式会报告需人工处理；空页不会被当作会议结束。
+入离会超时会保留不确定状态，不能用本地 session 推断机器人已入会或离会。先在会议界面核对；离会仍需重试时显式使用 `leave --retry-uncertain`，只有已确认机器人离会后才能用 `reset-session --confirmed-bot-left` 清理不确定或实际已离会的过期 session。不会自动重新入会。权限撤销、机器人离会和无法识别的格式会报告需人工处理；空页不会被当作会议结束。
 
 ## Spike 复现
 

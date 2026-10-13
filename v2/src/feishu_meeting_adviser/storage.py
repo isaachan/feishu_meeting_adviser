@@ -59,10 +59,23 @@ def encode(value) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
 
 
+def decode_mapping(body: str) -> dict:
+    try:
+        value = json.loads(body)
+        if not isinstance(value, dict):
+            raise ValueError()
+        return value
+    except (ValueError, TypeError):
+        raise StorageError('invalid stored record; body hidden, investigate without deleting data') from None
+
+
 def caption_from_json(body: str) -> Caption:
-    value = json.loads(body)
-    value['mode'] = IngestMode(value['mode'])
-    return Caption(**value)
+    value = decode_mapping(body)
+    try:
+        value['mode'] = IngestMode(value['mode'])
+        return Caption(**value)
+    except (ValueError, TypeError, KeyError):
+        raise StorageError('invalid stored caption; body hidden') from None
 
 
 class Store:
@@ -192,7 +205,7 @@ class Store:
         row = self.db.execute('SELECT checkpoint FROM meetings WHERE meeting_id=?', (meeting_id,)).fetchone()
         if row is None:
             raise StorageError('unknown meeting')
-        return json.loads(row['checkpoint'])
+        return decode_mapping(row['checkpoint'])
 
     def caption(self, meeting_id: str, key: str) -> Caption | None:
         row = self.db.execute('SELECT body FROM captions WHERE meeting_id=? AND sentence_key=?', (meeting_id, key)).fetchone()
@@ -225,9 +238,12 @@ class Store:
         row = self.db.execute('SELECT state FROM meetings WHERE meeting_id=?', (meeting_id,)).fetchone()
         if not row or not row['state']:
             return None
-        value = json.loads(row['state'])
-        value['state'] = SourceState(value['state'])
-        return Status(**value)
+        value = decode_mapping(row['state'])
+        try:
+            value['state'] = SourceState(value['state'])
+            return Status(**value)
+        except (ValueError,TypeError,KeyError):
+            raise StorageError('invalid stored source status; body hidden') from None
 
     def active_status(self, meeting_id: str, at: str) -> Status:
         row = self.db.execute('SELECT body FROM risks WHERE meeting_id=? ORDER BY rowid DESC LIMIT 1', (meeting_id,)).fetchone()
@@ -294,7 +310,7 @@ class Store:
 
     def session(self, app_key: str) -> dict | None:
         row = self.db.execute('SELECT body FROM sessions WHERE app_key=?', (app_key,)).fetchone()
-        return json.loads(row['body']) if row else None
+        return decode_mapping(row['body']) if row else None
 
     def _record_membership(self, session: dict) -> None:
         mid = session.get('meeting_id')
@@ -345,12 +361,15 @@ class Store:
                                    'WHERE d.meeting_id=? AND d.sequence>? ORDER BY d.sequence LIMIT ?',
                                    (consumer_id, meeting_id, ack, limit)).fetchall()
             for row in rows:
-                body = json.loads(row['body'])
+                body = decode_mapping(row['body'])
                 value = {'sequence': row['sequence'], 'delivery_id': row['delivery_id'], 'kind': row['kind'],
                          'caption': body if row['kind'] != ChangeKind.STATUS else None,
                          'status': body if row['kind'] == ChangeKind.STATUS else None,
                          'replayed': row['attempt_count'] > 0 or row['created_ns'] < self.opened_ns}
-                result.append(Delivery.from_dict(value))
+                try:
+                    result.append(Delivery.from_dict(value))
+                except (ValueError,TypeError,KeyError):
+                    raise StorageError('invalid stored delivery; body hidden, not acknowledged') from None
                 self.db.execute('INSERT INTO attempts VALUES (?,?,?,1) ON CONFLICT(meeting_id,consumer_id,sequence) '
                                 'DO UPDATE SET count=count+1', (meeting_id, consumer_id, row['sequence']))
             if result:

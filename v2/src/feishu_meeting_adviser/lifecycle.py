@@ -1,4 +1,5 @@
 """Verified bot sessions, operation locks and a stoppable transcript source."""
+from contextlib import contextmanager
 import fcntl
 import os
 from pathlib import Path
@@ -32,6 +33,9 @@ class FileLock:
         except BlockingIOError:
             os.close(fd)
             raise LifecycleError('operation or collector already active; stop it first') from None
+        except OSError:
+            os.close(fd)
+            raise LifecycleError('unable to acquire local operation lock') from None
         self.fd = fd
 
     def release(self):
@@ -130,8 +134,8 @@ class SessionManager:
             raise LifecycleError('reset requires an explicit confirmation that the bot is out of the meeting')
         with self.application_lock():
             current = self.session()
-            if not current or current['phase'] not in ('join_pending', 'join_uncertain', 'leave_uncertain'):
-                raise LifecycleError('only an uncertain session can be reset')
+            if not current or current['phase'] not in ('join_pending', 'join_uncertain', 'leave_uncertain', 'joined'):
+                raise LifecycleError('no active or uncertain session to reset')
             self.store.save_session(self.app_key, {**current, 'phase': 'left', 'manual_confirmation_at': utc_now(self.clock)})
 
 
@@ -139,6 +143,7 @@ class MeetingSource:
     """One worker connection; caller reads/acks using its own SQLite connection."""
     def __init__(self, store: Store, manager: SessionManager, client=None, *, clock=time.time, diagnose=None):
         self.store = store
+        self._owner_thread = threading.get_ident()
         self.manager = manager
         self.config = manager.config
         self.clock = clock
@@ -150,6 +155,7 @@ class MeetingSource:
         self.diagnose = diagnose or (lambda record: None)
         self.thread = None
         self.failure = None
+        self.failure_reason = None
         self._app_lock = manager.application_lock()
         self._meeting_lock = FileLock(self.config.data_directory / 'locks' / ('meeting_' + digest(self.meeting_id) + '.lock'))
 
@@ -173,10 +179,13 @@ class MeetingSource:
         return None
 
     def start(self, *, max_successful_cycles=None) -> None:
+        if threading.get_ident() != self._owner_thread:
+            raise LifecycleError('start source on its creating thread; downstream reads may use other threads')
         if self.thread and self.thread.is_alive():
             return
         self.stop_event.clear()
         self.failure = None
+        self.failure_reason = None
         self._app_lock.acquire()
         try:
             self._meeting_lock.acquire()
@@ -220,13 +229,14 @@ class MeetingSource:
                 worker_store.publish_status(Status(self.meeting_id, SourceState.STOPPED, 'polling_stopped_bot_remains', utc_now(self.clock)))
         except Exception as exc:
             self.failure = type(exc).__name__
+            self.failure_reason = 'local_storage' if isinstance(exc, (StorageError,OSError)) else 'source_worker_failed'
             try:
-                self.diagnose({'kind': 'error', 'error_kind': 'source_worker_failed'})
+                self.diagnose({'kind': 'error', 'error_kind': self.failure_reason})
             except (StorageError, OSError):
                 pass
             if worker_store:
                 try:
-                    worker_store.publish_status(Status(self.meeting_id, SourceState.ACTION_REQUIRED, 'source_worker_failed', utc_now(self.clock)))
+                    worker_store.publish_status(Status(self.meeting_id, SourceState.ACTION_REQUIRED, self.failure_reason, utc_now(self.clock)))
                 except (StorageError, OSError):
                     pass
         finally:
@@ -246,14 +256,29 @@ class MeetingSource:
             if self.thread.is_alive():
                 raise LifecycleError('collector still shutting down; do not close its storage yet')
 
+    @contextmanager
+    def _access_store(self):
+        if threading.get_ident() == self._owner_thread:
+            yield self.store
+        else:
+            connection = Store(self.store.path, max_payload_bytes=self.store.max_payload_bytes,
+                               max_database_bytes=self.store.max_database_bytes)
+            try:
+                yield connection
+            finally:
+                connection.close()
+
     def read(self, consumer_id: str, *, limit=100):
-        return self.store.read(self.meeting_id, consumer_id, limit=limit)
+        with self._access_store() as store:
+            return store.read(self.meeting_id, consumer_id, limit=limit)
 
     def acknowledge(self, consumer_id: str, sequence: int):
-        self.store.acknowledge(self.meeting_id, consumer_id, sequence)
+        with self._access_store() as store:
+            store.acknowledge(self.meeting_id, consumer_id, sequence)
 
     def state(self):
-        status = self.store.current_state(self.meeting_id)
+        with self._access_store() as store:
+            status = store.current_state(self.meeting_id)
         if self.failure:
-            return Status(self.meeting_id, SourceState.ACTION_REQUIRED, 'source_worker_failed', utc_now(self.clock))
+            return Status(self.meeting_id, SourceState.ACTION_REQUIRED, self.failure_reason, utc_now(self.clock))
         return status or Status(self.meeting_id, SourceState.STOPPED, 'not_started', utc_now(self.clock))

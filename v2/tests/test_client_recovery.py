@@ -83,6 +83,30 @@ class ClientTests(unittest.TestCase):
             client.join('012345678')
         self.assertFalse(caught.exception.recoverable)
 
+    def test_partial_http_response_and_invalid_success_are_classified_safely(self):
+        from http.client import IncompleteRead
+        client = self.client([self.token(),IncompleteRead(b'private partial response')])
+        with self.assertRaises(ApiError) as caught:
+            client.events({})
+        self.assertEqual(caught.exception.kind,ErrorKind.NETWORK)
+        self.assertNotIn('private',str(caught.exception))
+        for invalid in ({'code':False}, {'code':0,'tenant_access_token':'private-token','expire':0}):
+            client = self.client([Response(invalid)])
+            with self.assertRaises(ApiError) as caught:
+                client.events({})
+            self.assertEqual(caught.exception.kind,ErrorKind.RESPONSE)
+
+    def test_http_401_refreshes_once_and_403_does_not_refresh(self):
+        client = self.client([self.token(),Response({'code':0},status=401),self.token('new-token'),self.success()])
+        client.events({})
+        self.assertEqual(len(self.requests),4)
+        self.requests.clear()
+        client = self.client([self.token(),Response({'code':99991672},status=403)])
+        with self.assertRaises(ApiError) as caught:
+            client.events({})
+        self.assertEqual(caught.exception.kind,ErrorKind.DENIED)
+        self.assertEqual(len(self.requests),2)
+
 
 class RecoveryTests(unittest.TestCase):
     def setUp(self):

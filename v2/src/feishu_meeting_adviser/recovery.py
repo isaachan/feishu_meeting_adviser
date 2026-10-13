@@ -106,7 +106,7 @@ class RecoveryLoop:
                     break
         except StorageError:
             self.last_status = Status(self.collector.meeting_id, SourceState.ACTION_REQUIRED, 'local_storage', utc_now(self.collector.clock))
-            self.diagnose({'kind': 'error', 'error_kind': 'local_storage', 'checkpoint_advanced': False})
+            self.diagnose({'kind': 'error', 'error_kind': 'local_storage'})
             self.terminal = True
             raise
         return self.last_status
