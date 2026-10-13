@@ -13,7 +13,7 @@ import lookup_meeting_id
 
 JOIN = "/open-apis/vc/v1/bots/join"
 LEAVE = "/open-apis/vc/v1/bots/leave"
-SESSION = Path(__file__).resolve().parents[1] / "session.yaml"  # generated, gitignored
+SESSION = Path(__file__).resolve().parents[3] / "session.yaml"  # generated, gitignored
 
 
 def meeting_id(value):

@@ -25,7 +25,7 @@ class Stage0Tests(unittest.TestCase):
         }
 
     def test_default_config_is_in_v2_root(self):
-        self.assertEqual(stage0.CONFIG, Path(__file__).resolve().parents[1] / "config.yaml")
+        self.assertEqual(stage0.CONFIG, Path(__file__).resolve().parents[3] / "config.yaml")
 
     def test_join_then_probe_reuses_join_response_id_without_lookup(self):
         calls = []

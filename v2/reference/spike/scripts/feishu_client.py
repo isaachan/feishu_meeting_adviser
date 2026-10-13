@@ -8,7 +8,7 @@ from urllib import error, parse, request
 
 import yaml
 
-CONFIG = Path(__file__).resolve().parents[1] / "config.yaml"
+CONFIG = Path(__file__).resolve().parents[3] / "config.yaml"
 API = "https://open.feishu.cn"
 TENANT_TOKEN = "/open-apis/auth/v3/tenant_access_token/internal"
 

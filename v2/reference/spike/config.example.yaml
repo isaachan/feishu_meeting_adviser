@@ -1,0 +1,29 @@
+# 复制为 config.yaml（已被 Git 忽略）；不要提交 App Secret 或会议 ID。
+app:
+  id: ""                 # 自建应用 App ID
+  secret: ""             # 自建应用 App Secret
+lookup:
+  meeting_no: ""          # 9 位会议号，务必加引号以保留前导 0
+join:
+  password: ""            # 如会议设置了密码，请填写；没设密码则留空
+# 仅供显式执行 stage0.py send-message；正文来自可选的命令参数，不从 config.yaml 读取。
+# 如需在不确定是否送达时安全重试，可在这里选填固定 UUID；换新消息时须换新 UUID。
+# message:
+#   uuid: "18b20efc-d99a-43e7-8799-c5b7be69a46c"
+probe:
+  # 先运行 stage0.py join；probe 自动使用 bots/join 返回的内部 ID
+  max_pages: 3           # 单次获取页数上限（最多 10）；历史事件过多时可指定时间范围
+  # start_time: "1700000000"  # 可选：10 位 Unix 秒；与下方 end_time 一起限制历史事件
+  # end_time: "1700003600"
+  timeout_seconds: 10
+# 仅供持续字幕采集使用；现有 config.yaml 可不加 stream 块，使用以下默认值。
+stream:
+  poll_seconds: 2               # 扫描结束后等待秒数；不是端到端延迟承诺
+  request_seconds: 1            # 同一进程两次 events 请求的最短间隔，遵守 100 次/分钟限流
+  initial_lookback_seconds: 600 # 首次启动回看 10 分钟；更早的内容不会自动回补
+  overlap_seconds: 120          # 两次扫描重叠窗口，防止边界丢句
+  page_size: 100                # 官方允许 20–100
+  max_pages_per_cycle: 10       # 追赶历史时逐页检查点，下一轮继续
+  max_seen: 5000                # 状态里最近去重键的上限
+  max_log_bytes: 10000000       # 每个日志文件每次运行最多约 10 MB，达到上限停机
+  capture_failed_page: false    # 默认不存原始事件；排查解析失败时经参会者同意才显式改为 true

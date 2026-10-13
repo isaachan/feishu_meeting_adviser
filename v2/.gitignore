@@ -5,3 +5,8 @@ output/
 __pycache__/
 *.pyc
 .DS_Store
+data/
+*.egg-info/
+build/
+dist/
+venv/

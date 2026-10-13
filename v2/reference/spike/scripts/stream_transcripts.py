@@ -22,7 +22,7 @@ import bot_join
 import feishu_client as client
 import stage0
 
-BASE = Path(__file__).resolve().parents[1] / "output"
+BASE = Path(__file__).resolve().parents[3] / "output"
 
 
 def options(config):
