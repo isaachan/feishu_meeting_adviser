@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
 import time
+import statistics
 from typing import Protocol
 
 from .client import ApiError, ErrorKind, StopRequested
@@ -149,7 +150,7 @@ class ScanSettings:
 
 
 class Collector:
-    def __init__(self, store: Store, meeting_id: str, client: EventsClient, *, settings=ScanSettings(), clock=time.time, should_stop=None, page_status=None):
+    def __init__(self, store: Store, meeting_id: str, client: EventsClient, *, settings=ScanSettings(), clock=time.time, should_stop=None, page_status=None, diagnose=None):
         self.store = store
         self.meeting_id = meeting_id
         self.client = client
@@ -157,6 +158,7 @@ class Collector:
         self.clock = clock
         self.should_stop = should_stop or (lambda: False)
         self.page_status = page_status or (lambda page: None)
+        self.diagnose = diagnose or (lambda record: None)
         now = int(clock())
         start = max(1_000_000_000, now - settings.initial_lookback_seconds)
         checkpoint = {'schema': 1, 'initial_start': start, 'query_start': start, 'query_end': now,
@@ -203,6 +205,8 @@ class Collector:
                 query['page_token'] = cp['cursor']
             started = time.monotonic()
             response = self.client.events(query)
+            request_ms = round((time.monotonic() - started) * 1000)
+            processing_start = time.monotonic()
             received_at = utc_now(self.clock)
             page = parse_page(response, self.meeting_id, received_at=received_at, mode=IngestMode(cp['mode']))
             if page.has_more and (page.cursor == cp['cursor'] or page.cursor in cp['cursor_history']):
@@ -211,6 +215,12 @@ class Collector:
                 raise PageFormatError('scan page safety limit; page not committed')
             next_cp = dict(cp)
             next_cp['last_success'] = received_at
+            for field, values in (('last_caption_event_ns', [c.event_ns for c in page.captions]),
+                                  ('last_caption_end_ns', [c.end_ns for c in page.captions])):
+                known = [v for v in values if v is not None]
+                if cp.get(field) is not None:
+                    known.append(cp[field])
+                next_cp[field] = max(known) if known else None
             next_cp['cursor'] = page.cursor
             next_cp['cursor_history'] = cp['cursor_history'] + [page.cursor] if page.has_more else []
             if not page.has_more:
@@ -221,13 +231,25 @@ class Collector:
                 next_cp['cursor_reset_count'] = 0
             status = self.page_status(page)
             counts = self.store.commit_page(self.meeting_id, page.captions, next_cp, statuses=(status,) if status else ())
+            def latency(values):
+                known = sorted(values)
+                return ({'count': len(known), 'min': known[0], 'median': statistics.median(known),
+                         'p95': known[max(0, (len(known)*95+99)//100-1)], 'max': known[-1]} if known else {'count':0})
+            now_ns = epoch_ns(received_at)
+            emitted = self.store.last_commit_captions
+            summary = {'kind': 'page', 'event_count': page.event_count, 'kinds': page.kinds,
+                       'has_more': page.has_more, 'unknown_times': page.unknown_times,
+                       'identity_degraded': page.fallback_identities, 'counts': counts,
+                       'request_ms': request_ms, 'processing_ms': round((time.monotonic()-processing_start)*1000),
+                       'scan_mode': cp['mode'], 'query_start': cp['query_start'], 'query_end': cp['query_end'],
+                       'new_event_receive_seconds': latency([(now_ns-c.event_ns)/1e9 for c in emitted if c.event_ns is not None]),
+                       'new_end_receive_seconds': latency([(now_ns-c.end_ns)/1e9 for c in emitted if c.end_ns is not None]),
+                       'latest_caption_event_age_seconds': (now_ns-next_cp['last_caption_event_ns'])/1e9 if next_cp['last_caption_event_ns'] is not None else None,
+                       'latest_caption_end_age_seconds': (now_ns-next_cp['last_caption_end_ns'])/1e9 if next_cp['last_caption_end_ns'] is not None else None}
+            self.diagnose(summary)  # Each committed page has its own diagnostic even if a later page fails.
+            summaries.append(summary)
             if status and status.state == SourceState.ACTION_REQUIRED:
                 raise ApiError(ErrorKind.BOT_ABSENT)
-            summaries.append({'kind': 'page', 'event_count': page.event_count, 'kinds': page.kinds,
-                              'has_more': page.has_more, 'unknown_times': page.unknown_times,
-                              'identity_degraded': page.fallback_identities, 'counts': counts,
-                              'request_ms': round((time.monotonic() - started) * 1000),
-                              'scan_mode': cp['mode'], 'query_start': cp['query_start'], 'query_end': cp['query_end']})
             if not page.has_more:
                 break
         return summaries

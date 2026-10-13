@@ -201,18 +201,29 @@ class MeetingSource:
         worker_store = None
         loop = None
         try:
-            worker_store = Store(self.store.path, max_payload_bytes=self.store.max_payload_bytes)
+            worker_store = Store(self.store.path, max_payload_bytes=self.store.max_payload_bytes,
+                                 max_database_bytes=self.store.max_database_bytes)
+            from .maintenance import Maintenance
+            maintenance = Maintenance(worker_store, self.config, clock=self.clock, diagnose=self.diagnose)
+            def before_cycle():
+                reason = self._before_cycle(worker_store)
+                if reason is None:
+                    maintenance.run_due()
+                return reason
             collector = Collector(worker_store, self.meeting_id, self.client, settings=self.config.scan,
-                                  clock=self.clock, should_stop=self.stop_event.is_set, page_status=self._page_status)
+                                  clock=self.clock, should_stop=self.stop_event.is_set, page_status=self._page_status, diagnose=self.diagnose)
             loop = RecoveryLoop(collector, stop_event=self.stop_event, poll_seconds=self.config.poll_seconds,
                                 cooldown_seconds=self.config.cooldown_seconds, diagnose=self.diagnose,
-                                before_cycle=lambda: self._before_cycle(worker_store))
+                                before_cycle=before_cycle)
             loop.run(max_successful_cycles=max_successful_cycles)
             if not loop.terminal or self.stop_event.is_set():
                 worker_store.publish_status(Status(self.meeting_id, SourceState.STOPPED, 'polling_stopped_bot_remains', utc_now(self.clock)))
         except Exception as exc:
             self.failure = type(exc).__name__
-            self.diagnose({'kind': 'error', 'error_kind': 'source_worker_failed'})
+            try:
+                self.diagnose({'kind': 'error', 'error_kind': 'source_worker_failed'})
+            except (StorageError, OSError):
+                pass
             if worker_store:
                 try:
                     worker_store.publish_status(Status(self.meeting_id, SourceState.ACTION_REQUIRED, 'source_worker_failed', utc_now(self.clock)))

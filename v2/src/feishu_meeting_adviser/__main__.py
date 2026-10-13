@@ -12,6 +12,8 @@ from .client import ApiError, FeishuClient, StopRequested
 from .collector import utc_now
 from .config import ConfigError, DEFAULT_CONFIG, load_config
 from .lifecycle import LifecycleError, MeetingSource, SessionManager
+from .diagnostics import Diagnostics
+from .maintenance import Maintenance
 from .models import SourceState, digest
 from .storage import DurableFakeConsumer, StorageError, Store
 
@@ -35,6 +37,11 @@ def parser():
     reset.add_argument('--confirmed-bot-left', action='store_true', required=True)
     resolve = commands.add_parser('resolve-conflict', help='explicitly accept a stored candidate after local review')
     resolve.add_argument('--delivery-id', required=True)
+    commands.add_parser('prune', help='remove acknowledged expired records; stop collector first')
+    delete = commands.add_parser('delete-meeting-data', help='irreversibly delete saved meeting content and consumer copies')
+    delete.add_argument('--confirm', action='store_true', required=True)
+    inspect = commands.add_parser('conflicts', help='list unresolved candidate hashes; text requires explicit flag')
+    inspect.add_argument('--show-text', action='store_true')
     return root
 
 
@@ -46,7 +53,11 @@ def main(argv=None):
     store = source = None
     try:
         config = load_config(args.config)
-        store = Store(config.data_directory / 'source.sqlite3', max_payload_bytes=config.content_capacity_bytes)
+        store = Store(config.data_directory / 'source.sqlite3', max_payload_bytes=config.content_capacity_bytes,
+                      max_database_bytes=config.database_capacity_bytes)
+        diagnostics = Diagnostics(config.data_directory / 'diagnostics', max_bytes=config.diagnostic_bytes,
+                                  backups=config.diagnostic_backups)
+        maintenance = Maintenance(store, config, diagnose=diagnostics.write)
         client = FeishuClient(config.credentials, timeout=config.timeout_seconds, request_seconds=config.request_seconds)
         manager = SessionManager(store, config, client)
         if args.command == 'join':
@@ -59,7 +70,7 @@ def main(argv=None):
             manager.reset_uncertain(confirmed_bot_left=args.confirmed_bot_left)
             print('Uncertain session reset using your explicit confirmation.')
         elif args.command == 'collect':
-            source = MeetingSource(store, manager)
+            source = MeetingSource(store, manager, diagnose=diagnostics.write)
             previous = {}
             if threading.current_thread() is threading.main_thread():
                 for signum in (signal.SIGINT, signal.SIGTERM):
@@ -84,25 +95,47 @@ def main(argv=None):
             if session and session.get('meeting_id'):
                 mid = session['meeting_id']
                 status = store.current_state(mid)
-                result.update(state=status.state.value if status else 'not_started', reason=status.reason if status else 'not_started',
-                              pending=store.backlog(mid, args.consumer))
+                result.update(store.statistics(mid, args.consumer))
+                result['content_deleted'] = bool(store.db.execute('SELECT 1 FROM tombstones WHERE identity=?',(digest(mid),)).fetchone())
             print(json.dumps(result))
         elif args.command == 'consume':
             session = manager.saved_meeting()
-            rows = store.read(session['meeting_id'], args.consumer, limit=args.limit)
-            consumer = DurableFakeConsumer(config.data_directory / 'fake_consumers' / (digest(args.consumer) + '.sqlite3'))
-            try:
-                accepted = sum(consumer.accept(row) for row in rows)
-                if rows:
-                    store.acknowledge(session['meeting_id'], args.consumer, rows[-1].sequence)
-            finally:
-                consumer.close()
+            with maintenance.lock():
+                rows = store.read(session['meeting_id'], args.consumer, limit=args.limit)
+                consumer = DurableFakeConsumer(config.data_directory / 'fake_consumers' / (digest(args.consumer) + '.sqlite3'),
+                                                max_database_bytes=config.database_capacity_bytes)
+                try:
+                    accepted = sum(consumer.accept(row) for row in rows)
+                    if rows:
+                        store.acknowledge(session['meeting_id'], args.consumer, rows[-1].sequence)
+                finally:
+                    consumer.close()
             print(json.dumps({'offered': len(rows), 'newly_persisted': accepted, 'acknowledged': bool(rows)}))
         elif args.command == 'resolve-conflict':
             with manager.application_lock():
                 session = manager.saved_meeting()
                 changed = store.resolve_conflict(session['meeting_id'], args.delivery_id, at=utc_now())
             print(json.dumps({'resolved': changed}))
+        elif args.command == 'prune':
+            with manager.application_lock():
+                result = maintenance.prune()
+            print(json.dumps(result))
+        elif args.command == 'delete-meeting-data':
+            with manager.application_lock():
+                session = manager.saved_meeting()
+                maintenance.delete_meeting(session['meeting_id'])
+            print('Saved meeting content and managed consumer copies deleted; bot session retained for explicit leave.')
+        elif args.command == 'conflicts':
+            session = manager.saved_meeting()
+            rows = store.db.execute('SELECT c.delivery_id,d.body FROM conflicts c JOIN deliveries d USING(delivery_id) '
+                                    'WHERE c.meeting_id=? AND c.resolved=0', (session['meeting_id'],)).fetchall()
+            result = []
+            for row in rows:
+                item = {'delivery_id': row['delivery_id']}
+                if args.show_text:
+                    item['text'] = json.loads(row['body'])['text']
+                result.append(item)
+            print(json.dumps(result, ensure_ascii=False))
         return 0
     except (ConfigError, StorageError, LifecycleError, ApiError) as exc:
         print('Operation stopped: ' + str(exc), file=sys.stderr)

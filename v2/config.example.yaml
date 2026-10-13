@@ -4,7 +4,7 @@ app:
   id: ""
   secret: ""
 meeting:
-  no: ""                       # 9 位会议号，加引号保留前导 0
+  meeting_no: ""                       # 9 位会议号，加引号保留前导 0
   password: ""
 http:
   timeout_seconds: 10

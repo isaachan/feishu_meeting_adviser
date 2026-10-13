@@ -42,8 +42,6 @@ class RecoveryLoop:
                 self.terminal = True
                 return 0
             summaries = collector.cycle()
-            for summary in summaries:
-                self.diagnose(summary)
             cp = collector.store.checkpoint(collector.meeting_id)
             if self.outage_start is not None and not cp['cursor']:
                 status = Status(collector.meeting_id, SourceState.INCOMPLETE, 'recovery_completeness_unverified',
@@ -57,6 +55,7 @@ class RecoveryLoop:
                       collector.store.active_status(collector.meeting_id, utc_now(collector.clock)))
             collector.store.publish_status(status)
             self.last_status = status
+            self.diagnose({'kind': 'health', **collector.store.statistics(collector.meeting_id)})
             self.failures = 0
             self.step_succeeded = True
             # Page budget exhaustion is continuation, not an idle poll.

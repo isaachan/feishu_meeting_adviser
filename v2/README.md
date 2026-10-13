@@ -35,7 +35,7 @@ python3 -m venv .venv  # 已有环境可直接使用
 .venv/bin/python -m feishu_meeting_adviser leave
 ```
 
-`collect` 重启自动恢复产品检查点与未确认输入；`collect --once` 只完成一个页数预算周期，仍可能有待追赶页。源和消费进度独立，同句无可靠版本的变化保留为冲突，已有上下文不自动覆盖；本机核对候选后可用 `resolve-conflict --delivery-id <候选交付哈希>` 显式选择。候选和正文仅在私有数据库中，终端默认只显示计数/状态。源码接口和时间规则见 [输入契约](docs/TRANSCRIPT_SOURCE_CONTRACT.md)，上游未知行为见 [接口笔记](docs/API_CONTRACT_NOTES.md)。
+`collect` 重启自动恢复产品检查点与未确认输入；`collect --once` 只完成一个页数预算周期，仍可能有待追赶页。源和消费进度独立，同句无可靠版本的变化保留为冲突，已有上下文不自动覆盖；本机核对候选后可用 `resolve-conflict --delivery-id <候选交付哈希>` 显式选择。候选和正文仅在私有数据库中，终端默认只显示计数/状态。源码接口和时间规则见 [输入契约](docs/TRANSCRIPT_SOURCE_CONTRACT.md)，上游未知行为见 [接口笔记](docs/API_CONTRACT_NOTES.md)，日志、容量、保留和删除操作见 [资料管理](docs/DATA_OPERATIONS.md)。
 
 同应用的采集与入离会操作互斥；重复 join/leave 会使用已确认的本地结果。切换会议前先停止采集、离开保存的旧会议，再修改会议号并 join。`leave` 始终针对保存的已验证会议 ID，配置改变不会让它猜测另一个 ID。配置在运行中变化时停止采集，需重新启动。
 

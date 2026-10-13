@@ -44,7 +44,7 @@ def epoch_ns(value: RawTime, *, numeric_milliseconds: bool = False) -> int | Non
         return None
     if numeric_milliseconds and isinstance(value, (str, int)):
         number = str(value)
-        if number.isascii() and number.isdecimal():
+        if len(number) <= 20 and number.isascii() and number.isdecimal():
             return int(number) * 1_000_000
     if not isinstance(value, str):
         return None

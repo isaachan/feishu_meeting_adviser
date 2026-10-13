@@ -69,9 +69,9 @@ def load_config(path: Path = DEFAULT_CONFIG) -> Configuration:
     credentials = Credentials(string(app, 'id', required=True), string(app, 'secret', required=True))
     meeting = section('meeting')
     legacy_lookup = section('lookup')
-    meeting_no = string(meeting, 'no', string(legacy_lookup, 'meeting_no'))
+    meeting_no = string(meeting, 'meeting_no', meeting.get('no', meeting.get(False, string(legacy_lookup, 'meeting_no'))))
     if len(meeting_no) != 9 or not meeting_no.isascii() or not meeting_no.isdecimal():
-        raise ConfigError('meeting.no (or legacy lookup.meeting_no) must be a quoted nine-digit string')
+        raise ConfigError('meeting.meeting_no (or legacy lookup.meeting_no) must be a quoted nine-digit string')
     password = string(meeting, 'password', string(section('join'), 'password'))
     collector = section('collector')
     unknown = set(collector) - set(ScanSettings.__dataclass_fields__)
