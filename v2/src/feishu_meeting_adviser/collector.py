@@ -5,6 +5,7 @@ import json
 import time
 from typing import Protocol
 
+from .client import ApiError, ErrorKind, StopRequested
 from .models import Caption, IngestMode, SourceState, Status, digest, epoch_ns
 from .storage import StorageError, Store
 
@@ -42,6 +43,7 @@ class ParsedPage:
     unknown_times: int
     fallback_identities: int
     kinds: dict[str, int]
+    departures: list[tuple[str, int | None]]
 
 
 def parse_page(response: dict, meeting_id: str, *, received_at: str, mode: IngestMode) -> ParsedPage:
@@ -53,6 +55,7 @@ def parse_page(response: dict, meeting_id: str, *, received_at: str, mode: Inges
     if more and not cursor:
         raise PageFormatError('has_more without page_token; page not committed')
     captions = []
+    departures = []
     unknown = fallbacks = 0
     kinds = {}
     for event in data['events']:
@@ -79,6 +82,16 @@ def parse_page(response: dict, meeting_id: str, *, received_at: str, mode: Inges
         subtype = payload.get('activity_event_type') if kind == 'meeting.activity' else kind
         label = subtype if subtype in ('transcript_received', 'participant_joined', 'participant_left', 'chat_received') else 'other'
         kinds[label] = kinds.get(label, 0) + 1
+        if subtype == 'participant_left':
+            left_items = payload.get('participant_left_items', [])
+            if not isinstance(left_items, list):
+                raise PageFormatError('participant_left_items must be a list')
+            for item in left_items:
+                if isinstance(item, dict) and isinstance(item.get('participant'), dict):
+                    uid = item['participant'].get('id')
+                    if isinstance(uid, str):
+                        departed_at = epoch_ns(item.get('leave_time'), numeric_milliseconds=True) or epoch_ns(stamp)
+                        departures.append((uid, departed_at))
         if subtype != 'transcript_received':
             continue
         if 'transcript_received_items' in payload:
@@ -116,7 +129,7 @@ def parse_page(response: dict, meeting_id: str, *, received_at: str, mode: Inges
                                     mode=mode, sentence_id=sid, speaker_id=speaker_id, speaker_name=speaker_name,
                                     language=language, event_id=eid, event_time=stamp, start_time=start, end_time=end,
                                     identity_degraded=degraded))
-    return ParsedPage(captions, more, cursor if more else None, len(data['events']), unknown, fallbacks, kinds)
+    return ParsedPage(captions, more, cursor if more else None, len(data['events']), unknown, fallbacks, kinds, departures)
 
 
 @dataclass(frozen=True)
@@ -136,12 +149,14 @@ class ScanSettings:
 
 
 class Collector:
-    def __init__(self, store: Store, meeting_id: str, client: EventsClient, *, settings=ScanSettings(), clock=time.time):
+    def __init__(self, store: Store, meeting_id: str, client: EventsClient, *, settings=ScanSettings(), clock=time.time, should_stop=None, page_status=None):
         self.store = store
         self.meeting_id = meeting_id
         self.client = client
         self.settings = settings
         self.clock = clock
+        self.should_stop = should_stop or (lambda: False)
+        self.page_status = page_status or (lambda page: None)
         now = int(clock())
         start = max(1_000_000_000, now - settings.initial_lookback_seconds)
         checkpoint = {'schema': 1, 'initial_start': start, 'query_start': start, 'query_end': now,
@@ -167,7 +182,7 @@ class Collector:
         if cp['query_end'] is not None:
             return cp
         now = max(int(self.clock()), cp['completed_until'])
-        reconcile = cp['last_reconciled'] is None or now - cp['last_reconciled'] >= self.settings.reconcile_seconds
+        reconcile = cp.get('recovery_start') is not None or cp['last_reconciled'] is None or now - cp['last_reconciled'] >= self.settings.reconcile_seconds
         cp['query_start'] = cp['initial_start'] if reconcile else max(cp['initial_start'], cp['completed_until'] - self.settings.overlap_seconds)
         cp['query_end'] = now
         cp['mode'] = IngestMode.BACKFILL.value if reconcile else IngestMode.LIVE.value
@@ -179,6 +194,8 @@ class Collector:
     def cycle(self) -> list[dict]:
         summaries = []
         for _ in range(self.settings.max_pages_per_cycle):
+            if self.should_stop():
+                raise StopRequested()
             cp = self._begin_window()
             query = {'meeting_id': self.meeting_id, 'start_time': str(cp['query_start']),
                      'end_time': str(cp['query_end']), 'page_size': cp['page_size']}
@@ -202,7 +219,10 @@ class Collector:
                     next_cp['last_reconciled'] = int(self.clock())
                 next_cp['query_end'] = None
                 next_cp['cursor_reset_count'] = 0
-            counts = self.store.commit_page(self.meeting_id, page.captions, next_cp)
+            status = self.page_status(page)
+            counts = self.store.commit_page(self.meeting_id, page.captions, next_cp, statuses=(status,) if status else ())
+            if status and status.state == SourceState.ACTION_REQUIRED:
+                raise ApiError(ErrorKind.BOT_ABSENT)
             summaries.append({'kind': 'page', 'event_count': page.event_count, 'kinds': page.kinds,
                               'has_more': page.has_more, 'unknown_times': page.unknown_times,
                               'identity_degraded': page.fallback_identities, 'counts': counts,

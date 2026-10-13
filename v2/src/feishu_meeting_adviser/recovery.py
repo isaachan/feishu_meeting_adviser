@@ -9,13 +9,14 @@ from .storage import StorageError
 
 class RecoveryLoop:
     def __init__(self, collector: Collector, *, stop_event=None, poll_seconds=2, cooldown_seconds=30,
-                 jitter=random.random, diagnose=None):
+                 jitter=random.random, diagnose=None, before_cycle=None):
         self.collector = collector
         self.stop_event = stop_event or threading.Event()
         self.poll_seconds = poll_seconds
         self.cooldown_seconds = cooldown_seconds
         self.jitter = jitter
         self.diagnose = diagnose or (lambda record: None)
+        self.before_cycle = before_cycle or (lambda: None)
         self.failures = 0
         self.outage_start = collector.store.checkpoint(collector.meeting_id).get('recovery_start')
         self.step_succeeded = False
@@ -35,6 +36,11 @@ class RecoveryLoop:
             return 0
         collector = self.collector
         try:
+            reason = self.before_cycle()
+            if reason:
+                self.status(SourceState.ACTION_REQUIRED, reason)
+                self.terminal = True
+                return 0
             summaries = collector.cycle()
             for summary in summaries:
                 self.diagnose(summary)

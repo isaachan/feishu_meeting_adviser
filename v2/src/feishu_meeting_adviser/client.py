@@ -103,6 +103,8 @@ class FeishuClient:
         self._last_request = None
 
     def _rate_limit(self):
+        if self.wait(0):
+            raise StopRequested()
         if self._last_request is not None:
             delay = self.request_seconds - (self.monotonic() - self._last_request)
             if delay > 0 and self.wait(delay):

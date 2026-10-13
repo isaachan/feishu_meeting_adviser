@@ -20,7 +20,26 @@ python3 -m venv .venv  # 已有环境可直接使用
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-产品配置入口为本机 `v2/config.yaml`，运行数据将保存在 `v2/data/`；当前入口提供帮助和版本信息，业务命令随实现加入。已有 spike 配置、session 和输出保持原位，勿覆盖配置或自动导入旧状态；正式配置及迁移说明随产品配置实现补充。真实资料、凭据、session 和运行数据均不提交仓库。
+默认读取工作目录的 `config.yaml`（以下命令从 `v2/` 执行），其他目录使用 `--config /绝对路径/config.yaml`。默认运行资料保存在配置文件同目录下的 `data/`。产品读取旧配置的 `app`、`lookup.meeting_no`、`join.password` 和 `probe.timeout_seconds`，不改写已有配置；旧 `stream`、`message` 和旧 session 不用于产品。新设置参考 `config.example.yaml`，仅在没有配置文件时复制并设为 `600`。真实资料、凭据、session 和运行数据均不提交仓库。
+
+## 产品操作
+
+真实入会前需参会者同意，当前会议需已具备阶段 0 验证的权限和设置。先在界面确认 spike 机器人已离会；不要在已有机器人占用的情况下盲目重复入会。
+
+```bash
+.venv/bin/python -m feishu_meeting_adviser join
+.venv/bin/python -m feishu_meeting_adviser collect
+# Ctrl-C / SIGTERM 仅停止采集，bot 仍在会中；不要在采集中调用 leave。
+.venv/bin/python -m feishu_meeting_adviser status
+.venv/bin/python -m feishu_meeting_adviser consume  # 持久化给假消费者后确认，不调用 LLM、不发送消息
+.venv/bin/python -m feishu_meeting_adviser leave
+```
+
+`collect` 重启自动恢复产品检查点与未确认输入；`collect --once` 只完成一个页数预算周期，仍可能有待追赶页。源和消费进度独立，同句无可靠版本的变化保留为冲突，已有上下文不自动覆盖；本机核对候选后可用 `resolve-conflict --delivery-id <候选交付哈希>` 显式选择。候选和正文仅在私有数据库中，终端默认只显示计数/状态。源码接口和时间规则见 [输入契约](docs/TRANSCRIPT_SOURCE_CONTRACT.md)，上游未知行为见 [接口笔记](docs/API_CONTRACT_NOTES.md)。
+
+同应用的采集与入离会操作互斥；重复 join/leave 会使用已确认的本地结果。切换会议前先停止采集、离开保存的旧会议，再修改会议号并 join。`leave` 始终针对保存的已验证会议 ID，配置改变不会让它猜测另一个 ID。配置在运行中变化时停止采集，需重新启动。
+
+入离会超时会保留不确定状态，不能用本地 session 推断机器人已入会或离会。先在会议界面核对；离会仍需重试时显式使用 `leave --retry-uncertain`，只有已确认机器人离会后才能用 `reset-session --confirmed-bot-left` 清理不确定状态。不会自动重新入会。权限撤销、机器人离会和无法识别的格式会报告需人工处理；空页不会被当作会议结束。
 
 ## Spike 复现
 

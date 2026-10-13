@@ -60,7 +60,7 @@ class Store:
         self.opened_ns = time.time_ns()
         self.db = connect_private(self.path)
         version = self.db.execute('PRAGMA user_version').fetchone()[0]
-        if version not in (0, 1, 2):
+        if version not in (0, 1, 2, 3):
             self.close()
             raise StorageError('unsupported database schema; do not discard existing data')
         self.db.executescript('''
@@ -93,8 +93,19 @@ class Store:
                 meeting_id TEXT NOT NULL REFERENCES meetings(meeting_id), identity TEXT NOT NULL,
                 body TEXT NOT NULL, PRIMARY KEY (meeting_id,identity)
             );
-            PRAGMA user_version=2;
+            CREATE TABLE IF NOT EXISTS sessions (app_key TEXT PRIMARY KEY, body TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS conflicts (
+                meeting_id TEXT NOT NULL, sentence_key TEXT NOT NULL,
+                delivery_id TEXT PRIMARY KEY REFERENCES deliveries(delivery_id), resolved INTEGER NOT NULL DEFAULT 0
+            );
+            PRAGMA user_version=3;
         ''')
+        if version in (1, 2):
+            with self.transaction():
+                for row in self.db.execute("SELECT meeting_id,delivery_id,body FROM deliveries WHERE kind='conflict'").fetchall():
+                    candidate = json.loads(row['body'])
+                    self.db.execute('INSERT OR IGNORE INTO conflicts(meeting_id,sentence_key,delivery_id) VALUES (?,?,?)',
+                                    (row['meeting_id'], candidate['sentence_key'], row['delivery_id']))
 
     def close(self) -> None:
         self.db.close()
@@ -217,6 +228,8 @@ class Store:
                                     'ON CONFLICT(meeting_id,sentence_key) DO UPDATE SET fingerprint=excluded.fingerprint,body=excluded.body',
                                     (meeting_id, candidate.sentence_key, candidate.fingerprint, encode(asdict(candidate))))
                 else:
+                    self.db.execute('INSERT INTO conflicts(meeting_id,sentence_key,delivery_id) VALUES (?,?,?)',
+                                    (meeting_id, candidate.sentence_key, digest(identity)))
                     self._status(Status(meeting_id, SourceState.INCOMPLETE, 'revision_conflict', candidate.received_at))
             if fault:
                 fault('after_captions')
@@ -230,6 +243,37 @@ class Store:
         if fault:
             fault('after_commit')
         return counts
+
+    def session(self, app_key: str) -> dict | None:
+        row = self.db.execute('SELECT body FROM sessions WHERE app_key=?', (app_key,)).fetchone()
+        return json.loads(row['body']) if row else None
+
+    def save_session(self, app_key: str, session: dict) -> None:
+        with self.transaction():
+            self.db.execute('INSERT INTO sessions VALUES (?,?) ON CONFLICT(app_key) DO UPDATE SET body=excluded.body',
+                            (app_key, encode(session)))
+
+    def resolve_conflict(self, meeting_id: str, delivery_id: str, *, at: str) -> bool:
+        with self.transaction():
+            row = self.db.execute('SELECT c.*,d.body FROM conflicts c JOIN deliveries d USING(delivery_id) '
+                                  'WHERE c.delivery_id=? AND c.meeting_id=?', (delivery_id, meeting_id)).fetchone()
+            if not row:
+                raise StorageError('unknown conflict for saved meeting')
+            if row['resolved']:
+                return False
+            candidate = caption_from_json(row['body'])
+            self.db.execute('UPDATE captions SET fingerprint=?,body=? WHERE meeting_id=? AND sentence_key=?',
+                            (candidate.fingerprint, encode(asdict(candidate)), meeting_id, candidate.sentence_key))
+            self.db.execute('UPDATE conflicts SET resolved=1 WHERE meeting_id=? AND sentence_key=?',
+                            (meeting_id, candidate.sentence_key))
+            self._deliver(meeting_id, ChangeKind.UPDATED, asdict(candidate), ['manual_resolution', meeting_id, delivery_id])
+            if not self.db.execute('SELECT 1 FROM conflicts WHERE meeting_id=? AND resolved=0', (meeting_id,)).fetchone():
+                risks = self.db.execute('SELECT identity,body FROM risks WHERE meeting_id=?', (meeting_id,)).fetchall()
+                for risk in risks:
+                    if json.loads(risk['body'])['reason'] == 'revision_conflict':
+                        self.db.execute('DELETE FROM risks WHERE meeting_id=? AND identity=?', (meeting_id, risk['identity']))
+            self._status(self.active_status(meeting_id, at))
+        return True
 
     def read(self, meeting_id: str, consumer_id: str, *, limit: int = 100) -> list[Delivery]:
         if not consumer_id or len(consumer_id) > 128 or not 1 <= limit <= 1000:
