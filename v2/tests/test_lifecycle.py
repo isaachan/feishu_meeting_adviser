@@ -95,6 +95,25 @@ class LifecycleTests(unittest.TestCase):
         other.join()
         self.assertEqual(other.session()['meeting_no'], '123456789')
 
+    def test_unexpected_meeting_status_preserves_session_and_explains_manual_recovery(self):
+        saved = self.manager.join()
+        other = SessionManager(self.store, replace(self.config, meeting_no='123456789'), self.api)
+        self.api.failure = ApiError(ErrorKind.PARAMETER, http_status=400, code=121104)
+        with self.assertRaises(LifecycleError) as caught:
+            other.leave()
+        self.assertIn('121104', str(caught.exception))
+        self.assertIn('reset-session --confirmed-bot-left', str(caught.exception))
+        self.assertEqual(self.manager.session(), saved)
+        with self.assertRaises(LifecycleError):
+            other.join()
+        self.assertEqual(self.api.joins, 1)
+        # Only a manual confirmation lets a rejected leave unlock a different meeting.
+        other.reset_uncertain(confirmed_bot_left=True)
+        self.api.failure = None
+        other.join()
+        self.assertEqual(self.api.joins, 2)
+        self.assertEqual(other.session()['meeting_no'], '123456789')
+
     def test_source_thread_can_persist_and_caller_read_and_ack(self):
         self.manager.join()
         source = MeetingSource(self.store, self.manager, self.api, clock=lambda:1_800_000_000)

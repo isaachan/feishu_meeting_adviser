@@ -123,6 +123,12 @@ class SessionManager:
             try:
                 self.client.leave(session['meeting_id'])
             except ApiError as exc:
+                if exc.code == 121104:
+                    # A rejected leave does not establish bot absence. Keep the saved session.
+                    self.store.save_session(self.app_key, session)
+                    raise LifecycleError('meeting status does not support leaving (code=121104); '
+                                         'if the old meeting has ended or bot absence is confirmed, run '
+                                         'reset-session --confirmed-bot-left, then join') from None
                 if exc.code != 121110:  # Official leave contract: bot already absent.
                     if exc.kind not in (ErrorKind.NETWORK, ErrorKind.SERVER, ErrorKind.RESPONSE, ErrorKind.ACTION_REQUIRED):
                         self.store.save_session(self.app_key, session)

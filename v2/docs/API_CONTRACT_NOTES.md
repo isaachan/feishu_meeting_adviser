@@ -14,3 +14,5 @@
 首读默认回看 10 分钟，之前的内容不在自动采集范围内；之后保留初始边界做周期核对。缺失时间只标记未知，不补成接收时间。没有已核实的修订版本时，同句变化进入冲突状态并保留候选，不按事件时间猜测版本。上游已不可回查或完整性无法核实的恢复区间保持不完整状态。真实多页、空页边界与跨会议恢复仍由 1.9 留下授权实测证据。
 
 认证依据：[自建应用 token](https://open.feishu.cn/document/server-docs/authentication-management/access-token/tenant_access_token_internal.md) 的返回有效期，以及 [通用错误码](https://open.feishu.cn/document/ukTMukTMukTM/ugjM14COyUjL4ITN.md) 中的认证失效、权限和限流分类。客户端最多进行一次认证刷新重放；入会/离会的网络超时不自动重发。通用参数错误伴随已保存游标时，仅允许一次保持原查询范围、去掉游标的受控重扫，并永久保留完整性风险；后续仍失败则需人工处理。文档明确要求人工处理的入离会服务错误不进入持续重试。
+
+离会错误 `121104`（meeting status unexpected）的官方解释是会议当前状态不支持机器人离会，需确认会议状态后重试；它不等同于 `121110`（机器人不在会议中）。产品保留原会话并提示人工确认：仅在旧会议已结束或确认 bot 已离会时使用 `reset-session --confirmed-bot-left`，再加入新会议。依据：[离开会议错误码](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/vc-v1/bot/leave.md)。
