@@ -2,7 +2,7 @@
 
 [计划](PLAN_OFFICIAL_MEETING_EVENTS.md) · [TODO](docs/TODO.md) · [Spike 实验与复现](reference/spike/README.md)
 
-当前唯一路线是应用身份 `tenant_access_token` → `bots/join` → `bots/events`。接口可行性和单场连续采集已试通，证据见 [阶段 0 实测笔记](docs/STAGE0_FINDINGS.md)。阶段 1 的产品实现与自动化验证已完成至 1.8，80 个产品测试通过；真实会议回归和 G1 尚待完成，见 [验证记录](docs/STAGE1_VALIDATION.md)。历史代码和测试已隔离到 `reference/spike/`，产品不导入它们。已增加固定截止日期测试回复；模型问答尚未实现，20 秒端到端目标仍待阶段 2 验收，不回退 v1。
+当前唯一路线是应用身份 `tenant_access_token` → `bots/join` → `bots/events`。接口可行性和单场连续采集已试通，证据见 [阶段 0 实测笔记](docs/STAGE0_FINDINGS.md)。阶段 1 的产品实现与自动化验证已完成至 1.8，80 个产品测试通过；真实会议回归和 G1 尚待完成，见 [验证记录](docs/STAGE1_VALIDATION.md)。历史代码和测试已隔离到 `reference/spike/`，产品不导入它们。已增加固定截止日期测试回复；模型问答尚未实现，阶段 2 将接入基于行为文档的 LLM 自主参与；20 秒 P95 是功能完成后的优化目标，不回退 v1。
 
 ## 目录与安装
 
@@ -66,3 +66,5 @@ python3 -m venv .venv  # 已有环境可直接使用
 真实会议操作见 [Spike README](reference/spike/README.md)，仍从本机 `v2/config.yaml` 读取凭据。复现实验需参会者同意；迁移没有复制真实配置、session 或字幕。实验验证和产品验证分别记录。
 
 `leave` 返回 `121104` 表示会议当前状态不支持离会，不能据此确认机器人已不在会中。若旧会议已经结束，或在会议界面确认机器人已离会，停止采集后执行 `reset-session --confirmed-bot-left`，再 `join` 新会议；重置只标记旧会话已离会，不删除字幕或消费进度。旧会议仍在进行且机器人仍在其中时，核对会议状态后重试 `leave`。
+
+阶段 2 的已确认方向、待补边界和功能/性能验收顺序见[首版交互与验收口径](docs/STAGE2_INTERACTION.md)。不提供固定唤醒词或特殊控制指令，由 LLM 决定是否发言；会中 comment 文字一次完整发送。当前产品尚未实现这些模型能力。
