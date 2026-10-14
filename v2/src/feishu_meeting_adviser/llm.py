@@ -299,4 +299,3 @@ class CodexBackend:
             if self.reader:
                 self.reader.join(timeout=2)
             self.thread_id = self.turn_id = None
-
