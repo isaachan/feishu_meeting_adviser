@@ -25,8 +25,8 @@ class Configuration:
     data_directory: Path
     scan: ScanSettings = field(default_factory=ScanSettings)
     timeout_seconds: float = 10
-    request_seconds: float = 1
-    poll_seconds: float = 2
+    request_seconds: float = 0.7
+    poll_seconds: float = 0.7
     cooldown_seconds: float = 30
     content_capacity_bytes: int = 100_000_000
     retention_days: int = 7
@@ -113,8 +113,8 @@ def load_config(path: Path = DEFAULT_CONFIG) -> Configuration:
         reply_interval_seconds=number(llm, 'reply_interval_seconds', 10, 0, 300), introduction=introduction)
     return Configuration(path, fingerprint, credentials, meeting_no, password, directory.absolute(), scan,
         timeout_seconds=timeout,
-        request_seconds=number(http, 'request_seconds', 1, 0.7, 30),
-        poll_seconds=number(runtime, 'poll_seconds', 2, 1, 30),
+        request_seconds=number(http, 'request_seconds', 0.7, 0.7, 30),
+        poll_seconds=number(runtime, 'poll_seconds', 0.7, 0.7, 30),
         cooldown_seconds=number(runtime, 'cooldown_seconds', 30, 5, 3600),
         content_capacity_bytes=number(storage, 'content_capacity_bytes', 100_000_000, 10000, 1_000_000_000, True),
         retention_days=number(storage, 'retention_days', 7, 1, 365, True),

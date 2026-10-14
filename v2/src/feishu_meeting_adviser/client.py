@@ -85,7 +85,7 @@ def classify(http_status, code) -> ErrorKind:
 
 
 class FeishuClient:
-    def __init__(self, credentials: Credentials, *, timeout=10, request_seconds=1, opener=request.urlopen,
+    def __init__(self, credentials: Credentials, *, timeout=10, request_seconds=0.7, opener=request.urlopen,
                  monotonic=time.monotonic, clock=time.time, wait=None, max_response_bytes=4_000_000):
         if not credentials.app_id or not credentials.app_secret:
             raise ValueError('application credentials required')

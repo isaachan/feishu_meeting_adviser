@@ -8,7 +8,7 @@ from .storage import StorageError
 
 
 class RecoveryLoop:
-    def __init__(self, collector: Collector, *, stop_event=None, poll_seconds=2, cooldown_seconds=30,
+    def __init__(self, collector: Collector, *, stop_event=None, poll_seconds=0.7, cooldown_seconds=30,
                  jitter=random.random, diagnose=None, before_cycle=None):
         self.collector = collector
         self.stop_event = stop_event or threading.Event()

@@ -39,7 +39,7 @@ python3 -m feishu_meeting_adviser join
 python3 -m feishu_meeting_adviser collect --show-text
 ```
 
-`collect` 自行持续轮询；`--show-text` 实时打印新入库字幕、说话人和时间，也打印修订/冲突候选。终端正文是额外的本机副本，按会议授权保管。
+`collect` 自行持续轮询，默认每轮完成后等待 0.7 秒，HTTP 请求最短间隔同为 0.7 秒；实际轮询周期还包括请求与处理耗时。`--show-text` 实时打印新入库字幕、说话人和时间，也打印修订/冲突候选。终端正文是额外的本机副本，按会议授权保管。
 
 终端 B：
 

@@ -8,7 +8,7 @@ meeting:
   password: ""
 http:
   timeout_seconds: 10
-  request_seconds: 1             # 每次 HTTP 请求最短间隔；events 文档上限 100 次/分钟
+  request_seconds: 0.7           # 每次 HTTP 请求最短间隔；events 文档上限 100 次/分钟
 collector:
   initial_lookback_seconds: 600   # 首次回看范围，更早内容不自动采集
   overlap_seconds: 120
@@ -16,7 +16,7 @@ collector:
   max_pages_per_cycle: 10
   reconcile_seconds: 60          # 周期从初始起点回扫，长会议可能增加追赶时间
 runtime:
-  poll_seconds: 2
+  poll_seconds: 0.7              # 正常扫描一轮后等待 0.7 秒，另计请求/处理耗时
   cooldown_seconds: 30           # 快速重试耗尽后低频恢复探测
 storage:
   directory: "data"              # 相对于配置文件；目录 700，资料文件 600
