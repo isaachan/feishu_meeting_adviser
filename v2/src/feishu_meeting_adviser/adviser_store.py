@@ -5,8 +5,10 @@ import json
 from pathlib import Path
 import sqlite3
 import time
+from uuid import NAMESPACE_URL, uuid5
 
 from .models import ChangeKind, digest, epoch_ns
+from .llm import ModelError
 from .storage import CapacityError, StorageError, caption_from_json, connect_private, decode_mapping, encode
 
 
@@ -35,6 +37,11 @@ class AdviserStore:
                     state TEXT NOT NULL DEFAULT 'pending', result TEXT, created_ns INTEGER NOT NULL);
                 CREATE INDEX IF NOT EXISTS input_meeting ON inputs(meeting_id,sequence);
                 CREATE INDEX IF NOT EXISTS job_meeting ON jobs(meeting_id,generation);
+                CREATE TABLE IF NOT EXISTS outbox (
+                    uuid TEXT PRIMARY KEY, meeting_id TEXT NOT NULL, kind TEXT NOT NULL,
+                    content TEXT NOT NULL, evidence TEXT NOT NULL, generation INTEGER NOT NULL,
+                    state TEXT NOT NULL DEFAULT 'pending', error TEXT,
+                    created_ns INTEGER NOT NULL, sent_at REAL);
             ''')
         except BaseException:
             self.db.close()
@@ -58,7 +65,8 @@ class AdviserStore:
 
     def payload_bytes(self):
         return sum(self.db.execute(f'SELECT COALESCE(SUM(length(CAST({column} AS BLOB))),0) FROM {table}').fetchone()[0]
-                   for table, column in (('inputs','body'), ('context','body'), ('jobs','snapshot'), ('jobs','result')))
+                   for table, column in (('inputs','body'), ('context','body'), ('jobs','snapshot'), ('jobs','result'),
+                                         ('outbox','content'), ('outbox','evidence')))
 
     def meeting(self, mid):
         row = self.db.execute('SELECT * FROM meetings WHERE meeting_id=?', (mid,)).fetchone()
@@ -131,11 +139,25 @@ class AdviserStore:
             stamp = epoch_ns(item['end_time'], numeric_milliseconds=True) or epoch_ns(item['event_time'])
             return (stamp is None, stamp or 0, item['sentence_key'])
         captions.sort(key=order)
+        pending = self.db.execute('SELECT * FROM outbox WHERE meeting_id=? AND kind=\'reply\' AND state=\'pending\' ORDER BY created_ns DESC LIMIT 1', (mid,)).fetchone()
+        pending_reply = None
+        reply_keys = list(fresh_keys)
+        if pending:
+            basis = decode_mapping(pending['evidence'])
+            pending_reply = {'uuid': pending['uuid'], 'text': pending['content'], 'reply_sentence_keys': list(basis)}
+            for key, fingerprint in basis.items():
+                row = next((item for item in captions if item['sentence_key']==key), None)
+                if row and fingerprints.get(key)==fingerprint:
+                    caption = caption_from_json(encode({k:v for k,v in row.items() if k!='conflicted'}))
+                    if self.fresh(caption, now=now, joined_at=joined_at, settings=settings, bot_id=bot_id):
+                        reply_keys.append(key)
+        sent = [{'text':r['content'], 'state':r['state']} for r in self.db.execute(
+            'SELECT content,state FROM outbox WHERE meeting_id=? AND state IN (\'sent\',\'uncertain\') ORDER BY created_ns DESC LIMIT 20', (mid,))]
         return {'generation': meeting['generation'], 'participation': meeting['participation'],
                 'source_state': meeting['source_state'], 'captions': captions,
                 'fresh_input_keys': fresh_keys, 'evidence': fingerprints,
                 'context_omitted': len(captions) < self.db.execute('SELECT count(*) FROM context WHERE meeting_id=?', (mid,)).fetchone()[0],
-                'pending_reply': None, 'sent_replies': []}
+                'pending_reply': pending_reply, 'sent_replies': sent, 'reply_allowed_keys': list(set(reply_keys))}
 
     def prepare_job(self, mid, settings, role_version, *, now, joined_at, bot_id=None):
         meeting = self.meeting(mid)
@@ -152,16 +174,48 @@ class AdviserStore:
                             (job_id, mid, snapshot['generation'], encode(snapshot), role_version, int(now*1_000_000_000)))
         return dict(self.db.execute('SELECT * FROM jobs WHERE job_id=?', (job_id,)).fetchone())
 
-    def finish_job(self, job, decision):
+    def finish_job(self, job, decision, *, now=None, settings=None, joined_at=0, bot_id=None):
+        now = time.time() if now is None else now
+        snapshot = decode_mapping(job['snapshot'])
+        fresh_keys = set(snapshot['fresh_input_keys'])
+        reply_keys = set(snapshot.get('reply_allowed_keys', snapshot['fresh_input_keys']))
+        if not set(decision.control_sentence_keys) <= fresh_keys or not set(decision.reply_sentence_keys) <= reply_keys:
+            raise ModelError('model_invalid_evidence')
+        # Check evidence against accepted current captions; do not act on revised/expired inputs.
+        valid = {}
+        for key in set(decision.control_sentence_keys) | set(decision.reply_sentence_keys):
+            row = self.db.execute('SELECT body,suppressed FROM context WHERE meeting_id=? AND sentence_key=?', (job['meeting_id'],key)).fetchone()
+            if row and not row['suppressed']:
+                caption = caption_from_json(row['body'])
+                if caption.fingerprint == snapshot['evidence'].get(key) and (settings is None or self.fresh(
+                        caption, now=now, joined_at=joined_at, settings=settings, bot_id=bot_id)):
+                    valid[key] = caption.fingerprint
+        control_valid = all(key in valid for key in decision.control_sentence_keys)
+        reply_valid = decision.reply is not None and all(key in valid for key in decision.reply_sentence_keys)
         with self.transaction():
             saved = self.db.execute('SELECT state FROM jobs WHERE job_id=?', (job['job_id'],)).fetchone()
             if not saved:
                 raise StorageError('unknown adviser job')
             if saved['state'] == 'complete':
                 return False
+            meeting = self.meeting(job['meeting_id'])
+            participation = meeting['participation']
+            if control_valid:
+                if decision.control == 'pause':
+                    participation = 'paused'
+                elif decision.control == 'resume':
+                    participation = 'active'
+            self.db.execute('UPDATE outbox SET state=\'cancelled\' WHERE meeting_id=? AND kind=\'reply\' AND state=\'pending\'', (job['meeting_id'],))
+            if reply_valid and participation == 'active' and not (control_valid and decision.control in ('pause','cancel')):
+                basis = {key:valid[key] for key in decision.reply_sentence_keys}
+                message_uuid = str(uuid5(NAMESPACE_URL, digest(['adviser-reply-v1',job['meeting_id'],job['role_version'],basis,decision.reply])))
+                # An unchanged candidate keeps its UUID across a latest-context recheck.
+                self.db.execute('INSERT INTO outbox(uuid,meeting_id,kind,content,evidence,generation,created_ns) VALUES (?,?,\'reply\',?,?,?,?) '
+                    'ON CONFLICT(uuid) DO UPDATE SET generation=excluded.generation,state=CASE WHEN outbox.state=\'cancelled\' THEN \'pending\' ELSE outbox.state END',
+                    (message_uuid,job['meeting_id'],decision.reply,encode(basis),job['generation'],int(now*1_000_000_000)))
             self.db.execute('UPDATE jobs SET state=\'complete\',result=? WHERE job_id=?', (encode(decision.to_dict()), job['job_id']))
-            self.db.execute('UPDATE meetings SET decided_generation=MAX(decided_generation,?),error=NULL,retry_at=0 WHERE meeting_id=?',
-                            (job['generation'], job['meeting_id']))
+            self.db.execute('UPDATE meetings SET decided_generation=MAX(decided_generation,?),participation=?,error=NULL,retry_at=0 WHERE meeting_id=?',
+                            (job['generation'], participation, job['meeting_id']))
         return True
 
     def fail_job(self, job, reason, *, retry_at):
@@ -169,11 +223,47 @@ class AdviserStore:
             self.db.execute('UPDATE meetings SET error=?,retry_at=? WHERE meeting_id=?', (reason, retry_at, job['meeting_id']))
 
     def protected_meetings(self):
-        return {row['meeting_id'] for row in self.db.execute('SELECT meeting_id FROM meetings WHERE generation>decided_generation')}
+        return {row['meeting_id'] for row in self.db.execute('SELECT meeting_id FROM meetings WHERE generation>decided_generation '
+                'UNION SELECT meeting_id FROM outbox WHERE state IN (\'pending\',\'sending\',\'uncertain\',\'rejected\')')}
+
+    def recover_sends(self):
+        with self.transaction():
+            self.db.execute('UPDATE outbox SET state=\'uncertain\',error=\'sender_interrupted\' WHERE state=\'sending\'')
+
+    def next_reply(self, mid, *, now):
+        meeting = self.meeting(mid)
+        if meeting['participation'] != 'active' or meeting['generation'] != meeting['decided_generation'] or meeting['cooldown_until'] > now:
+            return None
+        row = self.db.execute('SELECT * FROM outbox WHERE meeting_id=? AND state=\'pending\' AND generation=? ORDER BY created_ns LIMIT 1', (mid,meeting['generation'])).fetchone()
+        return dict(row) if row else None
+
+    def mark_sending(self, message_uuid):
+        with self.transaction():
+            changed = self.db.execute('UPDATE outbox SET state=\'sending\' WHERE uuid=? AND state=\'pending\'', (message_uuid,)).rowcount
+            if not changed:
+                raise StorageError('reply is no longer pending')
+
+    def mark_sent(self, message_uuid, *, now, interval):
+        with self.transaction():
+            row = self.db.execute('SELECT * FROM outbox WHERE uuid=?', (message_uuid,)).fetchone()
+            if not row or row['state'] != 'sending':
+                raise StorageError('reply send state mismatch')
+            self.db.execute('UPDATE outbox SET state=\'sent\',sent_at=?,error=NULL WHERE uuid=?', (now,message_uuid))
+            if row['kind'] == 'reply':
+                self.db.execute('UPDATE meetings SET cooldown_until=? WHERE meeting_id=?', (now+interval,row['meeting_id']))
+
+    def mark_send_error(self, message_uuid, reason, *, uncertain):
+        with self.transaction():
+            self.db.execute('UPDATE outbox SET state=?,error=? WHERE uuid=?', ('uncertain' if uncertain else 'rejected',reason,message_uuid))
+
+    def reply_statistics(self, mid):
+        counts = {r['state']:r['n'] for r in self.db.execute('SELECT state,count(*) n FROM outbox WHERE meeting_id=? GROUP BY state',(mid,))}
+        return {'pending_replies':counts.get('pending',0), 'uncertain_replies':counts.get('uncertain',0)+counts.get('sending',0),
+                'rejected_replies':counts.get('rejected',0)}
 
     def forget_meeting(self, mid):
         with self.transaction(check_capacity=False):
-            for table in ('inputs', 'context', 'jobs', 'meetings'):
+            for table in ('inputs', 'context', 'jobs', 'outbox', 'meetings'):
                 self.db.execute(f'DELETE FROM {table} WHERE meeting_id=?', (mid,))
         self.db.execute('PRAGMA wal_checkpoint(TRUNCATE)')
         self.db.execute('VACUUM')

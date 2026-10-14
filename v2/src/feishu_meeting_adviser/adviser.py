@@ -7,6 +7,7 @@ import threading
 import time
 
 from .adviser_store import AdviserStore
+from .client import ApiError, ErrorKind, StopRequested
 from .config import file_fingerprint
 from .lifecycle import FileLock, LifecycleError
 from .llm import CodexBackend, ModelError, load_role
@@ -71,8 +72,33 @@ class AdviserRunner:
         self.worker.start()
 
     def _finish_job(self, job, decision, elapsed):
-        self.data.finish_job(job, decision)
+        self.data.finish_job(job, decision, now=self.clock(), settings=self.settings,
+                             joined_at=self.session['joined_at'], bot_id=self.session.get('bot_user_id'))
         self.decisions += 1
+
+    def dispatch(self):
+        if self.worker is not None or self.stop_event.is_set():
+            return
+        with self.maintenance.lock():
+            self.guard()
+            row = self.data.next_reply(self.mid, now=self.clock())
+            if row is None:
+                return
+            status = self.source.current_state(self.mid)
+            if status and status.state.value in ('action_required','ended','stopped'):
+                return
+            self.data.mark_sending(row['uuid'])
+            try:
+                self.manager.client.send_message(self.mid,row['content'],row['uuid'])
+            except ApiError as exc:
+                uncertain = exc.kind not in (ErrorKind.DENIED,ErrorKind.PARAMETER,ErrorKind.TOKEN,ErrorKind.BOT_ABSENT,ErrorKind.RATE_LIMIT)
+                self.data.mark_send_error(row['uuid'],exc.kind.value,uncertain=uncertain)
+                return
+            except (StopRequested, OSError):
+                self.data.mark_send_error(row['uuid'],'sender_interrupted',uncertain=True)
+                return
+            self.data.mark_sent(row['uuid'],now=self.clock(),interval=self.settings.reply_interval_seconds)
+            self.replied += 1
 
     def step(self):
         self.ingest()
@@ -86,8 +112,12 @@ class AdviserRunner:
                     self.data.fail_job(job, error, retry_at=self.clock()+self.config.cooldown_seconds)
                     self.model_failure = error
                 else:
-                    self._finish_job(job, decision, elapsed)
-                    self.model_failure = None
+                    try:
+                        self._finish_job(job, decision, elapsed)
+                        self.model_failure = None
+                    except ModelError as exc:
+                        self.data.fail_job(job,exc.reason,retry_at=self.clock()+self.config.cooldown_seconds)
+                        self.model_failure = exc.reason
         if self.worker is None and (self.batch_due is None or self.clock() >= self.batch_due):
             with self.maintenance.lock():
                 self.guard()
@@ -96,6 +126,7 @@ class AdviserRunner:
             if job:
                 self._start_job(job)
             self.batch_due = None
+        self.dispatch()
         return self.statistics()
 
     def statistics(self):
@@ -103,11 +134,12 @@ class AdviserRunner:
         return {'backend': 'codex', 'participation': meeting['participation'],
                 'model_state': 'running' if self.worker else 'waiting' if meeting['generation']>meeting['decided_generation'] else 'idle',
                 'model_error': meeting['error'], 'offered': self.offered, 'newly_persisted': self.persisted,
-                'decisions': self.decisions, 'replied': self.replied}
+                'decisions': self.decisions, 'replied': self.replied} | self.data.reply_statistics(self.mid)
 
     def run(self, *, watch=False, notify=None):
         previous = None
         with self.lock:
+            self.data.recover_sends()
             while not self.stop_event.is_set():
                 status = self.step()
                 if notify and status != previous:

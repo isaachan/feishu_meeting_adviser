@@ -1,5 +1,6 @@
 """Explicit local CLI. Credentials and meeting number are read only from YAML."""
 import argparse
+from dataclasses import replace
 import json
 from pathlib import Path
 import signal
@@ -8,6 +9,8 @@ import sys
 import threading
 
 from . import __version__
+from .adviser import AdviserRunner
+from .adviser_store import AdviserStore
 from .client import ApiError, FeishuClient, StopRequested
 from .collector import utc_now
 from .config import ConfigError, DEFAULT_CONFIG, load_config
@@ -15,6 +18,7 @@ from .lifecycle import LifecycleError, MeetingSource, SessionManager
 from .diagnostics import Diagnostics
 from .maintenance import Maintenance
 from .models import SourceState, digest
+from .llm import ModelError
 from .rules import deadline_reply
 from .storage import DurableFakeConsumer, StorageError, Store
 
@@ -31,10 +35,12 @@ def parser():
     collect.add_argument('--once', action='store_true', help='one successful page-budget cycle (may leave pending pages)')
     collect.add_argument('--show-text', action='store_true', help='print new captions with speaker and timestamps locally after commit')
     status = commands.add_parser('status', help='show safe session and backlog statistics')
-    status.add_argument('--consumer', default='fake-qa')
-    consume = commands.add_parser('consume', help='persist a batch, send matching deadline-rule replies in the meeting, then acknowledge')
-    consume.add_argument('--consumer', default='fake-qa')
+    status.add_argument('--consumer')
+    consume = commands.add_parser('consume', help='consume with the configured model backend or the fixed test rule')
+    consume.add_argument('--consumer')
     consume.add_argument('--limit', type=int, default=100)
+    consume.add_argument('--backend', choices=('codex','rule'), help='override llm.backend for this invocation')
+    consume.add_argument('--watch', action='store_true', help='continuously consume and decide using Codex; Ctrl-C stops the consumer only')
     reset = commands.add_parser('reset-session', help='reset stale/uncertain session after manually verifying bot absence')
     reset.add_argument('--confirmed-bot-left', action='store_true', required=True)
     resolve = commands.add_parser('resolve-conflict', help='explicitly accept a stored candidate after local review')
@@ -52,9 +58,13 @@ def main(argv=None):
     if not args.command:
         parser().print_help()
         return 0
-    store = source = None
+    store = source = adviser = None
     try:
         config = load_config(args.config)
+        if args.command == 'consume' and args.backend:
+            config = replace(config,llm=replace(config.llm,backend=args.backend))
+        if args.command in ('status','consume'):
+            args.consumer = args.consumer or ('adviser' if config.llm.backend=='codex' else 'fake-qa')
         store = Store(config.data_directory / 'source.sqlite3', max_payload_bytes=config.content_capacity_bytes,
                       max_database_bytes=config.database_capacity_bytes)
         diagnostics = Diagnostics(config.data_directory / 'diagnostics', max_bytes=config.diagnostic_bytes,
@@ -107,7 +117,28 @@ def main(argv=None):
                 result.update(store.statistics(mid, args.consumer))
                 result['content_deleted'] = bool(store.db.execute('SELECT 1 FROM tombstones WHERE identity=?',(digest(mid),)).fetchone())
             print(json.dumps(result))
+        elif args.command == 'consume' and config.llm.backend == 'codex':
+            adviser = AdviserRunner(store,manager,consumer_id=args.consumer,limit=args.limit)
+            previous = {}
+            if threading.current_thread() is threading.main_thread():
+                for signum in (signal.SIGINT,signal.SIGTERM):
+                    previous[signum] = signal.getsignal(signum)
+                    signal.signal(signum,lambda *_: adviser.stop_event.set())
+            try:
+                print('Consuming with Codex subscription; stopping does not stop collect or leave the meeting.',file=sys.stderr)
+                summary = adviser.run(watch=args.watch,notify=(lambda value: print(json.dumps(value),flush=True)) if args.watch else None)
+                if not args.watch:
+                    print(json.dumps(summary))
+                if summary['model_error'] or summary['uncertain_replies'] or summary['rejected_replies']:
+                    return 1
+            finally:
+                adviser.close()
+                adviser = None
+                for signum,handler in previous.items():
+                    signal.signal(signum,handler)
         elif args.command == 'consume':
+            if args.watch:
+                raise ConfigError('consume --watch requires --backend codex or llm.backend: codex')
             session = manager.saved_meeting()
             with maintenance.lock():
                 rows = store.read(session['meeting_id'], args.consumer, limit=args.limit)
@@ -158,7 +189,7 @@ def main(argv=None):
                 result.append(item)
             print(json.dumps(result, ensure_ascii=False))
         return 0
-    except (ConfigError, StorageError, LifecycleError, ApiError) as exc:
+    except (ConfigError, StorageError, LifecycleError, ApiError, ModelError) as exc:
         print('Operation stopped: ' + str(exc), file=sys.stderr)
         return 1
     except (OSError, sqlite3.Error):
@@ -168,6 +199,8 @@ def main(argv=None):
         print('Operation interrupted; check saved session before retrying a meeting operation.', file=sys.stderr)
         return 130
     finally:
+        if adviser:
+            adviser.close()
         if source and source.running:
             source.stop()
         if store:

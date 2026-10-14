@@ -5,8 +5,14 @@ import threading
 import time
 import unittest
 from unittest.mock import patch
+from contextlib import redirect_stdout, redirect_stderr
+import io
+import json
 
 from feishu_meeting_adviser.adviser import AdviserRunner
+from feishu_meeting_adviser.__main__ import main
+from feishu_meeting_adviser.client import ApiError, ErrorKind
+from feishu_meeting_adviser.collector import utc_now
 from feishu_meeting_adviser.config import load_config
 from feishu_meeting_adviser.lifecycle import SessionManager
 from feishu_meeting_adviser.llm import Decision, ModelError
@@ -51,6 +57,13 @@ class AdviserTests(unittest.TestCase):
         self.manager.join()
         self.source.ensure_meeting(MID,{})
         self.backend = FakeBackend()
+        self.sent = []
+        self.send_failure = None
+        def send(mid,text,message_uuid):
+            self.sent.append((mid,text,message_uuid))
+            if self.send_failure:
+                raise self.send_failure
+        self.api.send_message = send
         self.runner = AdviserRunner(self.source, self.manager, backend=self.backend, clock=lambda:NOW)
         self.addCleanup(self.runner.close)
         self.caption = Caption(MID, 's:1', '合成会议发言', '2026-10-13T00:00:01Z',
@@ -101,3 +114,66 @@ class AdviserTests(unittest.TestCase):
             self.runner.step()
         self.assertEqual(len(self.backend.calls),1)
         self.assertIn(MID,self.runner.data.protected_meetings())
+
+    def test_model_reply_is_sent_once_and_silence_sends_nothing(self):
+        self.backend.reply=Decision('none',(), '合成模型回复',('s:1',))
+        self.commit(self.caption)
+        result=self.runner.run()
+        self.assertEqual(result['replied'],1)
+        self.assertEqual(self.sent[0][:2],(MID,'合成模型回复'))
+        self.runner.run()
+        self.assertEqual(len(self.sent),1)
+        self.backend.reply=Decision('none',(),None,())
+        self.commit(replace(self.caption,sentence_key='s:2',text='普通讨论'))
+        self.runner.run()
+        self.assertEqual(len(self.sent),1)
+
+    def test_unrelated_evidence_is_rejected_without_sending(self):
+        self.backend.reply=Decision('none',(),'合成回复',('another-meeting-sentence',))
+        self.commit(self.caption)
+        result=self.runner.run()
+        self.assertEqual(result['model_error'],'model_invalid_evidence')
+        self.assertEqual(self.sent,[])
+
+    def test_unknown_send_result_does_not_retry_or_block_new_input(self):
+        self.send_failure=ApiError(ErrorKind.NETWORK)
+        self.backend.reply=Decision('none',(),'合成回复',('s:1',))
+        self.commit(self.caption)
+        result=self.runner.run()
+        self.assertEqual(result['uncertain_replies'],1)
+        self.runner.run()
+        self.assertEqual(len(self.sent),1)
+        self.backend.reply=Decision('none',(),None,())
+        self.commit(replace(self.caption,sentence_key='s:2',text='后续发言'))
+        self.runner.run()
+        self.assertEqual(len(self.backend.calls),2)
+        self.assertEqual(self.source.backlog(MID,'adviser'),0)
+
+    def test_crash_after_post_before_persistence_becomes_uncertain_on_restart(self):
+        self.backend.reply=Decision('none',(),'合成回复',('s:1',))
+        self.commit(self.caption)
+        with patch.object(self.runner.data,'mark_sent',side_effect=StorageError('synthetic after POST crash')):
+            with self.assertRaises(StorageError):
+                self.runner.run()
+        self.runner.close()
+        resumed=AdviserRunner(self.source,self.manager,backend=self.backend,clock=lambda:NOW)
+        self.addCleanup(resumed.close)
+        result=resumed.run()
+        self.assertEqual(result['uncertain_replies'],1)
+        self.assertEqual(len(self.sent),1)
+        self.assertEqual(len(self.backend.calls),1)
+
+    def test_cli_codex_backend_uses_separate_consumer_and_reports_reply(self):
+        self.backend.reply=Decision('none',(),'合成 CLI 回复',('s:1',))
+        stamp=utc_now()
+        self.commit(replace(self.caption,event_time=stamp,received_at=stamp))
+        self.path.write_text(self.path.read_text()+'llm:\n  batch_seconds: 0\n  introduction: false\n')
+        output=io.StringIO()
+        with patch('feishu_meeting_adviser.__main__.FeishuClient',return_value=self.api), \
+             patch('feishu_meeting_adviser.adviser.CodexBackend',return_value=self.backend), \
+             redirect_stdout(output),redirect_stderr(io.StringIO()):
+            result=main(['--config',str(self.path),'consume','--backend','codex'])
+        self.assertEqual(result,0)
+        self.assertEqual(json.loads(output.getvalue())['replied'],1)
+        self.assertEqual(self.source.backlog(MID,'adviser'),0)
+        self.assertGreater(self.source.backlog(MID,'fake-qa'),0)
