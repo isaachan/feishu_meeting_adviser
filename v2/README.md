@@ -2,7 +2,7 @@
 
 产品使用飞书官方会议字幕，持续采集并保存带说话人的输入，通过 **Codex app-server 与 ChatGPT 订阅**自主判断发言、沉默和自然语言控制意图，回答一次完整发送到会议内。产品代码在 `src/feishu_meeting_adviser/`，旧实验在 [reference/spike](reference/spike/README.md)，运行时互不依赖。
 
-TODO 2.2 的实现和自动化验证已完成；真实会议对话验收、展示与延迟仍待 2.3。输入源的跨会议回归 1.9 / G1 也仍待完成。见 [TODO](docs/TODO.md)、[技术方案](docs/STAGE2_TECHNICAL_PLAN.md) 和 [验证记录](docs/STAGE2_VALIDATION.md)。
+TODO 2.2 的实现和自动化验证已完成；按用户决定，测试随各 TODO 项进行，不单列 2.3，2.4 已由用户确认完成。新增日历描述与在线/Wiki 文档上下文方案（2.5）待确认，Word / PDF 为后续 2.6。输入源的跨会议回归 1.9 / G1 仍待完成。见 [TODO](docs/TODO.md)、[技术方案](docs/STAGE2_TECHNICAL_PLAN.md) 和 [验证记录](docs/STAGE2_VALIDATION.md)。
 
 ## 安装与配置
 
@@ -99,4 +99,4 @@ python3 -m feishu_meeting_adviser resolve-reply --uuid <UUID> --outcome cancel
 python3 -m unittest discover -s tests -v
 ```
 
-自动化测试使用合成输入、假模型与假飞书，不调用真实会议。已另行验证真实订阅的沉默、暂停/恢复和合成问题回答；实际会中展示和用户对话脚本验证留给 2.3，20 秒 P95 仍为后续优化目标。
+自动化测试使用合成输入、假模型与假飞书，不调用真实会议。已另行验证真实订阅的沉默、暂停/恢复和合成问题回答；实际会中展示和用户对话脚本验证随相应功能项进行，20 秒 P95 仍为后续优化目标。
