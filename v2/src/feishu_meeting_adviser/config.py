@@ -6,6 +6,7 @@ from pathlib import Path
 import yaml
 from .client import Credentials
 from .collector import ScanSettings
+from .llm import LLMSettings
 
 DEFAULT_CONFIG = Path('config.yaml')
 
@@ -32,6 +33,7 @@ class Configuration:
     diagnostic_bytes: int = 1_000_000
     diagnostic_backups: int = 3
     database_capacity_bytes: int = 150_000_000
+    llm: LLMSettings = field(default_factory=LLMSettings)
 
 
 def file_fingerprint(path: Path) -> str:
@@ -89,6 +91,26 @@ def load_config(path: Path = DEFAULT_CONFIG) -> Configuration:
     runtime = section('runtime')
     legacy_probe = section('probe')
     timeout = number(http, 'timeout_seconds', number(legacy_probe, 'timeout_seconds', 10, 1, 60), 1, 60)
+    llm = section('llm')
+    if set(llm) - set(LLMSettings.__dataclass_fields__):
+        raise ConfigError('unknown llm configuration fields')
+    backend = string(llm, 'backend', 'rule')
+    if backend not in ('rule', 'codex'):
+        raise ConfigError('llm.backend must be rule or codex')
+    role_file = string(llm, 'role_file')
+    role_path = Path(role_file) if role_file else None
+    if role_path and not role_path.is_absolute():
+        role_path = path.parent / role_path
+    introduction = llm.get('introduction', True)
+    if type(introduction) is not bool:
+        raise ConfigError('llm.introduction must be boolean')
+    llm_settings = LLMSettings(backend=backend, executable=string(llm, 'executable', 'codex', required=True),
+        model=string(llm, 'model') or None, role_file=role_path,
+        timeout_seconds=number(llm, 'timeout_seconds', 90, 1, 300),
+        batch_seconds=number(llm, 'batch_seconds', 2, 0, 30),
+        context_characters=number(llm, 'context_characters', 30000, 2000, 100000, True),
+        freshness_seconds=number(llm, 'freshness_seconds', 120, 5, 3600, True),
+        reply_interval_seconds=number(llm, 'reply_interval_seconds', 10, 0, 300), introduction=introduction)
     return Configuration(path, fingerprint, credentials, meeting_no, password, directory.absolute(), scan,
         timeout_seconds=timeout,
         request_seconds=number(http, 'request_seconds', 1, 0.7, 30),
@@ -98,4 +120,5 @@ def load_config(path: Path = DEFAULT_CONFIG) -> Configuration:
         retention_days=number(storage, 'retention_days', 7, 1, 365, True),
         diagnostic_bytes=number(storage, 'diagnostic_bytes', 1_000_000, 1000, 100_000_000, True),
         diagnostic_backups=number(storage, 'diagnostic_backups', 3, 1, 20, True),
-        database_capacity_bytes=number(storage, 'database_capacity_bytes', 150_000_000, 1_000_000, 2_000_000_000, True))
+        database_capacity_bytes=number(storage, 'database_capacity_bytes', 150_000_000, 1_000_000, 2_000_000_000, True),
+        llm=llm_settings)

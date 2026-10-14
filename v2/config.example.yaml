@@ -25,3 +25,16 @@ storage:
   retention_days: 7
   diagnostic_bytes: 1000000
   diagnostic_backups: 3
+
+# 阶段 2：旧配置省略 llm 时保留固定规则，使用 Codex 时选择 codex。
+llm:
+  backend: codex
+  executable: codex
+  model: ""                      # 空值沿用当前 Codex 默认模型
+  role_file: ""                  # 空值使用包内 meeting_adviser.md；可设本机 Markdown 路径
+  timeout_seconds: 90
+  batch_seconds: 2
+  context_characters: 30000
+  freshness_seconds: 120         # 原始发言结束/事件时间的新鲜度范围；未知时间不当作新鲜
+  reply_interval_seconds: 10
+  introduction: true
