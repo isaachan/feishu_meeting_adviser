@@ -76,3 +76,5 @@ python3 -m venv .venv  # 已有环境可直接使用
 ```
 
 使用本机已登录的 Codex 订阅；不带 --watch 为单次处理。旧配置没有 llm 段时，原 consume 仍使用固定规则；配置 llm.backend: codex 后，consume 默认使用模型。固定规则也可显式 consume --backend rule。两个消费入口互斥使用，模型消费者默认为 adviser，与原 fake-qa 进度独立。
+
+Codex 模式按行为文档自主决定发言，不使用固定唤醒词。任何参会者都可自然表达暂停、恢复或取消；暂停只暂停发言，仍保存字幕并继续模型处理以识别恢复。Ctrl-C 停止消费进程，不停止终端 A 的 collect；完整停止需停止两个终端，机器人离会另执行 leave。
