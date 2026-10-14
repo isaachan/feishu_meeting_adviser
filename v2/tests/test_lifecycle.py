@@ -88,9 +88,17 @@ class LifecycleTests(unittest.TestCase):
         self.manager.leave(retry_uncertain=True)
         self.assertEqual(self.manager.session()['phase'], 'left')
 
-    def test_switch_meeting_automatically_leaves_verified_old_session(self):
-        self.manager.join()
+    def test_switch_meeting_requires_explicit_leave_without_mutating_old_session(self):
+        saved = self.manager.join()
         other = SessionManager(self.store, replace(self.config, meeting_no='123456789'), self.api)
+        self.api.events = lambda query: page()  # Empty pages do not establish bot absence.
+        with self.assertRaises(LifecycleError) as caught:
+            other.join()
+        self.assertIn('run leave', str(caught.exception))
+        self.assertEqual(other.session(), saved)
+        self.assertEqual(self.api.leaves, 0)
+        self.assertEqual(self.api.joins, 1)
+        other.leave()  # Explicit leave targets the saved ID, even with a new configured number.
         other.join()
         self.assertEqual(self.api.leaves, 1)
         self.assertEqual(self.api.joins, 2)
@@ -155,14 +163,17 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(self.manager.session()['phase'], 'joined')
         self.assertEqual(self.api.joins, 2)
 
-    def test_switch_leave_failure_keeps_old_session_without_joining_target(self):
+    def test_failed_explicit_leave_keeps_old_session_and_blocks_joining_target(self):
         saved = self.manager.join()
         other = SessionManager(self.store, replace(self.config, meeting_no='123456789'), self.api)
         self.api.failure = ApiError(ErrorKind.DENIED, code=121103)
         with self.assertRaises(ApiError):
+            other.leave()
+        with self.assertRaises(LifecycleError):
             other.join()
         self.assertEqual(self.manager.session(), saved)
         self.assertEqual(self.api.joins, 1)
+        self.assertEqual(self.api.leaves, 1)
 
     def test_join_probe_uses_saved_internal_id_and_bounded_time_range(self):
         saved = self.manager.join()
@@ -179,11 +190,12 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(self.api.joins, 1)
         self.assertEqual(self.api.event_calls, 0)
 
-    def test_switch_rechecks_absence_when_leave_races_with_meeting_end(self):
+    def test_explicit_leave_rechecks_absence_when_it_races_with_meeting_end(self):
         self.manager.join()
         other = SessionManager(self.store, replace(self.config, meeting_no='123456789'), self.api)
-        with patch.object(self.api, 'events', side_effect=[page(), ApiError(ErrorKind.BOT_ABSENT, code=120004)]), \
+        with patch.object(self.api, 'events', side_effect=ApiError(ErrorKind.BOT_ABSENT, code=120004)), \
              patch.object(self.api, 'leave', side_effect=ApiError(ErrorKind.PARAMETER, code=121104)):
+            other.leave()
             self.assertEqual(other.join()['meeting_no'], '123456789')
         self.assertEqual(self.api.joins, 2)
 
@@ -308,3 +320,23 @@ class LifecycleTests(unittest.TestCase):
             self.assertEqual(main(['--config', str(self.path), 'leave']), 0)
         self.assertNotIn('private-secret', output.getvalue())
         self.assertNotIn(MID, output.getvalue())
+
+    def test_cli_switch_requires_leave_then_join_without_reset(self):
+        from contextlib import redirect_stdout, redirect_stderr
+        import io
+        from feishu_meeting_adviser.__main__ import main
+        saved = self.manager.join()
+        self.path.write_text(self.path.read_text().replace('012345678', '123456789'))
+        output, errors = io.StringIO(), io.StringIO()
+        with patch('feishu_meeting_adviser.__main__.FeishuClient', return_value=self.api), \
+             redirect_stdout(output), redirect_stderr(errors):
+            self.assertEqual(main(['--config', str(self.path), 'join']), 1)
+            self.assertIn('run leave', errors.getvalue())
+            self.assertEqual(self.manager.session(), saved)
+            self.assertEqual(self.api.leaves, 0)
+            self.assertEqual(self.api.joins, 1)
+            self.assertEqual(main(['--config', str(self.path), 'leave']), 0)
+            self.assertEqual(main(['--config', str(self.path), 'join']), 0)
+        self.assertEqual(self.api.leaves, 1)
+        self.assertEqual(self.api.joins, 2)
+        self.assertEqual(self.manager.session()['meeting_no'], '123456789')
