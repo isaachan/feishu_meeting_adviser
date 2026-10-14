@@ -69,7 +69,7 @@ python3 -m feishu_meeting_adviser replies --show-text
 
 `status` 的 `pending` 是源尚未交付给所选消费者的数量，`adviser` 字段是模型任务、active/paused 和回复队列状态。源 `pending: 0` 只表示输入已可靠交给模型消费者，不代表模型已回答或消息已可见。
 
-模型错误在状态中显示固定分类，持续模式低频恢复，不把失败输出当作回复。若收到 `uncertain` 或 `rejected` 发送记录，停止 `consume`，在会议内核对，再处理对应 UUID：
+模型错误在状态中显示固定分类，持续模式低频恢复，不把失败输出当作回复。 `consume --watch` 新增 `model_stage` 显示当前或最近一次调用阶段；`mcp_verify` 是工具禁用核对，`turn_start` 是提交模型轮次，`generation` 是等待模型决定。详细耗时和工具状态计数保存于 `data/diagnostics/diagnostics.jsonl`，诊断步骤见 [MODEL_DIAGNOSTICS](docs/MODEL_DIAGNOSTICS.md)。若收到 `uncertain` 或 `rejected` 发送记录，停止 `consume`，在会议内核对，再处理对应 UUID：
 
 ```bash
 python3 -m feishu_meeting_adviser resolve-reply --uuid <UUID> --outcome sent

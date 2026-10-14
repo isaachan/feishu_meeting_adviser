@@ -63,6 +63,40 @@ class LLMTests(unittest.TestCase):
             self.assertIsNone(backend.process)
         self.assertIsNone(self.backend('inherited').decide({},'Synthetic role').reply)
 
+    def test_cached_catalog_is_allowed_only_when_thread_runtime_is_disabled(self):
+        backend = self.backend('cached')
+        self.assertIsNone(backend.decide({}, 'Synthetic role').reply)
+        metadata = backend.diagnostic_metadata()
+        self.assertEqual(metadata['mcp_catalog_tools'], 1)
+        self.assertEqual(metadata['mcp_disabled_servers'], 1)
+        self.assertEqual(metadata['mcp_unverified_servers'], 0)
+        self.assertNotIn('synthetic-private', json.dumps(metadata))
+
+    def test_unverified_runtime_is_blocked_even_with_an_empty_catalog(self):
+        for mode in ('empty-connected', 'unknown', 'starting', 'late-server'):
+            backend = self.backend(mode)
+            with self.subTest(mode=mode), self.assertRaises(ModelError) as caught:
+                backend.decide({}, 'Synthetic role')
+            self.assertEqual(caught.exception.reason, 'model_tools_unavailable')
+            metadata = backend.diagnostic_metadata()
+            self.assertEqual(metadata['model_stage'], 'mcp_verify')
+            self.assertEqual(metadata['mcp_catalog_tools'], 0)
+            self.assertEqual(metadata['mcp_unverified_servers'], 1)
+            self.assertEqual(metadata['mcp_new_servers'], int(mode == 'late-server'))
+
+    def test_timeout_metadata_distinguishes_verification_from_generation(self):
+        for mode, stage in [('verify-stall', 'mcp_verify'), ('delay', 'turn_start'),
+                            ('generation-stall', 'generation')]:
+            backend = self.backend(mode)
+            with self.subTest(mode=mode), self.assertRaises(ModelError) as caught:
+                backend.decide({}, 'Synthetic role')
+            self.assertEqual(caught.exception.reason, 'model_timeout')
+            metadata = backend.diagnostic_metadata()
+            self.assertEqual(metadata['model_stage'], stage)
+            self.assertGreater(metadata['model_stage_ms'], 0)
+            time.sleep(0.03)  # Coordinator/storage waits must not inflate a finished stage.
+            self.assertEqual(backend.diagnostic_metadata()['model_stage_ms'], metadata['model_stage_ms'])
+
     def test_stalled_stdin_write_respects_whole_decision_timeout(self):
         backend=self.backend('write-stall')
         started=time.monotonic()

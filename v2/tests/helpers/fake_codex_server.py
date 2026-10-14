@@ -30,16 +30,25 @@ for line in sys.stdin:
     if method == 'account/read':
         result={'account':{'type':'apiKey' if mode=='apikey' else 'chatgpt'}}
     elif method == 'mcpServerStatus/list':
-        result={'data':[{'name':'synthetic-inherited','tools':{'synthetic-tool':{}}}] if mode in ('inherited','exposed') and
-                (not params.get('threadId') or mode=='exposed') else [],'nextCursor':None}
+        if mode == 'verify-stall' and params.get('threadId'):
+            time.sleep(10)
+            continue
+        inherited = mode in ('inherited','exposed','cached','empty-connected','unknown','starting','late-server')
+        data = []
+        if inherited and (params.get('threadId') or mode != 'late-server'):
+            runtime = {'exposed':'connected', 'cached':'disabled', 'empty-connected':'connected',
+                       'unknown':None, 'starting':'starting', 'late-server':'connected'}.get(mode, 'disabled')
+            tools = {'synthetic-private-tool': {}} if not params.get('threadId') or mode in ('exposed','cached') else {}
+            data = [{'name':'synthetic-private-server','tools':tools,'runtimeStatus':runtime}]
+        result={'data':data,'nextCursor':None}
     elif method == 'thread/start':
         assert params['ephemeral'] is True and params['sandbox'] == 'read-only'
         assert params['modelProvider']=='openai'
-        if mode in ('inherited','exposed'):
-            assert params['config']['mcp_servers']['synthetic-inherited'] == {'command':'/usr/bin/false','enabled':False}
+        if mode in ('inherited','exposed','cached','empty-connected','unknown','starting'):
+            assert params['config']['mcp_servers']['synthetic-private-server'] == {'command':'/usr/bin/false','enabled':False}
         index += 1
         thread_id = f'synthetic-thread-{index}'
-        result = {'thread': {'id': thread_id}, 'model': 'synthetic-model'}
+        result = {'thread': {'id': thread_id}, 'model': 'synthetic-model', 'reasoningEffort':'high'}
     elif method == 'turn/start':
         thread_id = params['threadId']
         turn_id = f'synthetic-turn-{index}'
@@ -52,6 +61,10 @@ for line in sys.stdin:
             emit({'id': 'synthetic-request', 'method': 'item/tool/requestUserInput', 'params': {}})
             continue
         if mode == 'delay':
+            time.sleep(10)
+            continue
+        if mode == 'generation-stall':
+            emit({'id': request['id'], 'result': {'turn': {'id': turn_id}}})
             time.sleep(10)
             continue
         body = {'control': 'none', 'control_sentence_keys': [], 'reply': None, 'reply_sentence_keys': []}

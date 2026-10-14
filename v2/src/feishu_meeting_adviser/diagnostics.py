@@ -27,11 +27,16 @@ TEXT_FIELDS = {
                'invalid_request','invalid_response','service_requires_manual_action','unknown_api_error','page_format','local_storage'},
 }
 TEXT_FIELDS['error_kind'] |= MODEL_ERRORS | {'sender_interrupted','reply_expired_or_revised'}
+TEXT_FIELDS['model_stage'] = {'startup','initialize','account_read','mcp_discovery','thread_start',
+                             'mcp_verify','turn_start','generation','thread_cleanup'}
+TEXT_FIELDS['reasoning_effort'] = {'none','minimal','low','medium','high','xhigh'}
 NUMBER_FIELDS = {'event_count','unknown_times','identity_degraded','request_ms','processing_ms','query_start','query_end',
                  'http_status','code','retry_after','pending','content_bytes','database_bytes','risk_count',
                  'unresolved_conflicts','latest_caption_event_age_seconds','latest_caption_end_age_seconds',
                  'pruned_deliveries','expired_meetings'}
 NUMBER_FIELDS |= {'model_ms','pending_model_inputs','pending_replies','uncertain_replies','rejected_replies'}
+NUMBER_FIELDS |= {'model_stage_ms','mcp_inherited_servers','mcp_servers','mcp_catalog_tools',
+                  'mcp_disabled_servers','mcp_unverified_servers','mcp_new_servers'}
 BOOL_FIELDS = {'has_more','checkpoint_advanced','decision_saved','reply_confirmed'}
 ENUM_COUNTERS = {'kinds': {'transcript_received','participant_joined','participant_left','chat_received','other'},
                  'counts': {'added','updated','conflict','duplicates','older'}}

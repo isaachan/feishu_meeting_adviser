@@ -118,6 +118,22 @@ class AdviserTests(unittest.TestCase):
         self.assertEqual(len(self.backend.calls),1)
         self.assertIn(MID,self.runner.data.protected_meetings())
 
+    def test_failure_diagnostics_include_phase_and_counts_without_tool_or_meeting_text(self):
+        records = []
+        self.runner.diagnose = records.append
+        self.backend.failure = ModelError('model_tools_unavailable')
+        self.backend.diagnostic_metadata = lambda: {'model_stage':'mcp_verify', 'mcp_servers':2,
+            'mcp_unverified_servers':1, 'mcp_catalog_tools':3, 'model_stage_ms':10,
+            'server_name':'PRIVATE SERVER', 'prompt':'PRIVATE MEETING'}
+        self.commit(self.caption)
+        result = self.runner.run()
+        self.assertEqual(result['model_stage'], 'mcp_verify')
+        self.assertEqual(records[-1]['error_kind'], 'model_tools_unavailable')
+        self.assertEqual(records[-1]['mcp_unverified_servers'], 1)
+        self.assertNotIn('PRIVATE', json.dumps(records))
+        self.backend.diagnostic_metadata = lambda: {'model_stage':'PRIVATE STAGE', 'reasoning_effort':'PRIVATE EFFORT'}
+        self.assertNotIn('model_stage', self.runner.statistics())
+
     def test_model_reply_is_sent_once_and_silence_sends_nothing(self):
         self.backend.reply=Decision('none',(), '合成模型回复',('s:1',))
         self.commit(self.caption)

@@ -129,6 +129,18 @@ class CodexBackend:
         self.last_model = None
         self.deadline = None
         self.tool_config = {}
+        self.metadata = {}
+        self.stage_started = time.monotonic()
+        self.stage_finished = None
+
+    def _stage(self, name):
+        self.metadata['model_stage'] = name
+        self.stage_started = time.monotonic()
+        self.stage_finished = None
+
+    def diagnostic_metadata(self):
+        end = self.stage_finished if self.stage_finished is not None else time.monotonic()
+        return self.metadata | {'model_stage_ms': (end - self.stage_started) * 1000}
 
     def _start(self):
         if self.process is not None:
@@ -194,6 +206,23 @@ class CodexBackend:
                 self.tool_config['mcp_servers'][name] = {'command': '/usr/bin/false', 'enabled': False}
             if isinstance(plugin, str):
                 self.tool_config['plugins'][plugin] = {'enabled': False}
+        self.metadata['mcp_inherited_servers'] = len(self.tool_config['mcp_servers'])
+
+    def _verify_tools_disabled(self):
+        items = self._mcp_inventory(self.thread_id)
+        # The protocol's tools field can contain a cached catalog. Only the
+        # thread-runtime state proves the server is disabled. Unknown/connected
+        # servers are blocked even if their current catalogs happen to be empty.
+        self.metadata.update({
+            'mcp_inherited_servers': len(self.tool_config['mcp_servers']),
+            'mcp_servers': len(items),
+            'mcp_catalog_tools': sum(len(item['tools']) for item in items if isinstance(item.get('tools'), dict)),
+            'mcp_disabled_servers': sum(item.get('runtimeStatus') == 'disabled' for item in items),
+            'mcp_unverified_servers': sum(item.get('runtimeStatus') != 'disabled' for item in items),
+            'mcp_new_servers': sum(item.get('name') not in self.tool_config['mcp_servers'] for item in items),
+        })
+        if self.metadata['mcp_unverified_servers']:
+            raise ModelError('model_tools_unavailable')
 
     def _mcp_inventory(self, thread_id=None):
         cursor = None
@@ -259,6 +288,13 @@ class CodexBackend:
             return value
 
     def _rpc(self, method, params, *, timeout=None):
+        stages = {'initialize': 'initialize', 'account/read': 'account_read',
+                  'thread/start': 'thread_start', 'turn/start': 'turn_start',
+                  'thread/unsubscribe': 'thread_cleanup'}
+        if method == 'mcpServerStatus/list':
+            self._stage('mcp_verify' if params.get('threadId') else 'mcp_discovery')
+        elif method in stages:
+            self._stage(stages[method])
         self.counter += 1
         request_id = self.counter
         deadline = time.monotonic() + (timeout or self.settings.timeout_seconds)
@@ -277,6 +313,8 @@ class CodexBackend:
                 self.events.append(value)
 
     def decide(self, snapshot: dict, role: str) -> Decision:
+        self.metadata = {}
+        self._stage('startup')
         self.deadline = time.monotonic()+self.settings.timeout_seconds
         try:
             self._start()
@@ -294,8 +332,10 @@ class CodexBackend:
             self.last_model = result.get('model')
             if not isinstance(self.thread_id, str):
                 raise ModelError('model_protocol')
-            if any(item.get('tools') for item in self._mcp_inventory(self.thread_id)):
-                raise ModelError('model_tools_unavailable')
+            effort = result.get('reasoningEffort')
+            if effort in ('none', 'minimal', 'low', 'medium', 'high', 'xhigh'):
+                self.metadata['reasoning_effort'] = effort
+            self._verify_tools_disabled()
             result = self._rpc('turn/start', {'threadId': self.thread_id,
                 'input': [{'type': 'text', 'text': json.dumps(snapshot, ensure_ascii=False)}],
                 'outputSchema': DECISION_SCHEMA,
@@ -303,6 +343,7 @@ class CodexBackend:
             self.turn_id = result.get('turn', {}).get('id')
             if not isinstance(self.turn_id, str):
                 raise ModelError('model_protocol')
+            self._stage('generation')
             deadline = time.monotonic() + self.settings.timeout_seconds
             deadline = min(deadline,self.deadline)
             messages = {}
@@ -345,6 +386,7 @@ class CodexBackend:
             self.close()
             raise ModelError('model_protocol') from None
         finally:
+            self.stage_finished = time.monotonic()
             self.deadline = None
 
     def close(self):

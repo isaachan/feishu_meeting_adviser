@@ -8,6 +8,7 @@ import time
 from .adviser_store import AdviserStore
 from .client import StopRequested
 from .config import file_fingerprint
+from .diagnostics import sanitize
 from .lifecycle import FileLock, LifecycleError, LockBusy
 from .llm import CodexBackend, ModelError, load_role
 from .maintenance import Maintenance
@@ -103,8 +104,13 @@ class AdviserRunner:
         self.data.finish_job(job, decision, now=self.clock(), settings=self.settings,
                              joined_at=self.session['joined_at'], bot_id=self.session.get('bot_user_id'))
         self.decisions += 1
-        self.diagnose({'kind':'model','backend':'codex','model_ms':elapsed,'decision_saved':True,
+        self.diagnose(self._model_metadata() | {'kind':'model','backend':'codex','model_ms':elapsed,'decision_saved':True,
                        'participation':self.data.meeting(self.mid)['participation']})
+
+    def _model_metadata(self):
+        read = getattr(self.backend, 'diagnostic_metadata', None)
+        metadata = read() if callable(read) else {}
+        return sanitize(metadata | {'kind': 'model'}) if isinstance(metadata, dict) else {}
 
     def dispatch(self):
         if self.worker is not None or self.stop_event.is_set():
@@ -136,7 +142,7 @@ class AdviserRunner:
                 if error:
                     self.data.fail_job(job, error, retry_at=self.clock()+self.config.cooldown_seconds)
                     self.model_failure = error
-                    self.diagnose({'kind':'model','error_kind':error,'model_ms':elapsed})
+                    self.diagnose(self._model_metadata() | {'kind':'model','error_kind':error,'model_ms':elapsed})
                 else:
                     try:
                         self._finish_job(job, decision, elapsed)
@@ -157,10 +163,15 @@ class AdviserRunner:
 
     def statistics(self):
         meeting = self.data.meeting(self.mid)
+        # Avoid changing elapsed counters on each watch tick and flooding stdout.
+        stage = self._model_metadata().get('model_stage')
+        live = {'model_stage': stage} if isinstance(stage, str) and stage in {
+            'startup','initialize','account_read','mcp_discovery','thread_start',
+            'mcp_verify','turn_start','generation','thread_cleanup'} else {}
         return {'backend': 'codex', 'participation': meeting['participation'],
                 'model_state': 'running' if self.worker else 'waiting' if meeting['generation']>meeting['decided_generation'] else 'idle',
                 'model_error': meeting['error'], 'offered': self.offered, 'newly_persisted': self.persisted,
-                'decisions': self.decisions, 'replied': self.replied} | self.data.reply_statistics(self.mid)
+                'decisions': self.decisions, 'replied': self.replied} | self.data.reply_statistics(self.mid) | live
 
     def run(self, *, watch=False, notify=None):
         previous = None
