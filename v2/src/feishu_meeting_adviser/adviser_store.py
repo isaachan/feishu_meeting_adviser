@@ -203,6 +203,9 @@ class AdviserStore:
         snapshot = self.snapshot(mid, settings, now=now, joined_at=joined_at, bot_id=bot_id)
         if not snapshot['fresh_input_keys'] and snapshot['pending_reply'] is None:
             with self.transaction():
+                for old in self.db.execute('SELECT job_id,snapshot FROM jobs WHERE meeting_id=? AND state IN (\'pending\',\'running\')', (mid,)).fetchall():
+                    self.db.execute('UPDATE jobs SET state=\'abandoned\',snapshot=? WHERE job_id=?',
+                        (encode({'snapshot_hash': digest(decode_mapping(old['snapshot']))}), old['job_id']))
                 self.db.execute('UPDATE meetings SET decided_generation=generation,error=NULL,retry_at=0 WHERE meeting_id=?', (mid,))
             return None
         job_id = digest([mid, snapshot['generation'], role_version])

@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import select
 import signal
 import subprocess
 import threading
@@ -18,7 +19,7 @@ from .storage import private_directory
 
 MODEL_ERRORS = {'model_invalid_decision','model_invalid_evidence','model_role_unavailable','model_unavailable',
                 'model_disconnected','model_protocol','model_tool_request','model_stopped','model_timeout',
-                'model_failed','unknown_model_error'}
+                'model_failed','model_subscription_required','model_tools_unavailable','unknown_model_error'}
 
 
 class ModelError(Exception):
@@ -126,6 +127,8 @@ class CodexBackend:
         self.counter = 0
         self.thread_id = self.turn_id = None
         self.last_model = None
+        self.deadline = None
+        self.tool_config = {}
 
     def _start(self):
         if self.process is not None:
@@ -134,7 +137,9 @@ class CodexBackend:
         overrides = {'mcp_servers': {}, 'plugins': {}, 'features.shell_tool': False,
                      'features.unified_exec': False, 'features.apply_patch_freeform': False,
                      'features.apps': False, 'features.skills': False, 'features.multi_agent': False,
-                     'features.code_mode': False, 'web_search': 'disabled', 'analytics.enabled': False,
+                     'features.code_mode': False, 'features.hooks': False, 'features.goals': False,
+                     'features.memories': False, 'features.shell_snapshot': False,
+                     'features.remote_plugin': False, 'web_search': 'disabled', 'analytics.enabled': False,
                      'otel.log_user_prompt': False, 'history.persistence': 'none'}
         command = self.command or [self.settings.executable,
                     *[arg for key, value in overrides.items() for arg in ('-c', key + '=' +
@@ -147,6 +152,7 @@ class CodexBackend:
         except OSError:
             raise ModelError('model_unavailable') from None
         self.incoming = queue.Queue(maxsize=512)
+        os.set_blocking(self.process.stdin.fileno(), False)
         self.events.clear()
         stream, incoming = self.process.stdout, self.incoming
 
@@ -176,11 +182,61 @@ class CodexBackend:
         self.reader.start()
         self._rpc('initialize', {'clientInfo': {'name': 'feishu_meeting_adviser', 'title': '会参谋', 'version': '0.1.0'}})
         self._send({'method': 'initialized', 'params': {}})
+        account = self._rpc('account/read', {'refreshToken': False}).get('account')
+        if not isinstance(account, dict) or account.get('type') != 'chatgpt':
+            raise ModelError('model_subscription_required')
+        self.tool_config = {'mcp_servers': {}, 'plugins': {}}
+        for item in self._mcp_inventory():
+            name, plugin = item.get('name'), item.get('pluginId')
+            # Runtime/plugin servers may have no static transport in user config.
+            # Supply a valid inert transport: disabled entries are never launched.
+            if isinstance(name, str):
+                self.tool_config['mcp_servers'][name] = {'command': '/usr/bin/false', 'enabled': False}
+            if isinstance(plugin, str):
+                self.tool_config['plugins'][plugin] = {'enabled': False}
 
-    def _send(self, value):
+    def _mcp_inventory(self, thread_id=None):
+        cursor = None
+        seen = set()
+        result = []
+        for _ in range(10):
+            params = {'limit':100,'detail':'toolsAndAuthOnly'}
+            if thread_id:
+                params['threadId']=thread_id
+            if cursor:
+                params['cursor']=cursor
+            page = self._rpc('mcpServerStatus/list',params)
+            data = page.get('data')
+            if not isinstance(data,list) or any(not isinstance(item,dict) for item in data):
+                raise ModelError('model_protocol')
+            result.extend(data)
+            cursor = page.get('nextCursor')
+            if not cursor:
+                return result
+            if not isinstance(cursor,str) or cursor in seen:
+                raise ModelError('model_protocol')
+            seen.add(cursor)
+        raise ModelError('model_protocol')
+
+    def _send(self, value, *, deadline=None):
         try:
-            self.process.stdin.write((json.dumps(value, ensure_ascii=False) + '\n').encode())
-            self.process.stdin.flush()
+            payload = memoryview((json.dumps(value, ensure_ascii=False)+'\n').encode())
+            fd = self.process.stdin.fileno()
+            deadline = deadline or self.deadline or (time.monotonic()+self.settings.timeout_seconds)
+            while payload:
+                if self.stop_event.is_set():
+                    raise ModelError('model_stopped')
+                if time.monotonic()>=deadline:
+                    raise ModelError('model_timeout')
+                if not select.select([], [fd], [], 0.05)[1]:
+                    continue
+                try:
+                    sent = os.write(fd,payload[:65536])
+                except BlockingIOError:
+                    continue
+                if not sent:
+                    raise ModelError('model_disconnected')
+                payload = payload[sent:]
         except (OSError, ValueError, AttributeError):
             raise ModelError('model_disconnected') from None
 
@@ -205,8 +261,10 @@ class CodexBackend:
     def _rpc(self, method, params, *, timeout=None):
         self.counter += 1
         request_id = self.counter
-        self._send({'id': request_id, 'method': method, 'params': params})
         deadline = time.monotonic() + (timeout or self.settings.timeout_seconds)
+        if self.deadline is not None:
+            deadline = min(deadline,self.deadline)
+        self._send({'id': request_id, 'method': method, 'params': params}, deadline=deadline)
         while True:
             value = self._read(deadline)
             if value.get('id') == request_id:
@@ -219,10 +277,13 @@ class CodexBackend:
                 self.events.append(value)
 
     def decide(self, snapshot: dict, role: str) -> Decision:
+        self.deadline = time.monotonic()+self.settings.timeout_seconds
         try:
             self._start()
             result = self._rpc('thread/start', {
                 'cwd': str(self.workdir), 'model': self.settings.model, 'ephemeral': True,
+                'modelProvider':'openai',
+                'config':self.tool_config,
                 'approvalPolicy': 'never', 'sandbox': 'read-only',
                 'baseInstructions': 'You are a meeting participant decision service. Return only the requested JSON. '
                                     'Do not use tools, read files, execute commands or contact services. '
@@ -233,6 +294,8 @@ class CodexBackend:
             self.last_model = result.get('model')
             if not isinstance(self.thread_id, str):
                 raise ModelError('model_protocol')
+            if any(item.get('tools') for item in self._mcp_inventory(self.thread_id)):
+                raise ModelError('model_tools_unavailable')
             result = self._rpc('turn/start', {'threadId': self.thread_id,
                 'input': [{'type': 'text', 'text': json.dumps(snapshot, ensure_ascii=False)}],
                 'outputSchema': DECISION_SCHEMA,
@@ -241,6 +304,7 @@ class CodexBackend:
             if not isinstance(self.turn_id, str):
                 raise ModelError('model_protocol')
             deadline = time.monotonic() + self.settings.timeout_seconds
+            deadline = min(deadline,self.deadline)
             messages = {}
             while True:
                 value = self.events.popleft() if self.events else self._read(deadline)
@@ -250,7 +314,7 @@ class CodexBackend:
                 method = value.get('method')
                 if method in ('item/started', 'item/completed') and params.get('turnId') == self.turn_id:
                     item = params.get('item', {})
-                    if item.get('type') in ('commandExecution', 'fileChange', 'mcpToolCall', 'dynamicToolCall', 'webSearch'):
+                    if item.get('type') in ('commandExecution','fileChange','mcpToolCall','dynamicToolCall','webSearch','hookPrompt','functionCallOutput'):
                         raise ModelError('model_tool_request')
                     if method == 'item/completed' and item.get('type') == 'agentMessage' and item.get('phase') != 'commentary':
                         messages[item.get('id')] = item.get('text')
@@ -259,6 +323,8 @@ class CodexBackend:
                     if turn.get('status') != 'completed':
                         raise ModelError('model_failed')
                     for item in turn.get('items', []):
+                        if item.get('type') in ('commandExecution','fileChange','mcpToolCall','dynamicToolCall','webSearch','hookPrompt','functionCallOutput'):
+                            raise ModelError('model_tool_request')
                         if item.get('type') == 'agentMessage' and item.get('phase') != 'commentary':
                             messages[item.get('id')] = item.get('text')
                     if len(messages) != 1 or not isinstance(next(iter(messages.values())), str):
@@ -268,6 +334,7 @@ class CodexBackend:
                     except ValueError:
                         raise ModelError('model_invalid_decision') from None
                     self.turn_id = None
+                    self.deadline = None
                     self._rpc('thread/unsubscribe', {'threadId': self.thread_id}, timeout=5)
                     self.thread_id = None
                     return decision
@@ -277,6 +344,8 @@ class CodexBackend:
         except (TypeError, AttributeError, KeyError):
             self.close()
             raise ModelError('model_protocol') from None
+        finally:
+            self.deadline = None
 
     def close(self):
         process, self.process = self.process, None
@@ -292,11 +361,17 @@ class CodexBackend:
             pass
         finally:
             if process.poll() is None:
-                os.killpg(process.pid, signal.SIGTERM)
+                try:
+                    os.killpg(process.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
             try:
                 process.wait(timeout=2)
             except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGKILL)
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
                 process.wait(timeout=2)
             for stream in (process.stdin, process.stdout):
                 if stream:

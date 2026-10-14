@@ -135,3 +135,26 @@ class AdviserStoreTests(unittest.TestCase):
         self.store.mark_sent(row['uuid'],now=NOW-1000000,interval=0)
         self.store.prune_history(NOW*1_000_000_000)
         self.assertEqual(self.store.ensure_introduction(session,'synthetic intro',now=NOW)['state'],'sent')
+
+    def test_expired_recovered_job_becomes_context_without_leaving_a_prompt_pending(self):
+        self.store.ingest('m1', [delivery(text='private synthetic prompt')])
+        job = self.store.prepare_job('m1', self.settings, 'role-v1', now=NOW, joined_at=NOW-10)
+        self.store.mark_job_running(job['job_id'])
+        self.store.recover_sends()
+        self.assertIsNone(self.store.prepare_job('m1', self.settings, 'role-v1', now=NOW+1000, joined_at=NOW-10))
+        row = self.store.db.execute('SELECT state,snapshot FROM jobs').fetchone()
+        self.assertEqual(row['state'], 'abandoned')
+        self.assertNotIn('private synthetic prompt', row['snapshot'])
+        self.assertNotIn('m1', self.store.protected_meetings())
+
+    def test_changed_role_rechecks_pending_reply_before_it_can_send(self):
+        self.store.ingest('m1', [delivery()])
+        self.store.ensure_role('m1', 'role-v1')
+        job = self.store.prepare_job('m1', self.settings, 'role-v1', now=NOW, joined_at=NOW-10)
+        self.store.finish_job(job, Decision('none', (), '旧角色生成的候选', ('s:1',)), now=NOW)
+        self.store.ensure_role('m1', 'role-v2')
+        self.assertIsNone(self.store.next_reply('m1', now=NOW))
+        checked = self.store.prepare_job('m1', self.settings, 'role-v2', now=NOW, joined_at=NOW-10)
+        self.assertEqual(checked['role_version'], 'role-v2')
+        self.store.finish_job(checked, Decision('none', (), None, ()), now=NOW)
+        self.assertIsNone(self.store.next_reply('m1', now=NOW))

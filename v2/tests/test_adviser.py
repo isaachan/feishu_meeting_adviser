@@ -373,3 +373,16 @@ class AdviserTests(unittest.TestCase):
         self.runner.data.finish_job(job,Decision('none',(),None,()),now=NOW)
         self.assertEqual(maintenance.prune()['expired_meetings'],1)
         self.assertIsNone(self.runner.data.meeting(MID))
+
+    def test_active_consumer_blocks_second_consumer_and_explicit_delete(self):
+        from feishu_meeting_adviser.lifecycle import FileLock, LockBusy
+        self.commit(self.caption)
+        self.runner.ingest()
+        with self.runner.lock:
+            with self.assertRaises(LockBusy):
+                with FileLock(self.config.data_directory / 'locks' / 'adviser.lock'):
+                    self.fail('second consumer acquired the lease')
+            with self.assertRaises(LockBusy):
+                Maintenance(self.source, self.config).delete_meeting(MID)
+        self.assertIsNotNone(self.source.caption(MID, 's:1'))
+        self.assertIsNotNone(self.runner.data.meeting(MID))

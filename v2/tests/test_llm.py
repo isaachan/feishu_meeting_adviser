@@ -47,12 +47,30 @@ class LLMTests(unittest.TestCase):
         self.assertFalse(any(path.name.startswith('rollout') for path in self.root.rglob('*')))
 
     def test_failures_are_sanitized_and_close_the_process(self):
-        for mode in ('failed', 'invalid', 'malformed', 'tool'):
+        for mode in ('failed', 'invalid', 'malformed', 'tool','late-tool'):
             backend = self.backend(mode)
             with self.subTest(mode=mode), self.assertRaises(ModelError) as caught:
                 backend.decide({}, 'Synthetic role')
             self.assertNotIn('private', str(caught.exception))
             self.assertIsNone(backend.process)
+
+    def test_subscription_route_rejects_api_key_and_unavailable_tool_isolation(self):
+        for mode,reason in [('apikey','model_subscription_required'),('exposed','model_tools_unavailable')]:
+            backend=self.backend(mode)
+            with self.assertRaises(ModelError) as caught:
+                backend.decide({},'Synthetic role')
+            self.assertEqual(caught.exception.reason,reason)
+            self.assertIsNone(backend.process)
+        self.assertIsNone(self.backend('inherited').decide({},'Synthetic role').reply)
+
+    def test_stalled_stdin_write_respects_whole_decision_timeout(self):
+        backend=self.backend('write-stall')
+        started=time.monotonic()
+        with self.assertRaises(ModelError) as caught:
+            backend.decide({'body':'x'*100000},'Synthetic role')
+        self.assertEqual(caught.exception.reason,'model_timeout')
+        self.assertLess(time.monotonic()-started,2)
+        self.assertEqual(backend.last_model,'synthetic-model')
 
     def test_timeout_and_user_stop_do_not_leave_a_child_running(self):
         for stop in (False, True):
@@ -69,6 +87,15 @@ class LLMTests(unittest.TestCase):
             self.assertIsNone(backend.process)
             if timer:
                 timer.join()
+
+    def test_startup_rpcs_share_one_decision_deadline(self):
+        backend = self.backend('slow-start')
+        started = time.monotonic()
+        with self.assertRaises(ModelError) as caught:
+            backend.decide({}, 'Synthetic role')
+        self.assertEqual(caught.exception.reason, 'model_timeout')
+        self.assertLess(time.monotonic() - started, 0.6)
+        self.assertIsNone(backend.last_model)
 
     def test_packaged_role_and_local_override(self):
         text, version = load_role(self.settings)

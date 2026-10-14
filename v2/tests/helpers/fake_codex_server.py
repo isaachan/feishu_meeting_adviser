@@ -1,9 +1,13 @@
 """Synthetic app-server peer. Never calls a model or any meeting API."""
 import json
+import os
+from pathlib import Path
 import sys
 import time
 
 mode = sys.argv[1]
+if len(sys.argv)>2:
+    Path(sys.argv[2]).write_text(str(os.getpid()))
 index = 0
 
 
@@ -20,9 +24,19 @@ for line in sys.stdin:
     if 'id' not in request:
         continue
     method, params = request.get('method'), request.get('params', {})
+    if mode == 'slow-start':
+        time.sleep(0.12)
     result = {}
-    if method == 'thread/start':
+    if method == 'account/read':
+        result={'account':{'type':'apiKey' if mode=='apikey' else 'chatgpt'}}
+    elif method == 'mcpServerStatus/list':
+        result={'data':[{'name':'synthetic-inherited','tools':{'synthetic-tool':{}}}] if mode in ('inherited','exposed') and
+                (not params.get('threadId') or mode=='exposed') else [],'nextCursor':None}
+    elif method == 'thread/start':
         assert params['ephemeral'] is True and params['sandbox'] == 'read-only'
+        assert params['modelProvider']=='openai'
+        if mode in ('inherited','exposed'):
+            assert params['config']['mcp_servers']['synthetic-inherited'] == {'command':'/usr/bin/false','enabled':False}
         index += 1
         thread_id = f'synthetic-thread-{index}'
         result = {'thread': {'id': thread_id}, 'model': 'synthetic-model'}
@@ -41,6 +55,8 @@ for line in sys.stdin:
             time.sleep(10)
             continue
         body = {'control': 'none', 'control_sentence_keys': [], 'reply': None, 'reply_sentence_keys': []}
+        if mode=='reply':
+            body.update(reply='SYNTHETIC MODEL REPLY',reply_sentence_keys=['s:1'])
         text = json.dumps(body) if mode != 'invalid' else 'private malformed output'
         item = {'id': 'synthetic-message', 'type': 'agentMessage', 'phase': 'final_answer', 'text': text}
         # Output may arrive before the RPC response; unrelated threads must be ignored.
@@ -49,7 +65,10 @@ for line in sys.stdin:
         event('item/completed', threadId=thread_id, turnId=turn_id, item=item)
         result = {'turn': {'id': turn_id}}
         emit({'id': request['id'], 'result': result})
+        items=[item]+([{'id':'hidden-call','type':'mcpToolCall'}] if mode=='late-tool' else [])
         event('turn/completed', threadId=thread_id, turn={'id': turn_id,
-              'status': 'failed' if mode == 'failed' else 'completed', 'items': [item]})
+              'status': 'failed' if mode == 'failed' else 'completed', 'items': items})
         continue
     emit({'id': request['id'], 'result': result})
+    if mode=='write-stall' and method=='mcpServerStatus/list' and params.get('threadId'):
+        time.sleep(10)
