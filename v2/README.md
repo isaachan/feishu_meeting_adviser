@@ -81,7 +81,9 @@ python3 -m feishu_meeting_adviser resolve-reply --uuid <UUID> --outcome cancel
 
 介绍发送未确认时暂停模型处理，核对后再恢复；同一次入会不会重复介绍，离会后重新入会会重新介绍。默认不自动重发不确定消息，避免重复发言。
 
-遇到 `leave saved bot session before switching meetings`，先处理旧会话。`leave` 失败不能证明 bot 已离会；若会议已结束或 bot 确已不在会中，人工核对后执行 `reset-session --confirmed-bot-left`，再加入新会议。不要直接删除数据库来解锁。
+下一场会议直接修改配置中的会议号并运行 `join`，无需例行 reset-session。`join` 会用已有字幕接口核对旧 bot：确认已不在会中则重新入会；同一会议仍可用则复用身份，不重复介绍；切换到不同会议时自动离开旧会议再加入目标。9 位会议号重复使用时，旧 bot 已离会会取得新的内部会议 ID 和入会身份。先停止旧 collect 与 consume 后再换会。
+
+`leave` 返回 121104 时也会核对 bot 是否已不在会中，能确认则自动完成会话清理。权限/网络错误、缺少内部 ID 的不确定入会或无法证实 bot 已离会时保留状态并报错；reset-session 仅保留为人工核对后的异常恢复入口。自动恢复不删除旧会议字幕和消费资料。
 
 修订冲突通过 `conflicts [--show-text]` 检查，确认候选后用 `resolve-conflict --delivery-id <交付哈希>` 接受。模型不能把未解决冲突当作确定事实。
 

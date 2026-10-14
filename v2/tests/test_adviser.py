@@ -334,6 +334,21 @@ class AdviserTests(unittest.TestCase):
         self.assertEqual(len(self.sent),1)
         self.assertEqual(self.backend.calls,[])
 
+    def test_automatic_rejoin_refreshes_intro_identity_and_resets_old_pause(self):
+        self.assertTrue(introduce(self.runner.data, self.manager, clock=lambda: NOW))
+        first_uuid = self.sent[0][2]
+        self.runner.data.db.execute('UPDATE meetings SET participation=\'paused\' WHERE meeting_id=?', (MID,))
+        self.path.write_text(self.path.read_text() + 'llm:\n  backend: codex\n')
+        self.api.event_failure = ApiError(ErrorKind.BOT_ABSENT, code=120004)
+        with patch('feishu_meeting_adviser.__main__.FeishuClient', return_value=self.api), \
+             redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            self.assertEqual(main(['--config', str(self.path), 'join']), 0)
+        self.assertEqual(len(self.sent), 2)
+        self.assertNotEqual(self.sent[1][2], first_uuid)
+        self.assertEqual(self.runner.data.meeting(MID)['participation'], 'active')
+        self.assertEqual(self.api.leaves, 0)
+        self.assertEqual(self.backend.calls, [])
+
     def test_status_and_model_diagnostics_do_not_expose_content(self):
         self.commit(self.caption)
         self.runner.ingest()

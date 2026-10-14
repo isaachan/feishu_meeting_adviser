@@ -15,4 +15,4 @@
 
 认证依据：[自建应用 token](https://open.feishu.cn/document/server-docs/authentication-management/access-token/tenant_access_token_internal.md) 的返回有效期，以及 [通用错误码](https://open.feishu.cn/document/ukTMukTMukTM/ugjM14COyUjL4ITN.md) 中的认证失效、权限和限流分类。客户端最多进行一次认证刷新重放；入会/离会的网络超时不自动重发。通用参数错误伴随已保存游标时，仅允许一次保持原查询范围、去掉游标的受控重扫，并永久保留完整性风险；后续仍失败则需人工处理。文档明确要求人工处理的入离会服务错误不进入持续重试。
 
-离会错误 `121104`（meeting status unexpected）的官方解释是会议当前状态不支持机器人离会，需确认会议状态后重试；它不等同于 `121110`（机器人不在会议中）。产品保留原会话并提示人工确认：仅在旧会议已结束或确认 bot 已离会时使用 `reset-session --confirmed-bot-left`，再加入新会议。依据：[离开会议错误码](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/vc-v1/bot/leave.md)。
+离会错误 `121104`（meeting status unexpected）的官方解释是会议当前状态不支持机器人离会，需确认会议状态后重试；它不等同于 `121110`（机器人不在会议中）。产品在该错误后使用已保存内部会议 ID 调用 events，仅当返回 120004（应用机器人不在会议中）时自动标记离会；空页、权限/网络错误不作为离会证据。join 同样核对旧会话，已离会自动重新加入，同一仍可访问的会议复用身份，切会则自动离开旧会议后加入目标；无需额外权限或用户 OAuth。仅无法自动核对的异常仍保留 reset-session 人工恢复入口。依据：[离开会议错误码](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/vc-v1/bot/leave.md)。

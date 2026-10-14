@@ -23,6 +23,9 @@ if not path.exists():
 
 
 class API:
+    def events(self, query):
+        return {'data': {'events': [], 'has_more': False}}
+
     def join(self,number,password):
         return {'data':{'meeting':{'id':mid,'meeting_no':number},'join_user':{'id':'synthetic-bot'}}}
     def leave(self,meeting_id):

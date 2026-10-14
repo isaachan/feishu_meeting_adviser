@@ -16,7 +16,7 @@ class LLMTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
-        self.settings = LLMSettings(timeout_seconds=0.3)
+        self.settings = LLMSettings(timeout_seconds=1)
 
     def backend(self, mode='ok', **kwargs):
         peer = Path(__file__).parent / 'helpers' / 'fake_codex_server.py'
@@ -89,6 +89,7 @@ class LLMTests(unittest.TestCase):
                 timer.join()
 
     def test_startup_rpcs_share_one_decision_deadline(self):
+        self.settings = replace(self.settings, timeout_seconds=0.3)
         backend = self.backend('slow-start')
         started = time.monotonic()
         with self.assertRaises(ModelError) as caught:

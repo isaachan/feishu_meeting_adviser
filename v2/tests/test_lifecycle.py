@@ -7,8 +7,8 @@ from unittest.mock import patch
 
 from feishu_meeting_adviser.client import ApiError, ErrorKind
 from feishu_meeting_adviser.config import ConfigError, load_config
-from feishu_meeting_adviser.lifecycle import LifecycleError, MeetingSource, SessionManager
-from feishu_meeting_adviser.models import ChangeKind, SourceState
+from feishu_meeting_adviser.lifecycle import FileLock, LifecycleError, LockBusy, MeetingSource, SessionManager
+from feishu_meeting_adviser.models import Caption, ChangeKind, SourceState
 from feishu_meeting_adviser.storage import Store
 from test_collector import event, page
 
@@ -19,6 +19,7 @@ class BotAPI:
     def __init__(self):
         self.joins = self.leaves = self.event_calls = 0
         self.failure = None
+        self.event_failure = None
     def join(self, meeting_no, password):
         self.joins += 1
         if self.failure:
@@ -31,6 +32,8 @@ class BotAPI:
         return {'data':{}}
     def events(self, query):
         self.event_calls += 1
+        if self.event_failure:
+            raise self.event_failure
         return page([event()])
 
 
@@ -85,15 +88,104 @@ class LifecycleTests(unittest.TestCase):
         self.manager.leave(retry_uncertain=True)
         self.assertEqual(self.manager.session()['phase'], 'left')
 
-    def test_switch_meeting_requires_leaving_verified_old_session(self):
+    def test_switch_meeting_automatically_leaves_verified_old_session(self):
         self.manager.join()
         other = SessionManager(self.store, replace(self.config, meeting_no='123456789'), self.api)
-        with self.assertRaises(LifecycleError):
-            other.join()
-        other.leave()  # Explicit leave always targets the verified saved session.
-        self.assertEqual(self.api.leaves, 1)
         other.join()
+        self.assertEqual(self.api.leaves, 1)
+        self.assertEqual(self.api.joins, 2)
         self.assertEqual(other.session()['meeting_no'], '123456789')
+
+    def test_absent_saved_bot_rejoins_reused_meeting_number_without_reset(self):
+        saved = self.manager.join()
+        self.store.ensure_meeting(MID, {})
+        self.store.commit_page(MID, [Caption(MID, 's:old', '旧会议合成资料', '2026-10-14T00:00:00Z')], {})
+        self.api.event_failure = ApiError(ErrorKind.BOT_ABSENT, http_status=403, code=120004)
+        new_mid = '111111111012345678'
+        self.api.join = lambda number, password: {'data': {'meeting': {'id': new_mid, 'meeting_no': number},
+                                                        'join_user': {'id': 'synthetic-bot'}}}
+        joined = self.manager.join()
+        self.assertEqual(joined['meeting_id'], new_mid)
+        self.assertNotEqual(joined['join_instance'], saved['join_instance'])
+        old = self.store.db.execute('SELECT active FROM memberships WHERE meeting_id=?', (MID,)).fetchone()
+        self.assertEqual(old['active'], 0)
+        self.assertEqual(self.api.leaves, 0)
+        self.assertEqual(self.store.caption(MID, 's:old').text, '旧会议合成资料')
+
+    def test_absent_saved_bot_can_join_different_meeting_without_leave_or_reset(self):
+        self.manager.join()
+        self.api.event_failure = ApiError(ErrorKind.BOT_ABSENT, code=120004)
+        other = SessionManager(self.store, replace(self.config, meeting_no='123456789'), self.api)
+        self.assertEqual(other.join()['meeting_no'], '123456789')
+        self.assertEqual(self.api.leaves, 0)
+        self.assertEqual(self.api.joins, 2)
+
+    def test_probe_failure_preserves_old_session_and_does_not_join_or_leave(self):
+        saved = self.manager.join()
+        for error in (ApiError(ErrorKind.NETWORK), ApiError(ErrorKind.DENIED, code=120002),
+                      ApiError(ErrorKind.PARAMETER, code=120001)):
+            self.api.event_failure = error
+            with self.subTest(error=error.kind), self.assertRaises(ApiError):
+                self.manager.join()
+            self.assertEqual(self.manager.session(), saved)
+        self.assertEqual(self.api.joins, 1)
+        self.assertEqual(self.api.leaves, 0)
+
+    def test_empty_probe_keeps_verified_session_without_rejoining(self):
+        saved = self.manager.join()
+        self.api.events = lambda query: page()
+        self.assertEqual(self.manager.join(), saved)
+        self.assertEqual(self.api.joins, 1)
+
+    def test_leave_status_rejection_can_reconcile_confirmed_bot_absence(self):
+        self.manager.join()
+        self.api.failure = ApiError(ErrorKind.PARAMETER, code=121104)
+        self.api.event_failure = ApiError(ErrorKind.BOT_ABSENT, code=120004)
+        self.manager.leave()
+        self.assertEqual(self.manager.session()['phase'], 'left')
+
+    def test_uncertain_leave_with_confirmed_absence_can_join_without_reset(self):
+        self.manager.join()
+        self.api.failure = ApiError(ErrorKind.NETWORK)
+        with self.assertRaises(ApiError):
+            self.manager.leave()
+        self.api.failure = None
+        self.api.event_failure = ApiError(ErrorKind.BOT_ABSENT, code=120004)
+        self.manager.join()
+        self.assertEqual(self.manager.session()['phase'], 'joined')
+        self.assertEqual(self.api.joins, 2)
+
+    def test_switch_leave_failure_keeps_old_session_without_joining_target(self):
+        saved = self.manager.join()
+        other = SessionManager(self.store, replace(self.config, meeting_no='123456789'), self.api)
+        self.api.failure = ApiError(ErrorKind.DENIED, code=121103)
+        with self.assertRaises(ApiError):
+            other.join()
+        self.assertEqual(self.manager.session(), saved)
+        self.assertEqual(self.api.joins, 1)
+
+    def test_join_probe_uses_saved_internal_id_and_bounded_time_range(self):
+        saved = self.manager.join()
+        with patch.object(self.api, 'events', return_value=page()) as events:
+            self.assertEqual(self.manager.join(), saved)
+        events.assert_called_once_with({'meeting_id': MID, 'start_time': '1800000000',
+                                        'end_time': '1800000000', 'page_size': 20})
+
+    def test_running_model_consumer_blocks_join_before_any_remote_call(self):
+        self.manager.join()
+        with FileLock(self.config.data_directory / 'locks' / 'adviser.lock'):
+            with self.assertRaises(LockBusy):
+                self.manager.join()
+        self.assertEqual(self.api.joins, 1)
+        self.assertEqual(self.api.event_calls, 0)
+
+    def test_switch_rechecks_absence_when_leave_races_with_meeting_end(self):
+        self.manager.join()
+        other = SessionManager(self.store, replace(self.config, meeting_no='123456789'), self.api)
+        with patch.object(self.api, 'events', side_effect=[page(), ApiError(ErrorKind.BOT_ABSENT, code=120004)]), \
+             patch.object(self.api, 'leave', side_effect=ApiError(ErrorKind.PARAMETER, code=121104)):
+            self.assertEqual(other.join()['meeting_no'], '123456789')
+        self.assertEqual(self.api.joins, 2)
 
     def test_unexpected_meeting_status_preserves_session_and_explains_manual_recovery(self):
         saved = self.manager.join()

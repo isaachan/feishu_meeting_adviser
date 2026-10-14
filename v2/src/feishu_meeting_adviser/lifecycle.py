@@ -79,13 +79,60 @@ class SessionManager:
             raise LifecycleError('saved bot is not joined to configured meeting; check session before proceeding')
         return session
 
+    def _bot_absent(self, session) -> bool:
+        # Existing events permission suffices; do not scan/save old transcript data.
+        now = str(int(self.clock()))
+        try:
+            self.client.events({'meeting_id': session['meeting_id'], 'start_time': now,
+                                'end_time': now, 'page_size': 20})
+        except ApiError as exc:
+            if exc.code == 120004:  # Events contract: application bot is not in this meeting.
+                return True
+            raise
+        return False  # An empty page is not proof that the bot left or the meeting ended.
+
+    def _save_left(self, session, reason):
+        self.store.save_session(self.app_key, {**session, 'phase': 'left',
+            'left_at': utc_now(self.clock), 'leave_reason': reason})
+
+    def _leave_saved(self, session):
+        self.store.save_session(self.app_key, {**session, 'phase': 'leave_uncertain'})
+        try:
+            self.client.leave(session['meeting_id'])
+        except ApiError as exc:
+            if exc.code == 121104:
+                # Meeting-state rejection alone is ambiguous. Reconcile membership
+                # using the same permission already used by the collector.
+                self.store.save_session(self.app_key, session)
+                if self._bot_absent(session):
+                    self._save_left(session, 'bot_absence_verified')
+                    return
+                raise LifecycleError('meeting status does not support leaving (code=121104); '
+                                     'bot absence is not confirmed; check meeting UI before using '
+                                     'reset-session --confirmed-bot-left') from None
+            if exc.code != 121110:
+                if exc.kind not in (ErrorKind.NETWORK, ErrorKind.SERVER, ErrorKind.RESPONSE, ErrorKind.ACTION_REQUIRED):
+                    self.store.save_session(self.app_key, session)
+                raise
+            self._save_left(session, 'bot_absence_verified')
+            return
+        self._save_left(session, 'leave_confirmed')
+
     def join(self) -> dict:
-        with self.application_lock():
+        with self.application_lock(), FileLock(self.config.data_directory / 'locks' / 'adviser.lock'):
             current = self.session()
             if current and current['phase'] == 'joined':
-                if current['meeting_no'] == self.config.meeting_no:
+                if self._bot_absent(current):
+                    self._save_left(current, 'bot_absence_verified')
+                elif current['meeting_no'] == self.config.meeting_no:
                     return current
-                raise LifecycleError('leave saved bot session before switching meetings')
+                else:
+                    self._leave_saved(current)
+                current = self.session()
+            if current and current['phase'] == 'leave_uncertain' and current.get('meeting_id'):
+                if self._bot_absent(current):
+                    self._save_left(current, 'bot_absence_verified')
+                    current = self.session()
             if current and current['phase'] in ('join_pending', 'join_uncertain', 'leave_uncertain'):
                 raise LifecycleError('bot session outcome uncertain; check meeting UI before retrying')
             pending = {'phase': 'join_pending', 'meeting_no': self.config.meeting_no, 'at': utc_now(self.clock),
@@ -125,21 +172,7 @@ class SessionManager:
                 raise LifecycleError('leave outcome uncertain; check meeting UI, then explicitly retry if needed')
             if session['phase'] not in ('joined', 'leave_uncertain') or not session.get('meeting_id'):
                 raise LifecycleError('no verified meeting ID for leaving; check meeting UI')
-            self.store.save_session(self.app_key, {**session, 'phase': 'leave_uncertain'})
-            try:
-                self.client.leave(session['meeting_id'])
-            except ApiError as exc:
-                if exc.code == 121104:
-                    # A rejected leave does not establish bot absence. Keep the saved session.
-                    self.store.save_session(self.app_key, session)
-                    raise LifecycleError('meeting status does not support leaving (code=121104); '
-                                         'if the old meeting has ended or bot absence is confirmed, run '
-                                         'reset-session --confirmed-bot-left, then join') from None
-                if exc.code != 121110:  # Official leave contract: bot already absent.
-                    if exc.kind not in (ErrorKind.NETWORK, ErrorKind.SERVER, ErrorKind.RESPONSE, ErrorKind.ACTION_REQUIRED):
-                        self.store.save_session(self.app_key, session)
-                    raise
-            self.store.save_session(self.app_key, {**session, 'phase': 'left', 'left_at': utc_now(self.clock)})
+            self._leave_saved(session)
 
     def reset_uncertain(self, *, confirmed_bot_left: bool) -> None:
         if not confirmed_bot_left:
