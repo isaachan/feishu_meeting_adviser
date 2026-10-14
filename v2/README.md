@@ -57,7 +57,7 @@ python3 -m feishu_meeting_adviser consume --backend codex --watch
 python3 -m feishu_meeting_adviser leave
 ```
 
-重启先启动 `collect`，再启动 `consume`；输入、任务、暂停状态和发送记录从本机数据库恢复。同一数据目录只允许一个采集进程和一个模型消费者。
+重启先启动 `collect`，再启动 `consume`；输入、任务、暂停状态和发送记录从本机数据库恢复。同一数据目录只允许一个采集进程和一个模型消费者。采集的定期清理与模型消费共用维护锁，遇到短暂占用会等待，Ctrl-C 可中断等待。
 
 ## 查看状态与处理异常
 

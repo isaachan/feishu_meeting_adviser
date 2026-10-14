@@ -386,3 +386,72 @@ class AdviserTests(unittest.TestCase):
                 Maintenance(self.source, self.config).delete_meeting(MID)
         self.assertIsNotNone(self.source.caption(MID, 's:1'))
         self.assertIsNotNone(self.runner.data.meeting(MID))
+
+    def test_consumer_waits_for_collector_maintenance_and_continues(self):
+        self.backend.reply = Decision('none', (), '合成回复', ('s:1',))
+        self.commit(self.caption)
+        held = self.runner.maintenance.lock()
+        held.acquire()
+        timer = threading.Timer(0.15, held.release)
+        timer.start()
+        try:
+            result = self.runner.run()
+        finally:
+            timer.join()
+            held.release()
+        self.assertEqual(result['decisions'], 1)
+        self.assertEqual(result['replied'], 1)
+        self.assertEqual(self.source.backlog(MID, 'adviser'), 0)
+        self.assertEqual(self.manager.session()['phase'], 'joined')
+
+    def test_model_completion_survives_contention_before_result_is_saved(self):
+        self.backend.reply = Decision('none', (), '合成回复', ('s:1',))
+        self.commit(self.caption)
+        self.runner.step()
+        self.runner.worker.join(timeout=2)
+        self.assertFalse(self.runner.worker.is_alive())
+        original = self.runner.maintenance.lock
+        calls = 0
+        timer = None
+        held = None
+        def competing_lock():
+            nonlocal calls, timer, held
+            calls += 1
+            if calls == 3:  # Ingest, expiry, then saving the completed model result.
+                held = original()
+                held.acquire()
+                timer = threading.Timer(0.15, held.release)
+                timer.start()
+            return original()
+        try:
+            with patch.object(self.runner.maintenance, 'lock', side_effect=competing_lock):
+                result = self.runner.step()
+        finally:
+            if timer:
+                timer.join()
+                held.release()
+        self.assertGreaterEqual(calls, 3)
+        self.assertEqual(result['decisions'], 1)
+        self.assertEqual(result['replied'], 1)
+        self.assertTrue(self.runner.results.empty())
+        self.runner.run()
+        self.assertEqual(len(self.backend.calls), 1)
+        self.assertEqual(len(self.sent), 1)
+
+    def test_stop_interrupts_maintenance_wait_without_leaving_or_losing_input(self):
+        self.commit(self.caption)
+        timer = threading.Timer(0.1, self.runner.stop_event.set)
+        with self.runner.maintenance.lock():
+            timer.start()
+            started = time.monotonic()
+            try:
+                self.runner.run(watch=True)
+            finally:
+                timer.join()
+        self.assertLess(time.monotonic() - started, 1)
+        self.assertEqual(self.manager.session()['phase'], 'joined')
+        self.assertEqual(self.api.leaves, 0)
+        self.assertEqual(self.source.backlog(MID, 'adviser'), 1)
+        self.assertEqual(self.backend.calls, [])
+        with self.runner.lock:
+            pass  # The exclusive consumer lease was released on stop.

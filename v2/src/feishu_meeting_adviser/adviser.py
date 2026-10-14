@@ -1,12 +1,14 @@
 """Independent durable inbox and one bounded model worker per meeting consumer."""
+from contextlib import contextmanager
 import json
 import queue
 import threading
 import time
 
 from .adviser_store import AdviserStore
+from .client import StopRequested
 from .config import file_fingerprint
-from .lifecycle import FileLock, LifecycleError
+from .lifecycle import FileLock, LifecycleError, LockBusy
 from .llm import CodexBackend, ModelError, load_role
 from .maintenance import Maintenance
 from .reply_sender import introduce, send_saved_reply
@@ -36,6 +38,26 @@ class AdviserRunner:
         self.offered = self.persisted = self.decisions = self.replied = 0
         self.model_failure = None
 
+    @contextmanager
+    def _maintenance_lock(self):
+        # Collector retention and consumer operations share this short-lived lock.
+        # Contention is expected; only the separate adviser lease rejects concurrency.
+        lock = self.maintenance.lock()
+        while True:
+            if self.stop_event.is_set():
+                raise StopRequested()
+            try:
+                lock.acquire()
+                break
+            except LockBusy:
+                self.stop_event.wait(0.05)
+        try:
+            if self.stop_event.is_set():
+                raise StopRequested()
+            yield
+        finally:
+            lock.release()
+
     def guard(self):
         if self.source.db.execute('SELECT 1 FROM tombstones WHERE identity=?',(digest(self.mid),)).fetchone():
             raise LifecycleError('meeting content was deleted; model consumption cannot restart for this meeting')
@@ -50,7 +72,7 @@ class AdviserRunner:
             raise LifecycleError('transcript source is unavailable or stopped; check status, restart collect, then restart consume')
 
     def ingest(self):
-        with self.maintenance.lock():
+        with self._maintenance_lock():
             self.guard()
             rows = self.source.read(self.mid, self.consumer_id, limit=self.limit)
             inserted = self.data.ingest(self.mid, rows, now=self.clock())
@@ -87,7 +109,7 @@ class AdviserRunner:
     def dispatch(self):
         if self.worker is not None or self.stop_event.is_set():
             return
-        with self.maintenance.lock():
+        with self._maintenance_lock():
             self.guard()
             # Source may have committed captions after this step's ingest or model completion.
             if self.source.backlog(self.mid,self.consumer_id):
@@ -102,15 +124,15 @@ class AdviserRunner:
 
     def step(self):
         self.ingest()
-        with self.maintenance.lock():
+        with self._maintenance_lock():
             self.data.discard_expired_replies(self.mid,self.settings,now=self.clock(),
                 joined_at=self.session['joined_at'],bot_id=self.session.get('bot_user_id'))
         if self.worker is not None and not self.worker.is_alive():
             self.worker.join()
-            self.worker = None
-            job, decision, error, elapsed = self.results.get_nowait()
-            with self.maintenance.lock():
+            with self._maintenance_lock():
                 self.guard()
+                self.worker = None
+                job, decision, error, elapsed = self.results.get_nowait()
                 if error:
                     self.data.fail_job(job, error, retry_at=self.clock()+self.config.cooldown_seconds)
                     self.model_failure = error
@@ -123,7 +145,7 @@ class AdviserRunner:
                         self.data.fail_job(job,exc.reason,retry_at=self.clock()+self.config.cooldown_seconds)
                         self.model_failure = exc.reason
         if self.worker is None and (self.batch_due is None or self.clock() >= self.batch_due):
-            with self.maintenance.lock():
+            with self._maintenance_lock():
                 self.guard()
                 job = self.data.prepare_job(self.mid, self.settings, self.role_version,
                     now=self.clock(), joined_at=self.session['joined_at'], bot_id=self.session.get('bot_user_id'))
@@ -143,23 +165,27 @@ class AdviserRunner:
     def run(self, *, watch=False, notify=None):
         previous = None
         with self.lock:
-            self.data.recover_sends()
-            self.data.ensure_session(self.session)
-            self.data.ensure_role(self.mid,self.role_version)
-            if self.settings.introduction:
-                with self.maintenance.lock():
-                    if not introduce(self.data,self.manager,clock=self.clock,diagnose=self.diagnose):
-                        raise LifecycleError('introduction send not confirmed; check meeting UI and replies, then resolve-reply before model processing')
-            while not self.stop_event.is_set():
-                status = self.step()
-                if notify and status != previous:
-                    notify(status)
-                    previous = status
-                if not watch and self.worker is None:
-                    meeting = self.data.meeting(self.mid)
-                    if self.model_failure or meeting['generation'] == meeting['decided_generation']:
-                        return status
-                self.stop_event.wait(0.1)
+            try:
+                self.data.recover_sends()
+                self.data.ensure_session(self.session)
+                self.data.ensure_role(self.mid,self.role_version)
+                if self.settings.introduction:
+                    with self._maintenance_lock():
+                        if not introduce(self.data,self.manager,clock=self.clock,diagnose=self.diagnose):
+                            raise LifecycleError('introduction send not confirmed; check meeting UI and replies, then resolve-reply before model processing')
+                while not self.stop_event.is_set():
+                    status = self.step()
+                    if notify and status != previous:
+                        notify(status)
+                        previous = status
+                    if not watch and self.worker is None:
+                        meeting = self.data.meeting(self.mid)
+                        if self.model_failure or meeting['generation'] == meeting['decided_generation']:
+                            return status
+                    self.stop_event.wait(0.1)
+            except StopRequested:
+                if not self.stop_event.is_set():
+                    raise
         return self.statistics()
 
     def close(self):
