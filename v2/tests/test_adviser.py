@@ -14,9 +14,9 @@ from feishu_meeting_adviser.__main__ import main
 from feishu_meeting_adviser.client import ApiError, ErrorKind
 from feishu_meeting_adviser.collector import utc_now
 from feishu_meeting_adviser.config import load_config
-from feishu_meeting_adviser.lifecycle import SessionManager
+from feishu_meeting_adviser.lifecycle import LifecycleError, SessionManager
 from feishu_meeting_adviser.llm import Decision, ModelError
-from feishu_meeting_adviser.models import Caption
+from feishu_meeting_adviser.models import Caption, SourceState, Status
 from feishu_meeting_adviser.storage import StorageError, Store
 from test_adviser_store import NOW
 from test_lifecycle import BotAPI, MID
@@ -240,3 +240,56 @@ class AdviserTests(unittest.TestCase):
         self.assertEqual(self.manager.session()['phase'],'joined')
         self.assertEqual(self.api.leaves,0)
         self.assertIn(MID,self.runner.data.protected_meetings())
+
+    def test_caption_arriving_after_model_completion_blocks_send_until_rechecked(self):
+        self.backend.reply=Decision('none',(),'原有待发回答',('s:1',))
+        self.commit(self.caption)
+        self.runner.step()
+        self.runner.worker.join(timeout=2)
+        original=self.runner._finish_job
+        def finish_then_new_input(job,decision,elapsed):
+            original(job,decision,elapsed)
+            self.commit(replace(self.caption,sentence_key='s:2',text='刚才的问题取消了'))
+        with patch.object(self.runner,'_finish_job',side_effect=finish_then_new_input):
+            self.runner.step()
+        self.assertEqual(self.sent,[])
+        self.backend.reply=Decision('cancel',('s:2',),None,())
+        self.runner.run()
+        self.assertEqual(self.sent,[])
+        self.assertEqual(self.runner.data.reply_statistics(MID)['pending_replies'],0)
+
+    def test_expired_candidate_is_discarded_without_new_model_call(self):
+        self.runner.data.db.execute('UPDATE meetings SET cooldown_until=? WHERE meeting_id=?',(NOW+1000,MID))
+        self.backend.reply=Decision('none',(),'将过时的回答',('s:1',))
+        self.commit(self.caption)
+        self.runner.run()
+        self.assertEqual(self.runner.data.reply_statistics(MID)['pending_replies'],1)
+        self.runner.clock=lambda:NOW+121
+        self.runner.step()
+        self.assertEqual(self.runner.data.reply_statistics(MID)['pending_replies'],0)
+        self.assertEqual(self.sent,[])
+        self.assertEqual(len(self.backend.calls),1)
+
+    def test_unavailable_source_stops_consumer_before_sending(self):
+        self.runner.data.db.execute('UPDATE meetings SET cooldown_until=? WHERE meeting_id=?',(NOW+100,MID))
+        self.backend.reply=Decision('none',(),'待发回答',('s:1',))
+        self.commit(self.caption)
+        self.runner.run()
+        self.source.publish_status(Status(MID,SourceState.STOPPED,'polling_stopped_bot_remains','2026-10-13T00:00:01Z'))
+        with self.assertRaises(LifecycleError):
+            self.runner.step()
+        self.assertEqual(self.sent,[])
+
+    def test_manual_retry_rechecks_context_and_preserves_message_uuid(self):
+        self.send_failure=ApiError(ErrorKind.NETWORK)
+        self.backend.reply=Decision('none',(),'不确定回复',('s:1',))
+        self.commit(self.caption)
+        self.runner.run()
+        message_uuid=self.sent[0][2]
+        self.runner.data.resolve_reply(MID,message_uuid,'retry',now=NOW)
+        self.send_failure=None
+        self.runner.run()
+        self.assertEqual(len(self.backend.calls),2)
+        self.assertEqual(self.sent[0],self.sent[1])
+        self.assertEqual(self.runner.data.reply_statistics(MID)['uncertain_replies'],0)
+        self.assertEqual(self.runner.data.list_replies(MID)[0]['state'],'sent')

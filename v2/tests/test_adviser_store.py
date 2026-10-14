@@ -93,3 +93,26 @@ class AdviserStoreTests(unittest.TestCase):
         self.store.forget_meeting('m1')
         for table in ('inputs','context','jobs','meetings'):
             self.assertEqual(self.store.db.execute(f'SELECT count(*) FROM {table}').fetchone()[0], 0)
+
+    def test_revised_evidence_invalidates_inflight_model_reply(self):
+        self.store.ingest('m1',[delivery()])
+        job=self.store.prepare_job('m1',self.settings,'role-v1',now=NOW,joined_at=NOW-10)
+        self.store.ingest('m1',[replace(delivery(2,text='修正后的事实'),kind=ChangeKind.UPDATED)])
+        self.store.finish_job(job,Decision('none',(),'旧事实回答',('s:1',)),now=NOW,settings=self.settings,joined_at=NOW-10)
+        self.assertEqual(self.store.reply_statistics('m1')['pending_replies'],0)
+        next_job=self.store.prepare_job('m1',self.settings,'role-v1',now=NOW,joined_at=NOW-10)
+        self.assertNotEqual(next_job['job_id'],job['job_id'])
+
+    def test_reply_inspection_hides_text_and_manual_resolution_is_meeting_scoped(self):
+        self.store.ingest('m1',[delivery()])
+        job=self.store.prepare_job('m1',self.settings,'role-v1',now=NOW,joined_at=NOW-10)
+        self.store.finish_job(job,Decision('none',(),'私有合成正文',('s:1',)),now=NOW)
+        message_uuid=self.store.next_reply('m1',now=NOW)['uuid']
+        self.store.mark_sending(message_uuid)
+        self.store.recover_sends()
+        self.assertNotIn('text',self.store.list_replies('m1')[0])
+        self.assertEqual(self.store.list_replies('m1',show_text=True)[0]['text'],'私有合成正文')
+        with self.assertRaises(StorageError):
+            self.store.resolve_reply('m2',message_uuid,'sent',now=NOW)
+        self.store.resolve_reply('m1',message_uuid,'sent',now=NOW)
+        self.assertEqual(self.store.reply_statistics('m1')['uncertain_replies'],0)

@@ -43,6 +43,9 @@ class AdviserRunner:
             raise LifecycleError('adviser configuration changed; restart consumer')
         if load_role(self.settings)[1] != self.role_version:
             raise LifecycleError('adviser role changed; restart consumer')
+        state = self.source.current_state(self.mid)
+        if state and state.state.value in ('action_required','ended','stopped'):
+            raise LifecycleError('transcript source is unavailable or stopped; check status, restart collect, then restart consume')
 
     def ingest(self):
         with self.maintenance.lock():
@@ -81,11 +84,13 @@ class AdviserRunner:
             return
         with self.maintenance.lock():
             self.guard()
+            # Source may have committed captions after this step's ingest or model completion.
+            if self.source.backlog(self.mid,self.consumer_id):
+                return
+            self.data.discard_expired_replies(self.mid,self.settings,now=self.clock(),
+                joined_at=self.session['joined_at'],bot_id=self.session.get('bot_user_id'))
             row = self.data.next_reply(self.mid, now=self.clock())
             if row is None:
-                return
-            status = self.source.current_state(self.mid)
-            if status and status.state.value in ('action_required','ended','stopped'):
                 return
             self.data.mark_sending(row['uuid'])
             try:
@@ -102,6 +107,9 @@ class AdviserRunner:
 
     def step(self):
         self.ingest()
+        with self.maintenance.lock():
+            self.data.discard_expired_replies(self.mid,self.settings,now=self.clock(),
+                joined_at=self.session['joined_at'],bot_id=self.session.get('bot_user_id'))
         if self.worker is not None and not self.worker.is_alive():
             self.worker.join()
             self.worker = None

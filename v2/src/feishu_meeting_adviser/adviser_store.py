@@ -237,6 +237,48 @@ class AdviserStore:
         row = self.db.execute('SELECT * FROM outbox WHERE meeting_id=? AND state=\'pending\' AND generation=? ORDER BY created_ns LIMIT 1', (mid,meeting['generation'])).fetchone()
         return dict(row) if row else None
 
+    def discard_expired_replies(self, mid, settings, *, now, joined_at, bot_id=None):
+        cancelled = 0
+        with self.transaction():
+            for row in self.db.execute('SELECT uuid,evidence FROM outbox WHERE meeting_id=? AND kind=\'reply\' AND state=\'pending\'',(mid,)).fetchall():
+                valid = True
+                for key,fingerprint in decode_mapping(row['evidence']).items():
+                    current = self.db.execute('SELECT body,suppressed FROM context WHERE meeting_id=? AND sentence_key=?',(mid,key)).fetchone()
+                    if not current or current['suppressed']:
+                        valid = False
+                        break
+                    caption = caption_from_json(current['body'])
+                    if caption.fingerprint != fingerprint or not self.fresh(caption,now=now,joined_at=joined_at,settings=settings,bot_id=bot_id):
+                        valid = False
+                        break
+                if not valid:
+                    self.db.execute('UPDATE outbox SET state=\'cancelled\',error=\'reply_expired_or_revised\' WHERE uuid=?',(row['uuid'],))
+                    cancelled += 1
+        return cancelled
+
+    def list_replies(self, mid, *, show_text=False):
+        result = []
+        for row in self.db.execute('SELECT uuid,kind,state,error,content FROM outbox WHERE meeting_id=? ORDER BY created_ns DESC LIMIT 100',(mid,)):
+            item = {key:row[key] for key in ('uuid','kind','state','error')}
+            if show_text:
+                item['text'] = row['content']
+            result.append(item)
+        return result
+
+    def resolve_reply(self, mid, message_uuid, outcome, *, now):
+        if outcome not in ('sent','retry','cancel'):
+            raise StorageError('invalid reply resolution')
+        with self.transaction():
+            row = self.db.execute('SELECT * FROM outbox WHERE meeting_id=? AND uuid=?',(mid,message_uuid)).fetchone()
+            if not row or row['state'] not in ('uncertain','sending','rejected'):
+                raise StorageError('reply is not an unresolved send; check replies first')
+            state = {'sent':'sent','retry':'pending','cancel':'cancelled'}[outcome]
+            self.db.execute('UPDATE outbox SET state=?,error=NULL,sent_at=? WHERE uuid=?',
+                            (state,now if outcome=='sent' else None,message_uuid))
+            if outcome=='retry' and row['kind']=='reply':
+                # Recheck current discussion before any retry; keep the original UUID if unchanged.
+                self.db.execute('UPDATE meetings SET generation=generation+1,retry_at=0 WHERE meeting_id=?',(mid,))
+
     def mark_sending(self, message_uuid):
         with self.transaction():
             changed = self.db.execute('UPDATE outbox SET state=\'sending\' WHERE uuid=? AND state=\'pending\'', (message_uuid,)).rowcount

@@ -7,6 +7,7 @@ import signal
 import sqlite3
 import sys
 import threading
+import time
 
 from . import __version__
 from .adviser import AdviserRunner
@@ -14,7 +15,7 @@ from .adviser_store import AdviserStore
 from .client import ApiError, FeishuClient, StopRequested
 from .collector import utc_now
 from .config import ConfigError, DEFAULT_CONFIG, load_config
-from .lifecycle import LifecycleError, MeetingSource, SessionManager
+from .lifecycle import FileLock, LifecycleError, MeetingSource, SessionManager
 from .diagnostics import Diagnostics
 from .maintenance import Maintenance
 from .models import SourceState, digest
@@ -50,6 +51,11 @@ def parser():
     delete.add_argument('--confirm', action='store_true', required=True)
     inspect = commands.add_parser('conflicts', help='list unresolved candidate hashes; text requires explicit flag')
     inspect.add_argument('--show-text', action='store_true')
+    replies = commands.add_parser('replies', help='inspect saved model reply states; text requires explicit flag')
+    replies.add_argument('--show-text', action='store_true')
+    resolve_reply = commands.add_parser('resolve-reply', help='resolve one uncertain/rejected model send after checking meeting UI; stop consume first')
+    resolve_reply.add_argument('--uuid', required=True)
+    resolve_reply.add_argument('--outcome', choices=('sent','retry','cancel'), required=True)
     return root
 
 
@@ -163,6 +169,31 @@ def main(argv=None):
                 finally:
                     consumer.close()
             print(json.dumps({'offered': len(rows), 'newly_persisted': accepted, 'replied': replied, 'acknowledged': bool(rows)}))
+        elif args.command in ('replies','resolve-reply'):
+            session = manager.saved_meeting()
+            path = config.data_directory / 'adviser.sqlite3'
+            if not path.exists():
+                if args.command == 'replies':
+                    print('[]')
+                else:
+                    raise LifecycleError('no saved model replies')
+            else:
+                lock = FileLock(config.data_directory / 'locks' / 'adviser.lock')
+                if args.command == 'resolve-reply':
+                    lock.acquire()
+                try:
+                    data = AdviserStore(path,max_database_bytes=config.database_capacity_bytes)
+                    try:
+                        if args.command == 'replies':
+                            print(json.dumps(data.list_replies(session['meeting_id'],show_text=args.show_text),ensure_ascii=False))
+                        else:
+                            data.resolve_reply(session['meeting_id'],args.uuid,args.outcome,now=time.time())
+                            print(json.dumps({'resolved':True,'outcome':args.outcome}))
+                    finally:
+                        data.close()
+                finally:
+                    if args.command == 'resolve-reply':
+                        lock.release()
         elif args.command == 'resolve-conflict':
             with manager.application_lock():
                 session = manager.saved_meeting()
