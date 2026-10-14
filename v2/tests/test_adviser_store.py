@@ -116,3 +116,22 @@ class AdviserStoreTests(unittest.TestCase):
             self.store.resolve_reply('m2',message_uuid,'sent',now=NOW)
         self.store.resolve_reply('m1',message_uuid,'sent',now=NOW)
         self.assertEqual(self.store.reply_statistics('m1')['uncertain_replies'],0)
+
+    def test_completed_job_compacts_prompt_but_keeps_decision_and_recovery_metadata(self):
+        self.store.ingest('m1',[delivery(text='x'*2000)])
+        job=self.store.prepare_job('m1',self.settings,'role-v1',now=NOW,joined_at=NOW-10)
+        self.store.finish_job(job,Decision('none',(),None,()),now=NOW)
+        row=self.store.db.execute('SELECT snapshot,result,state FROM jobs').fetchone()
+        self.assertNotIn('x'*2000,row['snapshot'])
+        self.assertIn('snapshot_hash',row['snapshot'])
+        self.assertEqual(row['state'],'complete')
+        self.assertIsNotNone(row['result'])
+        self.assertEqual(self.snapshot()['captions'][0]['text'],'x'*2000)
+
+    def test_history_pruning_keeps_intro_identity_for_long_active_meeting(self):
+        session={'meeting_id':'m1','join_instance':'synthetic-join'}
+        row=self.store.ensure_introduction(session,'synthetic intro',now=NOW-1000000)
+        self.store.mark_sending(row['uuid'])
+        self.store.mark_sent(row['uuid'],now=NOW-1000000,interval=0)
+        self.store.prune_history(NOW*1_000_000_000)
+        self.assertEqual(self.store.ensure_introduction(session,'synthetic intro',now=NOW)['state'],'sent')

@@ -16,10 +16,15 @@ from .models import digest
 from .storage import private_directory
 
 
+MODEL_ERRORS = {'model_invalid_decision','model_invalid_evidence','model_role_unavailable','model_unavailable',
+                'model_disconnected','model_protocol','model_tool_request','model_stopped','model_timeout',
+                'model_failed','unknown_model_error'}
+
+
 class ModelError(Exception):
     def __init__(self, reason):
-        self.reason = reason
-        super().__init__(f'{reason}; model/server details hidden')
+        self.reason = reason if isinstance(reason,str) and reason in MODEL_ERRORS else 'unknown_model_error'
+        super().__init__(f'{self.reason}; model/server details hidden')
 
 
 @dataclass(frozen=True)

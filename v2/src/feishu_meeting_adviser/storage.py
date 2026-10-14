@@ -425,7 +425,7 @@ class Store:
             self._forget_meeting(meeting_id, at=at)
         self.compact()
 
-    def prune(self, cutoff_ns: int, *, at: str) -> dict:
+    def prune(self, cutoff_ns: int, *, at: str, protected_meetings=frozenset()) -> dict:
         removed = expired_meetings = 0
         with self.transaction(check_capacity=False):
             inactive = {}
@@ -435,6 +435,8 @@ class Store:
                     inactive[row['meeting_id']] = True
             for meeting in self.db.execute('SELECT meeting_id FROM meetings').fetchall():
                 mid = meeting['meeting_id']
+                if mid in protected_meetings:
+                    continue
                 floor = self.db.execute('SELECT MIN(acknowledged) FROM consumers WHERE meeting_id=?', (mid,)).fetchone()[0]
                 if floor is None:  # With no registered consumer, every delivery is unacknowledged.
                     continue

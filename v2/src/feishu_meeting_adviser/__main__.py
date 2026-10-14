@@ -15,12 +15,13 @@ from .adviser_store import AdviserStore
 from .client import ApiError, FeishuClient, StopRequested
 from .collector import utc_now
 from .config import ConfigError, DEFAULT_CONFIG, load_config
-from .lifecycle import FileLock, LifecycleError, MeetingSource, SessionManager
+from .lifecycle import FileLock, LifecycleError, LockBusy, MeetingSource, SessionManager
 from .diagnostics import Diagnostics
 from .maintenance import Maintenance
 from .models import SourceState, digest
 from .llm import ModelError
 from .rules import deadline_reply
+from .reply_sender import introduce
 from .storage import DurableFakeConsumer, StorageError, Store
 
 
@@ -80,6 +81,16 @@ def main(argv=None):
         manager = SessionManager(store, config, client)
         if args.command == 'join':
             manager.join()
+            if config.llm.backend=='codex' and config.llm.introduction:
+                with FileLock(config.data_directory / 'locks' / 'adviser.lock'),maintenance.lock():
+                    data = AdviserStore(config.data_directory / 'adviser.sqlite3',
+                        max_database_bytes=config.database_capacity_bytes,max_payload_bytes=config.content_capacity_bytes)
+                    try:
+                        data.recover_sends()
+                        if not introduce(data,manager,clock=time.time,diagnose=diagnostics.write):
+                            raise LifecycleError('bot joined, but introduction send not confirmed; check meeting UI and replies before consuming')
+                    finally:
+                        data.close()
             print('Bot session verified; product session saved locally (identifiers hidden).')
         elif args.command == 'leave':
             manager.leave(retry_uncertain=args.retry_uncertain)
@@ -122,9 +133,24 @@ def main(argv=None):
                 status = store.current_state(mid)
                 result.update(store.statistics(mid, args.consumer))
                 result['content_deleted'] = bool(store.db.execute('SELECT 1 FROM tombstones WHERE identity=?',(digest(mid),)).fetchone())
+                path = config.data_directory / 'adviser.sqlite3'
+                if path.exists():
+                    lock = FileLock(config.data_directory / 'locks' / 'adviser.lock')
+                    try:
+                        lock.acquire()
+                    except LockBusy:
+                        active = True
+                    else:
+                        active = False
+                        lock.release()
+                    data = AdviserStore(path,max_database_bytes=config.database_capacity_bytes)
+                    try:
+                        result['adviser'] = data.status(mid,active=active)
+                    finally:
+                        data.close()
             print(json.dumps(result))
         elif args.command == 'consume' and config.llm.backend == 'codex':
-            adviser = AdviserRunner(store,manager,consumer_id=args.consumer,limit=args.limit)
+            adviser = AdviserRunner(store,manager,consumer_id=args.consumer,limit=args.limit,diagnose=diagnostics.write)
             previous = {}
             if threading.current_thread() is threading.main_thread():
                 for signum in (signal.SIGINT,signal.SIGTERM):

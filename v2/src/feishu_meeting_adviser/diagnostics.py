@@ -8,10 +8,13 @@ import os
 from pathlib import Path
 import re
 from .storage import StorageError, private_directory
+from .llm import MODEL_ERRORS
 
-KINDS = {'page','error','health','maintenance'}
+KINDS = {'page','error','health','maintenance','model','reply'}
 TEXT_FIELDS = {
     'scan_mode': {'live','initial_replay','recovery_backfill'},
+    'backend': {'codex','rule'},
+    'participation': {'active','paused'},
     'state': {'collecting','recovering','incomplete','action_required','stopped','ended','not_started'},
     'error_kind': {'network','rate_limit','server','token_invalid','permission_or_admission_denied',
                    'bot_not_in_meeting','invalid_request','invalid_response','service_requires_manual_action',
@@ -23,11 +26,13 @@ TEXT_FIELDS = {
                'network','rate_limit','server','token_invalid','permission_or_admission_denied','bot_not_in_meeting',
                'invalid_request','invalid_response','service_requires_manual_action','unknown_api_error','page_format','local_storage'},
 }
+TEXT_FIELDS['error_kind'] |= MODEL_ERRORS | {'sender_interrupted','reply_expired_or_revised'}
 NUMBER_FIELDS = {'event_count','unknown_times','identity_degraded','request_ms','processing_ms','query_start','query_end',
                  'http_status','code','retry_after','pending','content_bytes','database_bytes','risk_count',
                  'unresolved_conflicts','latest_caption_event_age_seconds','latest_caption_end_age_seconds',
                  'pruned_deliveries','expired_meetings'}
-BOOL_FIELDS = {'has_more','checkpoint_advanced'}
+NUMBER_FIELDS |= {'model_ms','pending_model_inputs','pending_replies','uncertain_replies','rejected_replies'}
+BOOL_FIELDS = {'has_more','checkpoint_advanced','decision_saved','reply_confirmed'}
 ENUM_COUNTERS = {'kinds': {'transcript_received','participant_joined','participant_left','chat_received','other'},
                  'counts': {'added','updated','conflict','duplicates','older'}}
 LATENCIES = {'new_event_receive_seconds','new_end_receive_seconds'}

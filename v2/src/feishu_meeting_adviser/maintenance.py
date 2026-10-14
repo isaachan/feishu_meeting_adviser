@@ -5,6 +5,7 @@ from .collector import utc_now
 from .lifecycle import FileLock, LifecycleError
 from .models import digest
 from .storage import DurableFakeConsumer
+from .adviser_store import AdviserStore
 
 
 class Maintenance:
@@ -28,12 +29,39 @@ class Maintenance:
                 consumer.forget_deleted_meetings(identities)
             finally:
                 consumer.close()
+        path = self.config.data_directory / 'adviser.sqlite3'
+        if path.exists():
+            data = AdviserStore(path,max_database_bytes=self.config.database_capacity_bytes)
+            try:
+                mids = [r['meeting_id'] for r in data.db.execute('SELECT meeting_id FROM meetings')]
+                for mid in mids:
+                    if digest(mid) in identities:
+                        data.forget_meeting(mid)
+            finally:
+                data.close()
+
+    def _protected_model_meetings(self):
+        path = self.config.data_directory / 'adviser.sqlite3'
+        if not path.exists():
+            return set()
+        data = AdviserStore(path,max_database_bytes=self.config.database_capacity_bytes)
+        try:
+            return data.protected_meetings()
+        finally:
+            data.close()
 
     def prune(self):
         with self.lock():
             cutoff = int((self.clock() - self.config.retention_days * 86400) * 1_000_000_000)
-            result = self.store.prune(cutoff, at=utc_now(self.clock))
+            result = self.store.prune(cutoff, at=utc_now(self.clock),protected_meetings=self._protected_model_meetings())
             self._clean_consumer_copies()
+            path = self.config.data_directory / 'adviser.sqlite3'
+            if path.exists():
+                data = AdviserStore(path,max_database_bytes=self.config.database_capacity_bytes)
+                try:
+                    data.prune_history(cutoff)
+                finally:
+                    data.close()
             self.diagnose({'kind':'maintenance', **result})
             self.last_run = self.clock()
             return result
@@ -46,6 +74,6 @@ class Maintenance:
                 pass  # Another local consume/maintenance operation owns the short-lived lock.
 
     def delete_meeting(self, meeting_id):
-        with self.lock():
+        with FileLock(self.config.data_directory / 'locks' / 'adviser.lock'), self.lock():
             self.store.forget_meeting(meeting_id, at=utc_now(self.clock))
             self._clean_consumer_copies()

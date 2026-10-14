@@ -7,21 +7,23 @@ import threading
 import time
 
 from .adviser_store import AdviserStore
-from .client import ApiError, ErrorKind, StopRequested
 from .config import file_fingerprint
 from .lifecycle import FileLock, LifecycleError
 from .llm import CodexBackend, ModelError, load_role
 from .maintenance import Maintenance
+from .reply_sender import introduce, send_saved_reply
+from .models import digest
 
 
 class AdviserRunner:
-    def __init__(self, source, manager, *, backend=None, stop_event=None, clock=time.time, consumer_id='adviser', limit=100):
+    def __init__(self, source, manager, *, backend=None, stop_event=None, clock=time.time, consumer_id='adviser', limit=100, diagnose=None):
         self.source, self.manager = source, manager
         self.config, self.settings = manager.config, manager.config.llm
         self.session = manager.saved_meeting(require_joined=True)
         self.mid = self.session['meeting_id']
         self.clock = clock
         self.consumer_id, self.limit = consumer_id, limit
+        self.diagnose = diagnose or (lambda record:None)
         self.stop_event = stop_event or threading.Event()
         self.role, self.role_version = load_role(self.settings)
         self.data = AdviserStore(self.config.data_directory / 'adviser.sqlite3',
@@ -37,6 +39,8 @@ class AdviserRunner:
         self.model_failure = None
 
     def guard(self):
+        if self.source.db.execute('SELECT 1 FROM tombstones WHERE identity=?',(digest(self.mid),)).fetchone():
+            raise LifecycleError('meeting content was deleted; model consumption cannot restart for this meeting')
         if self.manager.session() != self.session:
             raise LifecycleError('adviser session changed; restart after checking meeting state')
         if file_fingerprint(self.config.path) != self.config.fingerprint:
@@ -62,6 +66,7 @@ class AdviserRunner:
             return inserted
 
     def _start_job(self, job):
+        self.data.mark_job_running(job['job_id'])
         def work():
             started = time.monotonic()
             try:
@@ -78,6 +83,8 @@ class AdviserRunner:
         self.data.finish_job(job, decision, now=self.clock(), settings=self.settings,
                              joined_at=self.session['joined_at'], bot_id=self.session.get('bot_user_id'))
         self.decisions += 1
+        self.diagnose({'kind':'model','backend':'codex','model_ms':elapsed,'decision_saved':True,
+                       'participation':self.data.meeting(self.mid)['participation']})
 
     def dispatch(self):
         if self.worker is not None or self.stop_event.is_set():
@@ -92,18 +99,8 @@ class AdviserRunner:
             row = self.data.next_reply(self.mid, now=self.clock())
             if row is None:
                 return
-            self.data.mark_sending(row['uuid'])
-            try:
-                self.manager.client.send_message(self.mid,row['content'],row['uuid'])
-            except ApiError as exc:
-                uncertain = exc.kind not in (ErrorKind.DENIED,ErrorKind.PARAMETER,ErrorKind.TOKEN,ErrorKind.BOT_ABSENT,ErrorKind.RATE_LIMIT)
-                self.data.mark_send_error(row['uuid'],exc.kind.value,uncertain=uncertain)
-                return
-            except (StopRequested, OSError):
-                self.data.mark_send_error(row['uuid'],'sender_interrupted',uncertain=True)
-                return
-            self.data.mark_sent(row['uuid'],now=self.clock(),interval=self.settings.reply_interval_seconds)
-            self.replied += 1
+            self.replied += int(send_saved_reply(self.data,self.manager.client,row,clock=self.clock,
+                                interval=self.settings.reply_interval_seconds,diagnose=self.diagnose))
 
     def step(self):
         self.ingest()
@@ -119,6 +116,7 @@ class AdviserRunner:
                 if error:
                     self.data.fail_job(job, error, retry_at=self.clock()+self.config.cooldown_seconds)
                     self.model_failure = error
+                    self.diagnose({'kind':'model','error_kind':error,'model_ms':elapsed})
                 else:
                     try:
                         self._finish_job(job, decision, elapsed)
@@ -148,6 +146,12 @@ class AdviserRunner:
         previous = None
         with self.lock:
             self.data.recover_sends()
+            self.data.ensure_session(self.session)
+            self.data.ensure_role(self.mid,self.role_version)
+            if self.settings.introduction:
+                with self.maintenance.lock():
+                    if not introduce(self.data,self.manager,clock=self.clock,diagnose=self.diagnose):
+                        raise LifecycleError('introduction send not confirmed; check meeting UI and replies, then resolve-reply before model processing')
             while not self.stop_event.is_set():
                 status = self.step()
                 if notify and status != previous:

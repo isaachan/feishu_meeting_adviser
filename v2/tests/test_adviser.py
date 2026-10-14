@@ -18,6 +18,9 @@ from feishu_meeting_adviser.lifecycle import LifecycleError, SessionManager
 from feishu_meeting_adviser.llm import Decision, ModelError
 from feishu_meeting_adviser.models import Caption, SourceState, Status
 from feishu_meeting_adviser.storage import StorageError, Store
+from feishu_meeting_adviser.diagnostics import sanitize
+from feishu_meeting_adviser.maintenance import Maintenance
+from feishu_meeting_adviser.reply_sender import introduce
 from test_adviser_store import NOW
 from test_lifecycle import BotAPI, MID
 
@@ -293,3 +296,80 @@ class AdviserTests(unittest.TestCase):
         self.assertEqual(self.sent[0],self.sent[1])
         self.assertEqual(self.runner.data.reply_statistics(MID)['uncertain_replies'],0)
         self.assertEqual(self.runner.data.list_replies(MID)[0]['state'],'sent')
+
+    def test_introduction_is_saved_once_and_rejoin_uses_new_identity(self):
+        self.assertTrue(introduce(self.runner.data,self.manager,clock=lambda:NOW))
+        self.assertTrue(introduce(self.runner.data,self.manager,clock=lambda:NOW))
+        self.assertEqual(len(self.sent),1)
+        self.assertIn('字幕会保存在本机',self.sent[0][1])
+        self.assertIn('LLM',self.sent[0][1])
+        first_uuid=self.sent[0][2]
+        self.runner.data.db.execute('UPDATE meetings SET participation=\'paused\' WHERE meeting_id=?',(MID,))
+        self.manager.leave()
+        self.manager.join()
+        self.assertTrue(introduce(self.runner.data,self.manager,clock=lambda:NOW))
+        self.assertNotEqual(first_uuid,self.sent[1][2])
+        self.assertEqual(self.runner.data.meeting(MID)['participation'],'active')
+
+    def test_failed_introduction_blocks_model_until_operator_confirms(self):
+        self.runner.settings=replace(self.runner.settings,introduction=True)
+        self.send_failure=ApiError(ErrorKind.NETWORK)
+        self.commit(self.caption)
+        with self.assertRaises(LifecycleError):
+            self.runner.run()
+        self.assertEqual(self.backend.calls,[])
+        self.assertEqual(self.source.backlog(MID,'adviser'),1)
+        self.runner.data.resolve_reply(MID,self.sent[0][2],'sent',now=NOW)
+        self.send_failure=None
+        self.runner.run()
+        self.assertEqual(len(self.sent),1)
+        self.assertEqual(len(self.backend.calls),1)
+
+    def test_configured_join_sends_intro_once_without_starting_model(self):
+        self.path.write_text(self.path.read_text()+'llm:\n  backend: codex\n')
+        with patch('feishu_meeting_adviser.__main__.FeishuClient',return_value=self.api), \
+             redirect_stdout(io.StringIO()),redirect_stderr(io.StringIO()):
+            self.assertEqual(main(['--config',str(self.path),'join']),0)
+            self.assertEqual(main(['--config',str(self.path),'join']),0)
+        self.assertEqual(len(self.sent),1)
+        self.assertEqual(self.backend.calls,[])
+
+    def test_status_and_model_diagnostics_do_not_expose_content(self):
+        self.commit(self.caption)
+        self.runner.ingest()
+        output=io.StringIO()
+        with patch('feishu_meeting_adviser.__main__.FeishuClient',return_value=self.api),redirect_stdout(output):
+            self.assertEqual(main(['--config',str(self.path),'status']),0)
+        value=json.loads(output.getvalue())
+        self.assertEqual(value['adviser']['model_state'],'waiting')
+        self.assertEqual(value['adviser']['pending_model_inputs'],1)
+        self.assertNotIn(self.caption.text,output.getvalue())
+        safe=sanitize({'kind':'model','model_ms':12,'decision_saved':True,'backend':'codex',
+                       'text':self.caption.text,'prompt':'private prompt','reply':'private answer','model_error':'private server'})
+        self.assertEqual(safe,{'kind':'model','backend':'codex','model_ms':12,'decision_saved':True})
+        self.assertEqual(ModelError('private server').reason,'unknown_model_error')
+
+    def test_explicit_delete_cleans_model_context_jobs_and_replies(self):
+        self.backend.reply=Decision('none',(),'私有合成回复',('s:1',))
+        self.commit(self.caption)
+        self.runner.run()
+        Maintenance(self.source,self.config).delete_meeting(MID)
+        for table in ('inputs','context','jobs','outbox','meetings'):
+            self.assertEqual(self.runner.data.db.execute(f'SELECT count(*) FROM {table}').fetchone()[0],0)
+        self.assertNotIn(self.caption.text.encode(),self.runner.data.path.read_bytes())
+        self.assertNotIn('私有合成回复'.encode(),self.runner.data.path.read_bytes())
+        with self.assertRaises(LifecycleError):
+            self.runner.step()
+
+    def test_pending_model_work_protects_expired_source_until_decided(self):
+        self.commit(self.caption)
+        self.runner.ingest()
+        self.source.db.execute('UPDATE deliveries SET created_ns=1')
+        self.source.save_session(self.manager.app_key,self.manager.session()|{'phase':'left','left_at':'2026-10-01T00:00:00Z'})
+        maintenance=Maintenance(self.source,self.config,clock=lambda:NOW)
+        self.assertEqual(maintenance.prune()['expired_meetings'],0)
+        self.assertIsNotNone(self.source.caption(MID,'s:1'))
+        job=self.runner.data.prepare_job(MID,self.runner.settings,self.runner.role_version,now=NOW,joined_at=NOW-10)
+        self.runner.data.finish_job(job,Decision('none',(),None,()),now=NOW)
+        self.assertEqual(maintenance.prune()['expired_meetings'],1)
+        self.assertIsNone(self.runner.data.meeting(MID))

@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import threading
 import time
+from uuid import uuid4
 
 from .client import ApiError, ErrorKind, FeishuClient, StopRequested
 from .collector import Collector, utc_now
@@ -15,6 +16,10 @@ from .storage import StorageError, Store, private_directory
 
 
 class LifecycleError(Exception):
+    pass
+
+
+class LockBusy(LifecycleError):
     pass
 
 
@@ -32,7 +37,7 @@ class FileLock:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             os.close(fd)
-            raise LifecycleError('operation or collector already active; stop it first') from None
+            raise LockBusy('operation or collector already active; stop it first') from None
         except OSError:
             os.close(fd)
             raise LifecycleError('unable to acquire local operation lock') from None
@@ -83,7 +88,8 @@ class SessionManager:
                 raise LifecycleError('leave saved bot session before switching meetings')
             if current and current['phase'] in ('join_pending', 'join_uncertain', 'leave_uncertain'):
                 raise LifecycleError('bot session outcome uncertain; check meeting UI before retrying')
-            pending = {'phase': 'join_pending', 'meeting_no': self.config.meeting_no, 'at': utc_now(self.clock)}
+            pending = {'phase': 'join_pending', 'meeting_no': self.config.meeting_no, 'at': utc_now(self.clock),
+                       'join_instance':str(uuid4())}
             self.store.save_session(self.app_key, pending)
             try:
                 result = self.client.join(self.config.meeting_no, self.config.password)

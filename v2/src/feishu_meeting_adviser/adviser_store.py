@@ -23,7 +23,7 @@ class AdviserStore:
                     meeting_id TEXT PRIMARY KEY, generation INTEGER NOT NULL DEFAULT 0,
                     decided_generation INTEGER NOT NULL DEFAULT 0, participation TEXT NOT NULL DEFAULT 'active',
                     source_state TEXT, error TEXT, retry_at REAL NOT NULL DEFAULT 0,
-                    cooldown_until REAL NOT NULL DEFAULT 0);
+                    cooldown_until REAL NOT NULL DEFAULT 0, join_instance TEXT, role_version TEXT, source_status TEXT);
                 CREATE TABLE IF NOT EXISTS inputs (
                     delivery_id TEXT PRIMARY KEY, meeting_id TEXT NOT NULL, sequence INTEGER NOT NULL,
                     body TEXT NOT NULL, created_ns INTEGER NOT NULL);
@@ -43,6 +43,10 @@ class AdviserStore:
                     state TEXT NOT NULL DEFAULT 'pending', error TEXT,
                     created_ns INTEGER NOT NULL, sent_at REAL);
             ''')
+            columns = {row['name'] for row in self.db.execute('PRAGMA table_info(meetings)')}
+            for name in ('join_instance','role_version','source_status'):
+                if name not in columns:
+                    self.db.execute(f'ALTER TABLE meetings ADD COLUMN {name} TEXT')
         except BaseException:
             self.db.close()
             raise
@@ -75,6 +79,38 @@ class AdviserStore:
     def ensure_meeting(self, mid):
         self.db.execute('INSERT OR IGNORE INTO meetings(meeting_id) VALUES (?)', (mid,))
 
+    def ensure_session(self, session):
+        mid = session['meeting_id']
+        instance = session.get('join_instance') or digest([session.get('at'),session.get('joined_at'),session.get('bot_user_id')])
+        with self.transaction():
+            self.ensure_meeting(mid)
+            old = self.meeting(mid)['join_instance']
+            if old is not None and old != instance:
+                self.db.execute('UPDATE outbox SET state=\'cancelled\' WHERE meeting_id=? AND kind=\'reply\' AND state=\'pending\'',(mid,))
+                self.db.execute('UPDATE jobs SET state=\'abandoned\' WHERE meeting_id=? AND state IN (\'pending\',\'running\')',(mid,))
+                self.db.execute('UPDATE meetings SET generation=generation+1,decided_generation=generation+1,'
+                    'participation=\'active\',error=NULL,retry_at=0,cooldown_until=0 WHERE meeting_id=?',(mid,))
+            self.db.execute('UPDATE meetings SET join_instance=? WHERE meeting_id=?',(instance,mid))
+        return instance
+
+    def ensure_introduction(self, session, text, *, now):
+        instance = self.ensure_session(session)
+        message_uuid = str(uuid5(NAMESPACE_URL,digest(['adviser-introduction-v1',session['meeting_id'],instance])))
+        with self.transaction():
+            self.db.execute('INSERT OR IGNORE INTO outbox(uuid,meeting_id,kind,content,evidence,generation,created_ns) VALUES (?,?,\'introduction\',?,\'{}\',0,?)',
+                            (message_uuid,session['meeting_id'],text,int(now*1_000_000_000)))
+        return dict(self.db.execute('SELECT * FROM outbox WHERE uuid=?',(message_uuid,)).fetchone())
+
+    def ensure_role(self, mid, role_version):
+        with self.transaction():
+            old = self.meeting(mid)['role_version']
+            if old is None:
+                previous = self.db.execute('SELECT role_version FROM jobs WHERE meeting_id=? ORDER BY generation DESC LIMIT 1',(mid,)).fetchone()
+                old = previous['role_version'] if previous else None
+            if old is not None and old != role_version:
+                self.db.execute('UPDATE meetings SET generation=generation+1,retry_at=0,error=NULL WHERE meeting_id=?',(mid,))
+            self.db.execute('UPDATE meetings SET role_version=? WHERE meeting_id=?',(role_version,mid))
+
     def ingest(self, mid, deliveries, *, now=None, fault=None):
         inserted = 0
         with self.transaction():
@@ -100,8 +136,8 @@ class AdviserStore:
                     self.db.execute('UPDATE context SET suppressed=1,generation=? WHERE meeting_id=? AND sentence_key=?',
                                     (generation, mid, delivery.caption.sentence_key))
                 elif delivery.status:
-                    self.db.execute('UPDATE meetings SET source_state=? WHERE meeting_id=?',
-                                    (delivery.status.state.value, mid))
+                    self.db.execute('UPDATE meetings SET source_state=?,source_status=? WHERE meeting_id=?',
+                                    (delivery.status.state.value,encode(asdict(delivery.status)),mid))
             self.db.execute('UPDATE meetings SET generation=? WHERE meeting_id=?', (generation, mid))
             if fault:
                 fault('before_commit')
@@ -155,6 +191,7 @@ class AdviserStore:
             'SELECT content,state FROM outbox WHERE meeting_id=? AND state IN (\'sent\',\'uncertain\') ORDER BY created_ns DESC LIMIT 20', (mid,))]
         return {'generation': meeting['generation'], 'participation': meeting['participation'],
                 'source_state': meeting['source_state'], 'captions': captions,
+                'source_status': decode_mapping(meeting['source_status']) if meeting['source_status'] else None,
                 'fresh_input_keys': fresh_keys, 'evidence': fingerprints,
                 'context_omitted': len(captions) < self.db.execute('SELECT count(*) FROM context WHERE meeting_id=?', (mid,)).fetchone()[0],
                 'pending_reply': pending_reply, 'sent_replies': sent, 'reply_allowed_keys': list(set(reply_keys))}
@@ -170,6 +207,9 @@ class AdviserStore:
             return None
         job_id = digest([mid, snapshot['generation'], role_version])
         with self.transaction():
+            for old in self.db.execute('SELECT job_id,snapshot FROM jobs WHERE meeting_id=? AND state=\'pending\' AND generation<?',(mid,snapshot['generation'])).fetchall():
+                self.db.execute('UPDATE jobs SET state=\'abandoned\',snapshot=? WHERE job_id=?',
+                    (encode({'snapshot_hash':digest(decode_mapping(old['snapshot']))}),old['job_id']))
             self.db.execute('INSERT OR IGNORE INTO jobs(job_id,meeting_id,generation,snapshot,role_version,created_ns) VALUES (?,?,?,?,?,?)',
                             (job_id, mid, snapshot['generation'], encode(snapshot), role_version, int(now*1_000_000_000)))
         return dict(self.db.execute('SELECT * FROM jobs WHERE job_id=?', (job_id,)).fetchone())
@@ -213,14 +253,22 @@ class AdviserStore:
                 self.db.execute('INSERT INTO outbox(uuid,meeting_id,kind,content,evidence,generation,created_ns) VALUES (?,?,\'reply\',?,?,?,?) '
                     'ON CONFLICT(uuid) DO UPDATE SET generation=excluded.generation,state=CASE WHEN outbox.state=\'cancelled\' THEN \'pending\' ELSE outbox.state END',
                     (message_uuid,job['meeting_id'],decision.reply,encode(basis),job['generation'],int(now*1_000_000_000)))
-            self.db.execute('UPDATE jobs SET state=\'complete\',result=? WHERE job_id=?', (encode(decision.to_dict()), job['job_id']))
+            brief = {'generation':job['generation'],'snapshot_hash':digest(snapshot),
+                     'evidence':{key:snapshot['evidence'].get(key) for key in set(decision.control_sentence_keys)|set(decision.reply_sentence_keys)}}
+            self.db.execute('UPDATE jobs SET state=\'complete\',result=?,snapshot=? WHERE job_id=?',
+                            (encode(decision.to_dict()),encode(brief),job['job_id']))
             self.db.execute('UPDATE meetings SET decided_generation=MAX(decided_generation,?),participation=?,error=NULL,retry_at=0 WHERE meeting_id=?',
                             (job['generation'], participation, job['meeting_id']))
         return True
 
     def fail_job(self, job, reason, *, retry_at):
         with self.transaction():
+            self.db.execute('UPDATE jobs SET state=\'pending\' WHERE job_id=?',(job['job_id'],))
             self.db.execute('UPDATE meetings SET error=?,retry_at=? WHERE meeting_id=?', (reason, retry_at, job['meeting_id']))
+
+    def mark_job_running(self, job_id):
+        with self.transaction():
+            self.db.execute('UPDATE jobs SET state=\'running\' WHERE job_id=? AND state=\'pending\'',(job_id,))
 
     def protected_meetings(self):
         return {row['meeting_id'] for row in self.db.execute('SELECT meeting_id FROM meetings WHERE generation>decided_generation '
@@ -229,12 +277,13 @@ class AdviserStore:
     def recover_sends(self):
         with self.transaction():
             self.db.execute('UPDATE outbox SET state=\'uncertain\',error=\'sender_interrupted\' WHERE state=\'sending\'')
+            self.db.execute('UPDATE jobs SET state=\'pending\' WHERE state=\'running\'')
 
     def next_reply(self, mid, *, now):
         meeting = self.meeting(mid)
         if meeting['participation'] != 'active' or meeting['generation'] != meeting['decided_generation'] or meeting['cooldown_until'] > now:
             return None
-        row = self.db.execute('SELECT * FROM outbox WHERE meeting_id=? AND state=\'pending\' AND generation=? ORDER BY created_ns LIMIT 1', (mid,meeting['generation'])).fetchone()
+        row = self.db.execute('SELECT * FROM outbox WHERE meeting_id=? AND kind=\'reply\' AND state=\'pending\' AND generation=? ORDER BY created_ns LIMIT 1', (mid,meeting['generation'])).fetchone()
         return dict(row) if row else None
 
     def discard_expired_replies(self, mid, settings, *, now, joined_at, bot_id=None):
@@ -302,6 +351,30 @@ class AdviserStore:
         counts = {r['state']:r['n'] for r in self.db.execute('SELECT state,count(*) n FROM outbox WHERE meeting_id=? GROUP BY state',(mid,))}
         return {'pending_replies':counts.get('pending',0), 'uncertain_replies':counts.get('uncertain',0)+counts.get('sending',0),
                 'rejected_replies':counts.get('rejected',0)}
+
+    def status(self, mid, *, active=False, now=None):
+        meeting = self.meeting(mid)
+        if not meeting:
+            return {'backend':'codex','model_state':'not_started'}
+        pending = max(0,meeting['generation']-meeting['decided_generation'])
+        running = self.db.execute('SELECT 1 FROM jobs WHERE meeting_id=? AND state=\'running\' LIMIT 1',(mid,)).fetchone()
+        now = time.time() if now is None else now
+        state = 'running' if active and running else 'backoff' if pending and meeting['retry_at']>now else 'waiting' if pending else 'idle'
+        return {'backend':'codex','consumer_active':active,'participation':meeting['participation'],
+                'model_state':state,'model_error':meeting['error'],'pending_model_inputs':pending} | self.reply_statistics(mid)
+
+    def prune_history(self, cutoff_ns):
+        removed = 0
+        protected = self.protected_meetings()
+        with self.transaction(check_capacity=False):
+            for row in self.db.execute('SELECT meeting_id FROM meetings WHERE generation=decided_generation').fetchall():
+                mid = row['meeting_id']
+                if mid in protected:
+                    continue
+                for table in ('inputs','jobs'):
+                    removed += self.db.execute(f'DELETE FROM {table} WHERE meeting_id=? AND created_ns<?',(mid,cutoff_ns)).rowcount
+                removed += self.db.execute('DELETE FROM outbox WHERE meeting_id=? AND kind=\'reply\' AND created_ns<?',(mid,cutoff_ns)).rowcount
+        return removed
 
     def forget_meeting(self, mid):
         with self.transaction(check_capacity=False):
