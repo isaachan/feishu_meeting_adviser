@@ -188,6 +188,25 @@ class AdviserStoreTests(unittest.TestCase):
         )
         self.assertEqual(self.store.reply_statistics('m1')['pending_replies'], 0)
 
+    def test_job_and_reply_repositories_reject_illegal_transitions(self):
+        self.store.ingest('m1', [delivery()])
+        job = self.store.prepare_job('m1', self.settings, 'role-v1', now=NOW, joined_at=NOW-10)
+        self.store.mark_job_running(job['job_id'])
+        with self.assertRaisesRegex(StorageError, 'no longer pending'):
+            self.store.mark_job_running(job['job_id'])
+        self.store.fail_job(job, 'model_failed', retry_at=NOW + 1)
+        with self.assertRaisesRegex(StorageError, 'not running'):
+            self.store.fail_job(job, 'model_failed', retry_at=NOW + 1)
+
+        self.store.finish_job(job, Decision('none', (), '候选', ('s:1',)), now=NOW)
+        message_uuid = self.store.next_reply('m1', now=NOW)['uuid']
+        self.store.mark_sending(message_uuid)
+        with self.assertRaisesRegex(StorageError, 'no longer pending'):
+            self.store.mark_sending(message_uuid)
+        self.store.mark_send_error(message_uuid, 'synthetic_failure', uncertain=False)
+        with self.assertRaisesRegex(StorageError, 'state mismatch'):
+            self.store.mark_send_error(message_uuid, 'synthetic_failure', uncertain=False)
+
     def test_context_budget_keeps_whole_sentences_and_deletion_removes_jobs(self):
         self.store.ingest('m1', [delivery(text='x'*1000), delivery(2,'s:2',text='y'*1000)])
         limited = replace(self.settings, context_characters=2000)

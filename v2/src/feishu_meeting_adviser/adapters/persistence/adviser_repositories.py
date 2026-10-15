@@ -41,6 +41,28 @@ class JobRepository:
             raise StorageError('illegal adviser job transition')
         self.checkpoint('after_job_completed')
 
+    def claim(self, job_id: str) -> None:
+        changed = self.connection.execute(
+            'UPDATE jobs SET state=? WHERE job_id=? AND state=?',
+            (JobState.RUNNING, job_id, JobState.PENDING),
+        ).rowcount
+        if changed != 1:
+            raise StorageError('adviser job is no longer pending')
+
+    def retry(self, job_id: str) -> None:
+        changed = self.connection.execute(
+            'UPDATE jobs SET state=? WHERE job_id=? AND state=?',
+            (JobState.PENDING, job_id, JobState.RUNNING),
+        ).rowcount
+        if changed != 1:
+            raise StorageError('adviser job is not running')
+
+    def recover_running(self) -> None:
+        self.connection.execute(
+            'UPDATE jobs SET state=? WHERE state=?',
+            (JobState.PENDING, JobState.RUNNING),
+        )
+
 
 class MeetingRepository:
     def __init__(self, connection: sqlite3.Connection, checkpoint: FaultHook):
@@ -70,6 +92,28 @@ class MeetingRepository:
             raise StorageError('unknown adviser meeting')
         self.checkpoint('after_meeting_updated')
 
+    def record_job_failure(self, meeting_id: str, *, reason: str, retry_at: float) -> None:
+        changed = self.connection.execute(
+            'UPDATE meetings SET error=?,retry_at=? WHERE meeting_id=?',
+            (reason, retry_at, meeting_id),
+        ).rowcount
+        if changed != 1:
+            raise StorageError('unknown adviser meeting')
+
+    def schedule_reply_recheck(self, meeting_id: str) -> None:
+        changed = self.connection.execute(
+            'UPDATE meetings SET generation=generation+1,retry_at=0 WHERE meeting_id=?',
+            (meeting_id,),
+        ).rowcount
+        if changed != 1:
+            raise StorageError('unknown adviser meeting')
+
+    def set_cooldown(self, meeting_id: str, until: float) -> None:
+        changed = self.connection.execute(
+            'UPDATE meetings SET cooldown_until=? WHERE meeting_id=?', (until, meeting_id)).rowcount
+        if changed != 1:
+            raise StorageError('unknown adviser meeting')
+
 
 class ReplyOutboxRepository:
     def __init__(self, connection: sqlite3.Connection, checkpoint: FaultHook):
@@ -98,6 +142,73 @@ class ReplyOutboxRepository:
              ReplyState.CANCELLED, ReplyState.PENDING),
         )
         self.checkpoint('after_reply_saved')
+
+    def recover_sending(self) -> None:
+        self.connection.execute(
+            'UPDATE outbox SET state=?,error=\'sender_interrupted\' WHERE state=?',
+            (ReplyState.UNCERTAIN, ReplyState.SENDING),
+        )
+
+    def resolve(self, meeting_id: str, message_uuid: str, outcome: str, *, now: float) -> dict:
+        row = self.connection.execute(
+            'SELECT * FROM outbox WHERE meeting_id=? AND uuid=?',
+            (meeting_id, message_uuid),
+        ).fetchone()
+        allowed = {ReplyState.UNCERTAIN, ReplyState.SENDING, ReplyState.REJECTED}
+        try:
+            state = ReplyState(row['state']) if row else None
+        except ValueError:
+            raise StorageError('invalid reply state') from None
+        if state not in allowed:
+            raise StorageError('reply is not an unresolved send; check replies first')
+        target = {
+            'sent': ReplyState.SENT,
+            'retry': ReplyState.PENDING,
+            'cancel': ReplyState.CANCELLED,
+        }[outcome]
+        changed = self.connection.execute(
+            'UPDATE outbox SET state=?,error=NULL,sent_at=? WHERE uuid=? AND state IN (?,?,?)',
+            (target, now if outcome == 'sent' else None, message_uuid,
+             ReplyState.UNCERTAIN, ReplyState.SENDING, ReplyState.REJECTED),
+        ).rowcount
+        if changed != 1:
+            raise StorageError('illegal reply transition')
+        return dict(row)
+
+    def claim_sending(self, message_uuid: str) -> None:
+        changed = self.connection.execute(
+            'UPDATE outbox SET state=? WHERE uuid=? AND state=?',
+            (ReplyState.SENDING, message_uuid, ReplyState.PENDING),
+        ).rowcount
+        if changed != 1:
+            raise StorageError('reply is no longer pending')
+
+    def confirm_sent(self, message_uuid: str, *, now: float) -> dict:
+        row = self.connection.execute('SELECT * FROM outbox WHERE uuid=?', (message_uuid,)).fetchone()
+        if row is None:
+            raise StorageError('reply send state mismatch')
+        try:
+            state = ReplyState(row['state'])
+        except ValueError:
+            raise StorageError('invalid reply state') from None
+        if state != ReplyState.SENDING:
+            raise StorageError('reply send state mismatch')
+        changed = self.connection.execute(
+            'UPDATE outbox SET state=?,sent_at=?,error=NULL WHERE uuid=? AND state=?',
+            (ReplyState.SENT, now, message_uuid, ReplyState.SENDING),
+        ).rowcount
+        if changed != 1:
+            raise StorageError('illegal reply transition')
+        return dict(row)
+
+    def mark_error(self, message_uuid: str, reason: str, *, uncertain: bool) -> None:
+        target = ReplyState.UNCERTAIN if uncertain else ReplyState.REJECTED
+        changed = self.connection.execute(
+            'UPDATE outbox SET state=?,error=? WHERE uuid=? AND state=?',
+            (target, reason, message_uuid, ReplyState.SENDING),
+        ).rowcount
+        if changed != 1:
+            raise StorageError('reply send state mismatch')
 
 
 class AdviserUnitOfWork:

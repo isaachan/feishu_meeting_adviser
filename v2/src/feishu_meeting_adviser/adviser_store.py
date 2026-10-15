@@ -339,22 +339,22 @@ class AdviserStore:
         return True
 
     def fail_job(self, job, reason, *, retry_at):
-        with self.transaction():
-            self.db.execute('UPDATE jobs SET state=\'pending\' WHERE job_id=?',(job['job_id'],))
-            self.db.execute('UPDATE meetings SET error=?,retry_at=? WHERE meeting_id=?', (reason, retry_at, job['meeting_id']))
+        with self.unit_of_work() as tx:
+            tx.jobs.retry(job['job_id'])
+            tx.meetings.record_job_failure(job['meeting_id'], reason=reason, retry_at=retry_at)
 
     def mark_job_running(self, job_id):
-        with self.transaction():
-            self.db.execute('UPDATE jobs SET state=\'running\' WHERE job_id=? AND state=\'pending\'',(job_id,))
+        with self.unit_of_work() as tx:
+            tx.jobs.claim(job_id)
 
     def protected_meetings(self):
         return {row['meeting_id'] for row in self.db.execute('SELECT meeting_id FROM meetings WHERE generation>decided_generation '
                 'UNION SELECT meeting_id FROM outbox WHERE state IN (\'pending\',\'sending\',\'uncertain\',\'rejected\')')}
 
     def recover_sends(self):
-        with self.transaction():
-            self.db.execute('UPDATE outbox SET state=\'uncertain\',error=\'sender_interrupted\' WHERE state=\'sending\'')
-            self.db.execute('UPDATE jobs SET state=\'pending\' WHERE state=\'running\'')
+        with self.unit_of_work() as tx:
+            tx.outbox.recover_sending()
+            tx.jobs.recover_running()
 
     def next_reply(self, mid, *, now):
         meeting = self.meeting(mid)
@@ -395,35 +395,25 @@ class AdviserStore:
     def resolve_reply(self, mid, message_uuid, outcome, *, now):
         if outcome not in ('sent','retry','cancel'):
             raise StorageError('invalid reply resolution')
-        with self.transaction():
-            row = self.db.execute('SELECT * FROM outbox WHERE meeting_id=? AND uuid=?',(mid,message_uuid)).fetchone()
-            if not row or row['state'] not in ('uncertain','sending','rejected'):
-                raise StorageError('reply is not an unresolved send; check replies first')
-            state = {'sent':'sent','retry':'pending','cancel':'cancelled'}[outcome]
-            self.db.execute('UPDATE outbox SET state=?,error=NULL,sent_at=? WHERE uuid=?',
-                            (state,now if outcome=='sent' else None,message_uuid))
+        with self.unit_of_work() as tx:
+            row = tx.outbox.resolve(mid, message_uuid, outcome, now=now)
             if outcome=='retry' and row['kind']=='reply':
                 # Recheck current discussion before any retry; keep the original UUID if unchanged.
-                self.db.execute('UPDATE meetings SET generation=generation+1,retry_at=0 WHERE meeting_id=?',(mid,))
+                tx.meetings.schedule_reply_recheck(mid)
 
     def mark_sending(self, message_uuid):
-        with self.transaction():
-            changed = self.db.execute('UPDATE outbox SET state=\'sending\' WHERE uuid=? AND state=\'pending\'', (message_uuid,)).rowcount
-            if not changed:
-                raise StorageError('reply is no longer pending')
+        with self.unit_of_work() as tx:
+            tx.outbox.claim_sending(message_uuid)
 
     def mark_sent(self, message_uuid, *, now, interval):
-        with self.transaction():
-            row = self.db.execute('SELECT * FROM outbox WHERE uuid=?', (message_uuid,)).fetchone()
-            if not row or row['state'] != 'sending':
-                raise StorageError('reply send state mismatch')
-            self.db.execute('UPDATE outbox SET state=\'sent\',sent_at=?,error=NULL WHERE uuid=?', (now,message_uuid))
+        with self.unit_of_work() as tx:
+            row = tx.outbox.confirm_sent(message_uuid, now=now)
             if row['kind'] == 'reply':
-                self.db.execute('UPDATE meetings SET cooldown_until=? WHERE meeting_id=?', (now+interval,row['meeting_id']))
+                tx.meetings.set_cooldown(row['meeting_id'], now + interval)
 
     def mark_send_error(self, message_uuid, reason, *, uncertain):
-        with self.transaction():
-            self.db.execute('UPDATE outbox SET state=?,error=? WHERE uuid=?', ('uncertain' if uncertain else 'rejected',reason,message_uuid))
+        with self.unit_of_work() as tx:
+            tx.outbox.mark_error(message_uuid, reason, uncertain=uncertain)
 
     def reply_statistics(self, mid):
         counts = {r['state']:r['n'] for r in self.db.execute('SELECT state,count(*) n FROM outbox WHERE meeting_id=? GROUP BY state',(mid,))}
