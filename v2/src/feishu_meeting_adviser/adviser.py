@@ -1,7 +1,5 @@
 """Independent durable inbox and one bounded model worker per meeting consumer."""
 from contextlib import contextmanager
-import json
-import queue
 import threading
 import time
 
@@ -18,6 +16,7 @@ from .materials import ContentPreviews, MATERIAL_POLICY, MaterialError, load_mat
 from .oauth import OAuthError, OAuthManager
 from .storage import StorageError
 from .adapters.persistence.factory import StorageFactory
+from .model_jobs import ModelJobExecutor
 
 
 class AdviserRunner:
@@ -45,8 +44,8 @@ class AdviserRunner:
         if self.settings.backend == 'opencode':
             runtime = runtime / 'opencode' / digest(self.mid)
         self.backend = backend or create_backend(self.settings, runtime, stop_event=self.stop_event)
-        self.worker = None
-        self.results = queue.Queue(maxsize=1)
+        self.executor = ModelJobExecutor(
+            self.backend, self.role, input_observer=model_input_observer)
         self.batch_due = None
         self.offered = self.persisted = self.decisions = self.replied = 0
         self.model_failure = None
@@ -55,8 +54,15 @@ class AdviserRunner:
         self.material_client, self.preview_display = material_client, preview_display
         self.material_oauth = getattr(material_client,'oauth_manager',None)
         self.material_loader = material_loader
-        self.model_input_observer = model_input_observer or (lambda snapshot:None)
         self.decision_observer = decision_observer or (lambda decision:None)
+
+    @property
+    def worker(self):
+        return self.executor.worker
+
+    @property
+    def results(self):
+        return self.executor.results
 
     def _ensure_materials(self):
         if self.material_loaded:
@@ -146,18 +152,7 @@ class AdviserRunner:
 
     def _start_job(self, job):
         self.data.mark_job_running(job['job_id'])
-        self.model_input_observer(json.loads(job['snapshot']))
-        def work():
-            started = time.monotonic()
-            try:
-                decision = self.backend.decide(json.loads(job['snapshot']), self.role)
-                self.results.put((job, decision, None, (time.monotonic()-started)*1000))
-            except ModelError as exc:
-                self.results.put((job, None, exc.reason, (time.monotonic()-started)*1000))
-            except Exception:
-                self.results.put((job, None, 'model_failed', (time.monotonic()-started)*1000))
-        self.worker = threading.Thread(target=work, name='meeting-model-decision', daemon=False)
-        self.worker.start()
+        self.executor.start(job)
 
     def _finish_job(self, job, decision, elapsed):
         self.decision_observer(decision)
@@ -168,8 +163,7 @@ class AdviserRunner:
                        'participation':self.data.meeting(self.mid)['participation']})
 
     def _model_metadata(self):
-        read = getattr(self.backend, 'diagnostic_metadata', None)
-        metadata = read() if callable(read) else {}
+        metadata = self.executor.diagnostic_metadata()
         return sanitize(metadata | {'kind': 'model'}) if isinstance(metadata, dict) else {}
 
     def dispatch(self):
@@ -194,12 +188,12 @@ class AdviserRunner:
         with self._maintenance_lock():
             self.data.discard_expired_replies(self.mid,self.settings,now=self.clock(),
                 joined_at=self.session['joined_at'],bot_id=self.session.get('bot_user_id'))
-        if self.worker is not None and not self.worker.is_alive():
-            self.worker.join()
+        completed = self.executor.take_finished()
+        if completed is not None:
             with self._maintenance_lock():
                 self.guard()
-                self.worker = None
-                job, decision, error, elapsed = self.results.get_nowait()
+                job, decision, error, elapsed = (
+                    completed.job, completed.decision, completed.error, completed.elapsed_ms)
                 if error:
                     self.data.fail_job(job, error, retry_at=self.clock()+self.config.cooldown_seconds)
                     self.model_failure = error
@@ -266,9 +260,6 @@ class AdviserRunner:
 
     def close(self):
         self.stop_event.set()
-        if self.worker:
-            self.worker.join(timeout=self.settings.timeout_seconds + 5)
-            if self.worker.is_alive():
-                raise LifecycleError('model worker still shutting down; retry stopping before closing storage')
-        self.backend.close()
+        if not self.executor.close(timeout=self.settings.timeout_seconds + 5):
+            raise LifecycleError('model worker still shutting down; retry stopping before closing storage')
         self.data.close()
