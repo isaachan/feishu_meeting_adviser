@@ -75,7 +75,7 @@ def direct_sql_violations():
     violations = Counter()
     for path in PACKAGE.rglob("*.py"):
         relative = path.relative_to(PACKAGE)
-        if path.name in {"storage.py", "adviser_store.py"} or "persistence" in relative.parts:
+        if "persistence" in relative.parts:
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         parents = []

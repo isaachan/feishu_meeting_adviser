@@ -2,9 +2,9 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from ...adviser_store import AdviserStore
 from ...config import Configuration
-from ...storage import DurableFakeConsumer, Store
+from .adviser_store import AdviserStore
+from .source_store import DurableFakeConsumer, Store
 
 
 @dataclass(frozen=True)

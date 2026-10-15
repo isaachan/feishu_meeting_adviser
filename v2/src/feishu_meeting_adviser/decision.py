@@ -1,5 +1,5 @@
 """Apply a model decision after revalidating evidence against current context."""
-from typing import Protocol
+from typing import Any, Protocol
 import time
 from uuid import NAMESPACE_URL, uuid5
 
@@ -10,8 +10,8 @@ from .storage import caption_from_json, decode_mapping, encode
 
 
 class DecisionData(Protocol):
-    def context_row(self, meeting_id: str, sentence_key: str) -> dict | None: ...
-    def unit_of_work(self, *, fault=None): ...
+    def context_row(self, meeting_id: str, sentence_key: str, /) -> dict | None: ...
+    def unit_of_work(self, *, fault=None) -> Any: ...
 
 
 class DecisionApplier:
