@@ -1,29 +1,18 @@
 """Explicit local CLI. Credentials and meeting number are read only from YAML."""
 import argparse
 from dataclasses import replace
-import json
 from pathlib import Path
 import sqlite3
 import sys
-import time
 
 from . import __version__
-from .adviser import AdviserService
 from .client import ApiError, FeishuClient, StopRequested
-from .collector import utc_now
 from .config import ConfigError, DEFAULT_CONFIG, load_config
-from .infrastructure.errors import LifecycleError, LockBusy
-from .infrastructure.file_lock import FileLock
-from .infrastructure.signals import stop_on_signals
-from .lifecycle import MeetingSource, SessionManager
-from .diagnostics import Diagnostics
-from .maintenance import Maintenance
-from .models import SourceState, digest
+from .infrastructure.errors import LifecycleError
 from .llm import ModelError
-from .rules import deadline_reply
-from .reply_sender import introduce
 from .storage import StorageError
 from .adapters.persistence.factory import StorageFactory
+from .cli.commands import COMMAND_HANDLERS, CommandContext
 from .cli.bootstrap import storage_plan
 
 
@@ -67,7 +56,7 @@ def main(argv=None):
     if not args.command:
         parser().print_help()
         return 0
-    store = source = adviser = None
+    store = None
     try:
         config = load_config(args.config)
         if args.command == 'consume' and args.backend:
@@ -78,161 +67,13 @@ def main(argv=None):
         plan = storage_plan(args.command)
         if plan.source_readonly and not storage_factory.source_path.exists():
             if args.command == 'status':
-                print(json.dumps({'session_phase':'none'}))
+                print('{"session_phase": "none"}')
                 return 0
             raise StorageError('no saved product database for read-only command')
         store = storage_factory.source(readonly=plan.source_readonly)
-        diagnostics = Diagnostics(config.data_directory / 'diagnostics', max_bytes=config.diagnostic_bytes,
-                                  backups=config.diagnostic_backups)
-        maintenance = Maintenance(store, config, diagnose=diagnostics.write)
-        client = FeishuClient(config.credentials, timeout=config.timeout_seconds, request_seconds=config.request_seconds)
-        manager = SessionManager(store, config, client)
-        if args.command == 'join':
-            manager.join()
-            if config.llm.backend in ('codex','opencode') and config.llm.introduction:
-                with FileLock(config.data_directory / 'locks' / 'adviser.lock'),maintenance.lock():
-                    data = storage_factory.adviser()
-                    try:
-                        data.recover_sends()
-                        if not introduce(data,manager,clock=time.time,diagnose=diagnostics.write):
-                            raise LifecycleError('bot joined, but introduction send not confirmed; check meeting UI and replies before consuming')
-                    finally:
-                        data.close()
-            print('Bot session verified; product session saved locally (identifiers hidden).')
-        elif args.command == 'leave':
-            manager.leave(retry_uncertain=args.retry_uncertain)
-            print('Bot absence confirmed; product session marked left.')
-        elif args.command == 'reset-session':
-            manager.reset_uncertain(confirmed_bot_left=args.confirmed_bot_left)
-            print('Uncertain session reset using your explicit confirmation.')
-        elif args.command == 'collect':
-            def print_caption(kind, caption):
-                print(json.dumps({'kind': kind.value, 'timestamp': caption.received_at,
-                                  'speaker': caption.speaker_name or '未知说话人',
-                                  'event_time': caption.event_time, 'start_time': caption.start_time,
-                                  'end_time': caption.end_time, 'text': caption.text,
-                                  'mode': caption.mode.value}, ensure_ascii=False), flush=True)
-            source = MeetingSource(store, manager, diagnose=diagnostics.write,
-                                   on_caption=print_caption if args.show_text else None)
-            with stop_on_signals(source.stop_event.set):
-                source.start(max_successful_cycles=1 if args.once else None)
-                print('Collecting to private product storage; stopping does not leave the meeting.', file=sys.stderr)
-                while source.running:
-                    source.thread.join(timeout=0.2)
-                status = source.state()
-                print(json.dumps({'state': status.state.value, 'reason': status.reason}))
-                if status.state == SourceState.ACTION_REQUIRED:
-                    return 1
-            source.stop()
-        elif args.command == 'status':
-            session = manager.session()
-            result = {'session_phase': session['phase'] if session else 'none'}
-            if session and session.get('meeting_id'):
-                mid = session['meeting_id']
-                status = store.current_state(mid)
-                result.update(store.statistics(mid, args.consumer))
-                result['content_deleted'] = store.is_deleted(mid)
-                path = config.data_directory / 'adviser.sqlite3'
-                if path.exists():
-                    lock = FileLock(config.data_directory / 'locks' / 'adviser.lock')
-                    try:
-                        lock.acquire()
-                    except LockBusy:
-                        active = True
-                    else:
-                        active = False
-                        lock.release()
-                    data = storage_factory.adviser(readonly=plan.adviser_readonly)
-                    try:
-                        result['adviser'] = {'backend': config.llm.backend} | data.status(mid,active=active)
-                    finally:
-                        data.close()
-            print(json.dumps(result))
-        elif args.command == 'consume' and config.llm.backend in ('codex','opencode'):
-            adviser = AdviserService(
-                store, manager, consumer_id=args.consumer, limit=args.limit,
-                diagnose=diagnostics.write)
-            try:
-                with stop_on_signals(adviser.stop_event.set):
-                    print(f'Consuming with {config.llm.backend}; stopping does not stop collect or leave the meeting.',file=sys.stderr)
-                    summary = adviser.run(watch=args.watch,notify=(lambda value: print(json.dumps(value),flush=True)) if args.watch else None)
-                    if not args.watch:
-                        print(json.dumps(summary))
-                    if summary['model_error'] or summary['uncertain_replies'] or summary['rejected_replies']:
-                        return 1
-            finally:
-                adviser.close()
-                adviser = None
-        elif args.command == 'consume':
-            if args.watch:
-                raise ConfigError('consume --watch requires llm.backend or --backend codex/opencode')
-            session = manager.saved_meeting()
-            with maintenance.lock():
-                rows = store.read(session['meeting_id'], args.consumer, limit=args.limit)
-                consumer = storage_factory.fake_consumer(digest(args.consumer))
-                try:
-                    accepted = replied = 0
-                    for row in rows:
-                        reply = deadline_reply(row)
-                        accepted += consumer.accept(row, reply=reply)
-                        pending = consumer.pending_reply(reply[0]) if reply else None
-                        if pending:
-                            manager.saved_meeting(require_joined=True)
-                            try:
-                                client.send_message(pending['meeting_id'], pending['content'], reply[0])
-                            except (ApiError, StopRequested):
-                                print('Reply not confirmed; input remains unacknowledged. Check meeting UI before rerunning consume; the same UUID will be reused.', file=sys.stderr)
-                                raise
-                            consumer.mark_reply_sent(reply[0])
-                            replied += 1
-                        store.acknowledge(session['meeting_id'], args.consumer, row.sequence)
-                finally:
-                    consumer.close()
-            print(json.dumps({'offered': len(rows), 'newly_persisted': accepted, 'replied': replied, 'acknowledged': bool(rows)}))
-        elif args.command in ('replies','resolve-reply'):
-            session = manager.saved_meeting()
-            path = config.data_directory / 'adviser.sqlite3'
-            if not path.exists():
-                if args.command == 'replies':
-                    print('[]')
-                else:
-                    raise LifecycleError('no saved model replies')
-            else:
-                lock = FileLock(config.data_directory / 'locks' / 'adviser.lock')
-                if args.command == 'resolve-reply':
-                    lock.acquire()
-                try:
-                    data = storage_factory.adviser(readonly=plan.adviser_readonly)
-                    try:
-                        if args.command == 'replies':
-                            print(json.dumps(data.list_replies(session['meeting_id'],show_text=args.show_text),ensure_ascii=False))
-                        else:
-                            data.resolve_reply(session['meeting_id'],args.uuid,args.outcome,now=time.time())
-                            print(json.dumps({'resolved':True,'outcome':args.outcome}))
-                    finally:
-                        data.close()
-                finally:
-                    if args.command == 'resolve-reply':
-                        lock.release()
-        elif args.command == 'resolve-conflict':
-            with manager.application_lock():
-                session = manager.saved_meeting()
-                changed = store.resolve_conflict(session['meeting_id'], args.delivery_id, at=utc_now())
-            print(json.dumps({'resolved': changed}))
-        elif args.command == 'prune':
-            with manager.application_lock():
-                result = maintenance.prune()
-            print(json.dumps(result))
-        elif args.command == 'delete-meeting-data':
-            with manager.application_lock():
-                session = manager.saved_meeting()
-                maintenance.delete_meeting(session['meeting_id'])
-            print('Saved meeting content and managed consumer copies deleted; bot session retained for explicit leave.')
-        elif args.command == 'conflicts':
-            session = manager.saved_meeting()
-            result = store.list_conflicts(session['meeting_id'], show_text=args.show_text)
-            print(json.dumps(result, ensure_ascii=False))
-        return 0
+        context = CommandContext(
+            config, storage_factory, plan, store, FeishuClient)
+        return COMMAND_HANDLERS[args.command](context, args)
     except (ConfigError, StorageError, LifecycleError, ApiError, ModelError) as exc:
         print('Operation stopped: ' + str(exc), file=sys.stderr)
         return 1
@@ -243,10 +84,6 @@ def main(argv=None):
         print('Operation interrupted; check saved session before retrying a meeting operation.', file=sys.stderr)
         return 130
     finally:
-        if adviser:
-            adviser.close()
-        if source and source.running:
-            source.stop()
         if store:
             store.close()
 
