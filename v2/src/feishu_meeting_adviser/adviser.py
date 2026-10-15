@@ -143,7 +143,7 @@ class AdviserService:
                              joined_at=self.session['joined_at'], bot_id=self.session.get('bot_user_id'))
         self.decisions += 1
         self.diagnose(self._model_metadata() | {'kind':'model','backend':self.settings.backend,'model_ms':elapsed,'decision_saved':True,
-                       'participation':self.data.meeting(self.mid)['participation']})
+                       'participation':self.data.require_meeting(self.mid)['participation']})
 
     def _model_metadata(self):
         metadata = self.executor.diagnostic_metadata()
@@ -192,7 +192,7 @@ class AdviserService:
         return self.statistics()
 
     def statistics(self):
-        meeting = self.data.meeting(self.mid)
+        meeting = self.data.require_meeting(self.mid)
         # Avoid changing elapsed counters on each watch tick and flooding stdout.
         stage = self._model_metadata().get('model_stage')
         live = {'model_stage': stage} if isinstance(stage, str) and stage in {
@@ -223,7 +223,7 @@ class AdviserService:
                         notify(status)
                         previous = status
                     if not watch and self.worker is None:
-                        meeting = self.data.meeting(self.mid)
+                        meeting = self.data.require_meeting(self.mid)
                         if self.model_failure or meeting['generation'] == meeting['decided_generation']:
                             return status
                     self.stop_event.wait(0.1)

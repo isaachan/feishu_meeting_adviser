@@ -37,6 +37,12 @@ select = ["E9", "F63", "F7", "F82"]
 include = [
     "src/feishu_meeting_adviser/models.py",
     "src/feishu_meeting_adviser/adapters/persistence",
+    "src/feishu_meeting_adviser/adviser.py",
+    "src/feishu_meeting_adviser/decision.py",
+    "src/feishu_meeting_adviser/material_bootstrap.py",
+    "src/feishu_meeting_adviser/model_jobs.py",
+    "src/feishu_meeting_adviser/reply_dispatcher.py",
+    "src/feishu_meeting_adviser/snapshot.py",
 ]
 pythonVersion = "3.11"
 typeCheckingMode = "basic"
