@@ -3,7 +3,7 @@ from contextlib import contextmanager
 import threading
 import time
 
-from .client import ApiError, StopRequested
+from .client import StopRequested
 from .config import file_fingerprint
 from .diagnostics import sanitize
 from .infrastructure.errors import LifecycleError, LockBusy
@@ -12,12 +12,11 @@ from .llm import create_backend, ModelError, load_role
 from .maintenance import Maintenance
 from .reply_sender import introduce
 from .models import digest
-from .materials import ContentPreviews, MATERIAL_POLICY, MaterialError, load_materials
-from .oauth import OAuthError, OAuthManager
-from .storage import StorageError
+from .materials import MATERIAL_POLICY, load_materials
 from .adapters.persistence.factory import StorageFactory
 from .model_jobs import ModelJobExecutor
 from .reply_dispatcher import ReplyDispatcher
+from .material_bootstrap import MaterialBootstrapper
 
 
 class AdviserRunner:
@@ -61,11 +60,18 @@ class AdviserRunner:
         self.batch_due = None
         self.offered = self.persisted = self.decisions = self.replied = 0
         self.model_failure = None
-        self.material_loaded = False
-        self.material_subject = None
-        self.material_client, self.preview_display = material_client, preview_display
-        self.material_oauth = getattr(material_client,'oauth_manager',None)
-        self.material_loader = material_loader
+        self.materials = MaterialBootstrapper(
+            self.data,
+            self.config,
+            self.session,
+            client=material_client,
+            loader=material_loader,
+            preview_display=preview_display,
+            stop_event=self.stop_event,
+            clock=lambda: self.clock(),
+            maintenance_lock=self._maintenance_lock,
+            guard=self.guard,
+        )
         self.decision_observer = decision_observer or (lambda decision:None)
 
     @property
@@ -77,35 +83,7 @@ class AdviserRunner:
         return self.executor.results
 
     def _ensure_materials(self):
-        if self.material_loaded:
-            return
-        with self._maintenance_lock():
-            self.guard()
-            self.data.ensure_session(self.session)
-            if not self.config.meeting_context.enabled:
-                self.data.set_materials(self.mid,{'state':'disabled','context_version':None,'documents':[]},now=self.clock())
-                self.material_loaded = True
-                return
-            self.data.mark_material_loading(self.mid)
-        settings = self.config.meeting_context
-        logger = ContentPreviews(self.config.data_directory/'content_previews',self.mid,
-            max_bytes=settings.preview_bytes,backups=settings.preview_backups,display=self.preview_display)
-        try:
-            snapshot = self.material_loader(self.config,self.session,client=self.material_client,
-                emit=logger.write,stop_event=self.stop_event,clock=self.clock)
-        except (ApiError,OAuthError,MaterialError,StorageError,OSError,ValueError,TypeError,KeyError) as exc:
-            reason = exc.kind.value if isinstance(exc,ApiError) else exc.reason if isinstance(exc,OAuthError) else 'material_load_failed'
-            with self._maintenance_lock():
-                self.data.set_materials(self.mid,{'state':'unavailable','context_version':digest(['unavailable',settings.calendar_id,settings.event_id]),
-                    'reason':reason,'documents':[]},now=self.clock())
-            logger.write({'kind':'load','status':'unavailable','reason':reason,
-                'http_status':getattr(exc,'http_status',None),'code':getattr(exc,'code',None)})
-            raise MaterialError('meeting materials unavailable; collect continues independently; '+reason) from None
-        with self._maintenance_lock():
-            self.guard()
-            self.data.set_materials(self.mid,snapshot,now=self.clock())
-        self.material_subject = snapshot.get('subject_hash')
-        self.material_loaded = True
+        self.materials.ensure()
 
     @contextmanager
     def _maintenance_lock(self):
@@ -136,14 +114,7 @@ class AdviserRunner:
             raise LifecycleError('adviser configuration changed; restart consumer')
         if load_role(self.settings)[1] != self.role_file_version:
             raise LifecycleError('adviser role changed; restart consumer')
-        if self.material_loaded and self.material_subject is not None:
-            try:
-                oauth = self.material_oauth or OAuthManager(self.config.credentials,self.config.data_directory)
-                subject = oauth.subject_hash()
-            except OAuthError:
-                raise MaterialError('material user authorization unavailable; restart after authorizing') from None
-            if subject != self.material_subject:
-                raise MaterialError('material user account changed; restart consume')
+        self.materials.verify_identity()
         state = self.source.current_state(self.mid)
         if state and state.state.value in ('action_required','ended','stopped'):
             raise LifecycleError('transcript source is unavailable or stopped; check status, restart collect, then restart consume')
