@@ -11,7 +11,7 @@ import signal
 import subprocess
 import threading
 import time
-from typing import Protocol
+from typing import Protocol, TypeAlias, runtime_checkable
 
 from .models import digest
 from .storage import private_directory
@@ -110,12 +110,19 @@ def load_role(settings):
         raise ModelError('model_role_unavailable') from None
 
 
+ModelDiagnostics: TypeAlias = dict[str, object]
+
+
+@runtime_checkable
 class ModelBackend(Protocol):
+    context_overhead_characters: int
+
     def decide(self, snapshot: dict, role: str) -> Decision: ...
+    def diagnostic_metadata(self) -> ModelDiagnostics: ...
     def close(self) -> None: ...
 
 
-def create_backend(settings, workdir, *, stop_event=None):
+def create_backend(settings, workdir, *, stop_event=None) -> ModelBackend:
     if settings.backend == 'opencode':
         from .opencode_backend import OpenCodeBackend
         return OpenCodeBackend(settings, workdir, stop_event=stop_event)
@@ -126,6 +133,8 @@ def create_backend(settings, workdir, *, stop_event=None):
 
 class CodexBackend:
     """One local process, fresh ephemeral threads; product DB owns recoverable history."""
+    context_overhead_characters = 0
+
     def __init__(self, settings: LLMSettings, workdir: Path, *, stop_event=None, command=None):
         self.settings = settings
         self.workdir = Path(workdir)
@@ -149,7 +158,7 @@ class CodexBackend:
         self.stage_started = time.monotonic()
         self.stage_finished = None
 
-    def diagnostic_metadata(self):
+    def diagnostic_metadata(self) -> ModelDiagnostics:
         end = self.stage_finished if self.stage_finished is not None else time.monotonic()
         return self.metadata | {'model_stage_ms': (end - self.stage_started) * 1000}
 

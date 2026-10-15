@@ -8,7 +8,14 @@ import time
 import unittest
 
 from feishu_meeting_adviser.config import ConfigError, load_config
-from feishu_meeting_adviser.llm import CodexBackend, Decision, LLMSettings, ModelError, load_role
+from feishu_meeting_adviser.llm import (
+    CodexBackend,
+    Decision,
+    LLMSettings,
+    ModelBackend,
+    ModelError,
+    load_role,
+)
 
 
 class LLMTests(unittest.TestCase):
@@ -23,6 +30,11 @@ class LLMTests(unittest.TestCase):
         backend = CodexBackend(self.settings, self.root / 'runtime', command=[sys.executable, str(peer), mode], **kwargs)
         self.addCleanup(backend.close)
         return backend
+
+    def test_codex_implements_complete_model_backend_protocol(self):
+        backend = self.backend()
+        self.assertIsInstance(backend, ModelBackend)
+        self.assertEqual(backend.context_overhead_characters, 0)
 
     def test_structured_decisions_reject_invalid_or_ambiguous_actions(self):
         silent = {'control': 'none', 'control_sentence_keys': [], 'reply': None, 'reply_sentence_keys': []}

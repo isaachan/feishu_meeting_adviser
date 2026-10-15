@@ -19,7 +19,7 @@ from urllib import error, request
 
 from .infrastructure.errors import LockBusy
 from .infrastructure.file_lock import FileLock
-from .llm import DECISION_SCHEMA, Decision, ModelError
+from .llm import DECISION_SCHEMA, Decision, ModelDiagnostics, ModelError
 from .storage import private_directory
 
 
@@ -79,7 +79,7 @@ class OpenCodeBackend:
         self.stage_started = time.monotonic()
         self.stage_finished = None
 
-    def diagnostic_metadata(self):
+    def diagnostic_metadata(self) -> ModelDiagnostics:
         end = self.stage_finished if self.stage_finished is not None else time.monotonic()
         return self.metadata | {'model_stage_ms':(end-self.stage_started)*1000}
 

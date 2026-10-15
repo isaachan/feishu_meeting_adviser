@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 from feishu_meeting_adviser.config import ConfigError, load_config
 from feishu_meeting_adviser.diagnostics import sanitize
-from feishu_meeting_adviser.llm import LLMSettings, ModelError, create_backend
+from feishu_meeting_adviser.llm import LLMSettings, ModelBackend, ModelError, create_backend
 from feishu_meeting_adviser.opencode_backend import OpenCodeBackend, clean_runtime
 
 
@@ -39,6 +39,11 @@ class OpenCodeTests(unittest.TestCase):
 
     def records(self,capture):
         return [json.loads(line) for line in capture.read_text().splitlines()]
+
+    def test_opencode_implements_complete_model_backend_protocol(self):
+        backend,_ = self.backend()
+        self.assertIsInstance(backend, ModelBackend)
+        self.assertGreater(backend.context_overhead_characters, 0)
 
     def test_role_snapshot_exact_model_and_schema_are_sent_and_session_is_deleted(self):
         backend,capture=self.backend('reply')

@@ -5,7 +5,7 @@ import queue
 import threading
 import time
 
-from .llm import ModelError
+from .llm import ModelBackend, ModelError
 
 
 @dataclass(frozen=True)
@@ -17,7 +17,7 @@ class ModelJobResult:
 
 
 class ModelJobExecutor:
-    def __init__(self, backend, role: str, *, input_observer=None):
+    def __init__(self, backend: ModelBackend, role: str, *, input_observer=None):
         self.backend = backend
         self.role = role
         self.input_observer = input_observer or (lambda _snapshot: None)
