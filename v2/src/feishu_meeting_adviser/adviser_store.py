@@ -7,11 +7,12 @@ import sqlite3
 import time
 from uuid import NAMESPACE_URL, uuid5
 
-from .models import ChangeKind, MaterialState, digest, epoch_ns
+from .models import ChangeKind, JobState, MaterialState, ParticipationState, digest, epoch_ns
 from .llm import ModelError
 from .storage import CapacityError, StorageError, caption_from_json, connect_private, decode_mapping, encode
 from .adapters.persistence.sqlite import SQLiteDatabase
 from .adapters.persistence.adviser_migrations import migrate_adviser, require_current_adviser_schema
+from .adapters.persistence.adviser_repositories import AdviserUnitOfWork
 
 
 class AdviserStore:
@@ -54,6 +55,13 @@ class AdviserStore:
             if self.db.in_transaction:
                 self.db.execute('ROLLBACK')
             raise
+
+    def _check_capacity(self):
+        if self.payload_bytes() > self.max_payload_bytes:
+            raise CapacityError('adviser content capacity exceeded; input preserved at source')
+
+    def unit_of_work(self, *, fault=None):
+        return AdviserUnitOfWork(self.db, capacity_check=self._check_capacity, fault=fault)
 
     def payload_bytes(self):
         return sum(self.db.execute(f'SELECT COALESCE(SUM(length(CAST({column} AS BLOB))),0) FROM {table}').fetchone()[0]
@@ -275,7 +283,7 @@ class AdviserStore:
                             (job_id, mid, snapshot['generation'], encode(snapshot), role_version, int(now*1_000_000_000),meeting['material_version']))
         return dict(self.db.execute('SELECT * FROM jobs WHERE job_id=?', (job_id,)).fetchone())
 
-    def finish_job(self, job, decision, *, now=None, settings=None, joined_at=0, bot_id=None):
+    def finish_job(self, job, decision, *, now=None, settings=None, joined_at=0, bot_id=None, fault=None):
         now = time.time() if now is None else now
         snapshot = decode_mapping(job['snapshot'])
         fresh_keys = set(snapshot['fresh_input_keys'])
@@ -293,37 +301,41 @@ class AdviserStore:
                     valid[key] = caption.fingerprint
         control_valid = all(key in valid for key in decision.control_sentence_keys)
         reply_valid = decision.reply is not None and all(key in valid for key in decision.reply_sentence_keys)
-        with self.transaction():
-            saved = self.db.execute('SELECT state FROM jobs WHERE job_id=?', (job['job_id'],)).fetchone()
-            if not saved:
-                raise StorageError('unknown adviser job')
-            if saved['state'] in ('complete','abandoned'):
+        with self.unit_of_work(fault=fault) as tx:
+            state = tx.jobs.decision_state(job['job_id'])
+            if state in (JobState.COMPLETE, JobState.ABANDONED):
                 return False
-            meeting = self.meeting(job['meeting_id'])
+            meeting = tx.meetings.require(job['meeting_id'])
             if job.get('context_version') != meeting['material_version'] or meeting['material_state']=='unavailable':
-                self.db.execute('UPDATE jobs SET state=\'abandoned\' WHERE job_id=?',(job['job_id'],))
+                tx.jobs.abandon(job['job_id'])
                 return False
-            participation = meeting['participation']
+            participation = ParticipationState(meeting['participation'])
             if control_valid:
                 if decision.control == 'pause':
-                    participation = 'paused'
+                    participation = ParticipationState.PAUSED
                 elif decision.control == 'resume':
-                    participation = 'active'
-            self.db.execute('UPDATE outbox SET state=\'cancelled\' WHERE meeting_id=? AND kind=\'reply\' AND state=\'pending\'', (job['meeting_id'],))
-            if reply_valid and participation == 'active' and not (control_valid and decision.control in ('pause','cancel')):
+                    participation = ParticipationState.ACTIVE
+            tx.outbox.cancel_pending(job['meeting_id'])
+            if (reply_valid and participation == ParticipationState.ACTIVE
+                    and not (control_valid and decision.control in ('pause','cancel'))):
                 basis = {key:valid[key] for key in decision.reply_sentence_keys}
                 message_uuid = str(uuid5(NAMESPACE_URL, digest(['adviser-reply-v1',job['meeting_id'],job['role_version'],basis,decision.reply])))
                 # An unchanged candidate keeps its UUID across a latest-context recheck.
-                self.db.execute('INSERT INTO outbox(uuid,meeting_id,kind,content,evidence,generation,created_ns,context_version) VALUES (?,?,\'reply\',?,?,?,?,?) '
-                    'ON CONFLICT(uuid) DO UPDATE SET generation=excluded.generation,context_version=excluded.context_version,'
-                    'state=CASE WHEN outbox.state=\'cancelled\' THEN \'pending\' ELSE outbox.state END',
-                    (message_uuid,job['meeting_id'],decision.reply,encode(basis),job['generation'],int(now*1_000_000_000),meeting['material_version']))
+                tx.outbox.save_reply(
+                    message_uuid=message_uuid,
+                    meeting_id=job['meeting_id'],
+                    content=decision.reply,
+                    evidence=encode(basis),
+                    generation=job['generation'],
+                    created_ns=int(now*1_000_000_000),
+                    context_version=meeting['material_version'],
+                )
             brief = {'generation':job['generation'],'snapshot_hash':digest(snapshot),'context_version':meeting['material_version'],
                      'evidence':{key:snapshot['evidence'].get(key) for key in set(decision.control_sentence_keys)|set(decision.reply_sentence_keys)}}
-            self.db.execute('UPDATE jobs SET state=\'complete\',result=?,snapshot=? WHERE job_id=?',
-                            (encode(decision.to_dict()),encode(brief),job['job_id']))
-            self.db.execute('UPDATE meetings SET decided_generation=MAX(decided_generation,?),participation=?,error=NULL,retry_at=0 WHERE meeting_id=?',
-                            (job['generation'], participation, job['meeting_id']))
+            tx.jobs.complete(
+                job['job_id'], result=encode(decision.to_dict()), snapshot=encode(brief))
+            tx.meetings.complete_decision(
+                job['meeting_id'], generation=job['generation'], participation=participation)
         return True
 
     def fail_job(self, job, reason, *, retry_at):

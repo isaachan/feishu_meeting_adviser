@@ -132,6 +132,62 @@ class AdviserStoreTests(unittest.TestCase):
         replies = self.store.db.execute('SELECT uuid,state FROM outbox ORDER BY created_ns').fetchall()
         self.assertEqual([(row['uuid'], row['state']) for row in replies], [(old_uuid, 'pending')])
 
+    def test_finish_job_rolls_back_at_every_repository_write(self):
+        self.store.ingest('m1', [delivery()])
+        first = self.store.prepare_job('m1', self.settings, 'role-v1', now=NOW, joined_at=NOW-10)
+        self.store.finish_job(first, Decision('none', (), '旧候选', ('s:1',)), now=NOW)
+        old_uuid = self.store.next_reply('m1', now=NOW)['uuid']
+        self.store.ingest('m1', [delivery(2, 's:2')])
+        job = self.store.prepare_job('m1', self.settings, 'role-v1', now=NOW, joined_at=NOW-10)
+        self.store.mark_job_running(job['job_id'])
+
+        def saved_state():
+            meeting = self.store.db.execute(
+                'SELECT decided_generation,participation FROM meetings WHERE meeting_id=\'m1\'').fetchone()
+            jobs = [tuple(row) for row in self.store.db.execute(
+                'SELECT job_id,state,result FROM jobs ORDER BY generation')]
+            replies = [tuple(row) for row in self.store.db.execute(
+                'SELECT uuid,state FROM outbox ORDER BY created_ns')]
+            return tuple(meeting), jobs, replies
+
+        before = saved_state()
+        points = (
+            'after_old_replies_cancelled',
+            'after_reply_saved',
+            'after_job_completed',
+            'after_meeting_updated',
+        )
+        for point in points:
+            with self.subTest(point=point):
+                def fail(stage, point=point):
+                    if stage == point:
+                        raise RuntimeError('synthetic decision persistence failure')
+
+                with self.assertRaises(RuntimeError):
+                    self.store.finish_job(
+                        job, Decision('none', (), '新候选', ('s:2',)), now=NOW, fault=fail)
+                self.assertEqual(saved_state(), before)
+
+        self.assertTrue(self.store.finish_job(
+            job, Decision('none', (), '新候选', ('s:2',)), now=NOW))
+        meeting, jobs, replies = saved_state()
+        self.assertEqual(meeting, (2, 'active'))
+        self.assertEqual(jobs[-1][1], 'complete')
+        self.assertEqual(replies[0], (old_uuid, 'cancelled'))
+        self.assertEqual(replies[1][1], 'pending')
+
+    def test_finish_job_rejects_unknown_persisted_state_without_writes(self):
+        self.store.ingest('m1', [delivery()])
+        job = self.store.prepare_job('m1', self.settings, 'role-v1', now=NOW, joined_at=NOW-10)
+        self.store.db.execute('UPDATE jobs SET state=\'unexpected\' WHERE job_id=?', (job['job_id'],))
+        with self.assertRaisesRegex(StorageError, 'invalid adviser job state'):
+            self.store.finish_job(job, Decision('none', (), '候选', ('s:1',)), now=NOW)
+        self.assertEqual(
+            self.store.db.execute('SELECT state FROM jobs WHERE job_id=?', (job['job_id'],)).fetchone()[0],
+            'unexpected',
+        )
+        self.assertEqual(self.store.reply_statistics('m1')['pending_replies'], 0)
+
     def test_context_budget_keeps_whole_sentences_and_deletion_removes_jobs(self):
         self.store.ingest('m1', [delivery(text='x'*1000), delivery(2,'s:2',text='y'*1000)])
         limited = replace(self.settings, context_characters=2000)
