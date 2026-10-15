@@ -114,8 +114,11 @@ def load_config(path: Path = DEFAULT_CONFIG) -> Configuration:
     if set(llm) - set(LLMSettings.__dataclass_fields__):
         raise ConfigError('unknown llm configuration fields')
     backend = string(llm, 'backend', 'rule')
-    if backend not in ('rule', 'codex'):
-        raise ConfigError('llm.backend must be rule or codex')
+    if backend not in ('rule', 'codex', 'opencode'):
+        raise ConfigError('llm.backend must be rule, codex or opencode')
+    opencode_model = string(llm, 'opencode_model', 'zai-coding-plan/glm-5.3', required=True)
+    if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+',opencode_model):
+        raise ConfigError('llm.opencode_model must be provider/model')
     role_file = string(llm, 'role_file')
     role_path = Path(role_file) if role_file else None
     if role_path and not role_path.is_absolute():
@@ -129,7 +132,8 @@ def load_config(path: Path = DEFAULT_CONFIG) -> Configuration:
         batch_seconds=number(llm, 'batch_seconds', 2, 0, 30),
         context_characters=number(llm, 'context_characters', 30000, 2000, 100000, True),
         freshness_seconds=number(llm, 'freshness_seconds', 120, 5, 3600, True),
-        reply_interval_seconds=number(llm, 'reply_interval_seconds', 10, 0, 300), introduction=introduction)
+        reply_interval_seconds=number(llm, 'reply_interval_seconds', 10, 0, 300), introduction=introduction,
+        opencode_executable=string(llm,'opencode_executable','opencode',required=True),opencode_model=opencode_model)
     context = section('meeting_context')
     if set(context) - set(MeetingContextSettings.__dataclass_fields__):
         raise ConfigError('unknown meeting_context configuration fields')

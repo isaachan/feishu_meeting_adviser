@@ -10,7 +10,7 @@ from .client import ApiError, StopRequested
 from .config import file_fingerprint
 from .diagnostics import sanitize
 from .lifecycle import FileLock, LifecycleError, LockBusy
-from .llm import CodexBackend, ModelError, load_role
+from .llm import create_backend, ModelError, load_role
 from .maintenance import Maintenance
 from .reply_sender import introduce, send_saved_reply
 from .models import digest
@@ -40,7 +40,10 @@ class AdviserRunner:
         self.data.ensure_meeting(self.mid)
         self.maintenance = Maintenance(source, self.config)
         self.lock = FileLock(self.config.data_directory / 'locks' / 'adviser.lock')
-        self.backend = backend or CodexBackend(self.settings, self.config.data_directory / 'model_runtime', stop_event=self.stop_event)
+        runtime = self.config.data_directory / 'model_runtime'
+        if self.settings.backend == 'opencode':
+            runtime = runtime / 'opencode' / digest(self.mid)
+        self.backend = backend or create_backend(self.settings, runtime, stop_event=self.stop_event)
         self.worker = None
         self.results = queue.Queue(maxsize=1)
         self.batch_due = None
@@ -155,7 +158,7 @@ class AdviserRunner:
         self.data.finish_job(job, decision, now=self.clock(), settings=self.settings,
                              joined_at=self.session['joined_at'], bot_id=self.session.get('bot_user_id'))
         self.decisions += 1
-        self.diagnose(self._model_metadata() | {'kind':'model','backend':'codex','model_ms':elapsed,'decision_saved':True,
+        self.diagnose(self._model_metadata() | {'kind':'model','backend':self.settings.backend,'model_ms':elapsed,'decision_saved':True,
                        'participation':self.data.meeting(self.mid)['participation']})
 
     def _model_metadata(self):
@@ -194,7 +197,7 @@ class AdviserRunner:
                 if error:
                     self.data.fail_job(job, error, retry_at=self.clock()+self.config.cooldown_seconds)
                     self.model_failure = error
-                    self.diagnose(self._model_metadata() | {'kind':'model','error_kind':error,'model_ms':elapsed})
+                    self.diagnose(self._model_metadata() | {'kind':'model','backend':self.settings.backend,'error_kind':error,'model_ms':elapsed})
                 else:
                     try:
                         self._finish_job(job, decision, elapsed)
@@ -207,7 +210,7 @@ class AdviserRunner:
                 self.guard()
                 job = self.data.prepare_job(self.mid, self.settings, self.role_version,
                     now=self.clock(), joined_at=self.session['joined_at'], bot_id=self.session.get('bot_user_id'),
-                    role_characters=len(self.role))
+                    role_characters=len(self.role)+getattr(self.backend,'context_overhead_characters',0))
             if job:
                 self._start_job(job)
             self.batch_due = None
@@ -220,8 +223,9 @@ class AdviserRunner:
         stage = self._model_metadata().get('model_stage')
         live = {'model_stage': stage} if isinstance(stage, str) and stage in {
             'startup','initialize','account_read','mcp_discovery','thread_start',
-            'mcp_verify','turn_start','generation','thread_cleanup'} else {}
-        return {'backend': 'codex', 'participation': meeting['participation'],
+            'mcp_verify','turn_start','generation','thread_cleanup','server_start','server_verify',
+            'session_start','session_cleanup'} else {}
+        return {'backend': self.settings.backend, 'participation': meeting['participation'],
                 'model_state': 'running' if self.worker else 'waiting' if meeting['generation']>meeting['decided_generation'] else 'idle',
                 'model_error': meeting['error'], 'offered': self.offered, 'newly_persisted': self.persisted,
                 'decisions': self.decisions, 'replied': self.replied,

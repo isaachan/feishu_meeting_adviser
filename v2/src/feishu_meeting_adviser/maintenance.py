@@ -20,11 +20,14 @@ class Maintenance:
     def lock(self):
         return FileLock(self.config.data_directory / 'locks' / 'maintenance.lock')
 
-    def _clean_consumer_copies(self):
+    def _clean_consumer_copies(self, *, strict_runtime=False):
         identities = {r[0] for r in self.store.db.execute('SELECT identity FROM tombstones')}
         if not identities:
             return
         ContentPreviews.clean(self.config.data_directory/'content_previews',identities)
+        from .opencode_backend import clean_runtime
+        for identity in identities:
+            clean_runtime(self.config.data_directory/'model_runtime'/'opencode'/identity,strict=strict_runtime)
         for path in (self.config.data_directory / 'fake_consumers').glob('*.sqlite3'):
             consumer = DurableFakeConsumer(path, max_database_bytes=self.config.database_capacity_bytes)
             try:
@@ -79,4 +82,4 @@ class Maintenance:
     def delete_meeting(self, meeting_id):
         with FileLock(self.config.data_directory / 'locks' / 'adviser.lock'), self.lock():
             self.store.forget_meeting(meeting_id, at=utc_now(self.clock))
-            self._clean_consumer_copies()
+            self._clean_consumer_copies(strict_runtime=True)

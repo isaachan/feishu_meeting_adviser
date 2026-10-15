@@ -41,8 +41,8 @@ def parser():
     consume = commands.add_parser('consume', help='consume with the configured model backend or the fixed test rule')
     consume.add_argument('--consumer')
     consume.add_argument('--limit', type=int, default=100)
-    consume.add_argument('--backend', choices=('codex','rule'), help='override llm.backend for this invocation')
-    consume.add_argument('--watch', action='store_true', help='continuously consume and decide using Codex; Ctrl-C stops the consumer only')
+    consume.add_argument('--backend', choices=('codex','opencode','rule'), help='override llm.backend for this invocation')
+    consume.add_argument('--watch', action='store_true', help='continuously consume and decide; Ctrl-C stops the consumer only')
     reset = commands.add_parser('reset-session', help='reset stale/uncertain session after manually verifying bot absence')
     reset.add_argument('--confirmed-bot-left', action='store_true', required=True)
     resolve = commands.add_parser('resolve-conflict', help='explicitly accept a stored candidate after local review')
@@ -71,7 +71,7 @@ def main(argv=None):
         if args.command == 'consume' and args.backend:
             config = replace(config,llm=replace(config.llm,backend=args.backend))
         if args.command in ('status','consume'):
-            args.consumer = args.consumer or ('adviser' if config.llm.backend=='codex' else 'fake-qa')
+            args.consumer = args.consumer or ('adviser' if config.llm.backend in ('codex','opencode') else 'fake-qa')
         store = Store(config.data_directory / 'source.sqlite3', max_payload_bytes=config.content_capacity_bytes,
                       max_database_bytes=config.database_capacity_bytes)
         diagnostics = Diagnostics(config.data_directory / 'diagnostics', max_bytes=config.diagnostic_bytes,
@@ -81,7 +81,7 @@ def main(argv=None):
         manager = SessionManager(store, config, client)
         if args.command == 'join':
             manager.join()
-            if config.llm.backend=='codex' and config.llm.introduction:
+            if config.llm.backend in ('codex','opencode') and config.llm.introduction:
                 with FileLock(config.data_directory / 'locks' / 'adviser.lock'),maintenance.lock():
                     data = AdviserStore(config.data_directory / 'adviser.sqlite3',
                         max_database_bytes=config.database_capacity_bytes,max_payload_bytes=config.content_capacity_bytes)
@@ -149,7 +149,7 @@ def main(argv=None):
                     finally:
                         data.close()
             print(json.dumps(result))
-        elif args.command == 'consume' and config.llm.backend == 'codex':
+        elif args.command == 'consume' and config.llm.backend in ('codex','opencode'):
             adviser = AdviserRunner(store,manager,consumer_id=args.consumer,limit=args.limit,diagnose=diagnostics.write)
             previous = {}
             if threading.current_thread() is threading.main_thread():
@@ -157,7 +157,7 @@ def main(argv=None):
                     previous[signum] = signal.getsignal(signum)
                     signal.signal(signum,lambda *_: adviser.stop_event.set())
             try:
-                print('Consuming with Codex subscription; stopping does not stop collect or leave the meeting.',file=sys.stderr)
+                print(f'Consuming with {config.llm.backend}; stopping does not stop collect or leave the meeting.',file=sys.stderr)
                 summary = adviser.run(watch=args.watch,notify=(lambda value: print(json.dumps(value),flush=True)) if args.watch else None)
                 if not args.watch:
                     print(json.dumps(summary))
@@ -170,7 +170,7 @@ def main(argv=None):
                     signal.signal(signum,handler)
         elif args.command == 'consume':
             if args.watch:
-                raise ConfigError('consume --watch requires --backend codex or llm.backend: codex')
+                raise ConfigError('consume --watch requires llm.backend or --backend codex/opencode')
             session = manager.saved_meeting()
             with maintenance.lock():
                 rows = store.read(session['meeting_id'], args.consumer, limit=args.limit)

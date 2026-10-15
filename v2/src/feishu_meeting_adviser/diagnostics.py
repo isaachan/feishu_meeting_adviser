@@ -13,7 +13,7 @@ from .llm import MODEL_ERRORS
 KINDS = {'page','error','health','maintenance','model','reply'}
 TEXT_FIELDS = {
     'scan_mode': {'live','initial_replay','recovery_backfill'},
-    'backend': {'codex','rule'},
+    'backend': {'codex','opencode','rule'},
     'participation': {'active','paused'},
     'state': {'collecting','recovering','incomplete','action_required','stopped','ended','not_started'},
     'error_kind': {'network','rate_limit','server','token_invalid','permission_or_admission_denied',
@@ -28,7 +28,8 @@ TEXT_FIELDS = {
 }
 TEXT_FIELDS['error_kind'] |= MODEL_ERRORS | {'sender_interrupted','reply_expired_or_revised'}
 TEXT_FIELDS['model_stage'] = {'startup','initialize','account_read','mcp_discovery','thread_start',
-                             'mcp_verify','turn_start','generation','thread_cleanup'}
+                             'mcp_verify','turn_start','generation','thread_cleanup','server_start',
+                             'server_verify','session_start','session_cleanup'}
 TEXT_FIELDS['reasoning_effort'] = {'none','minimal','low','medium','high','xhigh'}
 NUMBER_FIELDS = {'event_count','unknown_times','identity_degraded','request_ms','processing_ms','query_start','query_end',
                  'http_status','code','retry_after','pending','content_bytes','database_bytes','risk_count',
@@ -36,7 +37,8 @@ NUMBER_FIELDS = {'event_count','unknown_times','identity_degraded','request_ms',
                  'pruned_deliveries','expired_meetings'}
 NUMBER_FIELDS |= {'model_ms','pending_model_inputs','pending_replies','uncertain_replies','rejected_replies'}
 NUMBER_FIELDS |= {'model_stage_ms','mcp_inherited_servers','mcp_servers','mcp_catalog_tools',
-                  'mcp_disabled_servers','mcp_unverified_servers','mcp_new_servers','mcp_isolation_restarts'}
+                  'mcp_disabled_servers','mcp_unverified_servers','mcp_new_servers','mcp_isolation_restarts',
+                  'opencode_catalog_tools','opencode_polls','model_input_tokens','model_output_tokens','model_reasoning_tokens'}
 BOOL_FIELDS = {'has_more','checkpoint_advanced','decision_saved','reply_confirmed'}
 ENUM_COUNTERS = {'kinds': {'transcript_received','participant_joined','participant_left','chat_received','other'},
                  'counts': {'added','updated','conflict','duplicates','older'}}

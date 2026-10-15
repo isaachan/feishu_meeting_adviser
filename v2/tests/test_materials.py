@@ -4,6 +4,7 @@ from pathlib import Path
 import tempfile
 import time
 import unittest
+import sys
 
 from feishu_meeting_adviser.adviser import AdviserRunner
 from feishu_meeting_adviser.client import ApiError, ErrorKind
@@ -14,6 +15,7 @@ from feishu_meeting_adviser.llm import Decision
 from feishu_meeting_adviser.maintenance import Maintenance
 from feishu_meeting_adviser.materials import ContentPreviews, MaterialError, load_materials
 from feishu_meeting_adviser.models import Caption, digest
+from feishu_meeting_adviser.opencode_backend import OpenCodeBackend
 from feishu_meeting_adviser.storage import Store, encode
 from test_adviser import FakeBackend
 from test_adviser_store import NOW
@@ -187,6 +189,31 @@ class MaterialsTests(unittest.TestCase):
         self.assertEqual(runner.data.meeting(MID)['material_state'],'unavailable')
         self.assertIsNone(runner.data.next_reply(MID,now=NOW))
         self.assertTrue(any(item.get('status')=='unavailable' for item in self.previews))
+
+    def test_opencode_http_transport_receives_materials_and_sends_one_durable_reply(self):
+        self.commit_question()
+        self.config=replace(self.config,llm=replace(self.config.llm,backend='opencode',timeout_seconds=5))
+        self.manager.config=self.config
+        capture=Path(self.temp.name)/'http-capture.jsonl'
+        peer=Path(__file__).parent/'helpers/fake_opencode_server.py'
+        runtime=self.config.data_directory/'model_runtime'/'opencode'/digest(MID)
+        backend=OpenCodeBackend(self.config.llm,runtime,command=[sys.executable,str(peer),'reply',str(capture)])
+        runner=AdviserRunner(self.source,self.manager,backend=backend,clock=lambda:NOW,
+            material_client=self.materials,preview_display=self.previews.append)
+        self.runners.append(runner)
+        self.assertEqual(runner.run()['replied'],1)
+        records=[json.loads(line) for line in capture.read_text().splitlines()]
+        payload=next(r['payload'] for r in records if r['path'].endswith('prompt_async'))
+        snapshot=json.loads(payload['parts'][0]['text'])
+        self.assertEqual(snapshot['meeting_context']['documents'][0]['text'],self.materials.text)
+        self.assertEqual(snapshot['fresh_input_keys'],['s:1'])
+        runner.run()
+        self.assertEqual(len(self.sent),1)
+        runner.close();self.runners.remove(runner)
+        abandoned=runtime/'run-abandoned';abandoned.mkdir(mode=0o700)
+        (abandoned/'synthetic.db').write_text('synthetic material body')
+        Maintenance(self.source,self.config).delete_meeting(MID)
+        self.assertFalse(abandoned.exists())
 
     def test_revoked_document_access_does_not_reuse_cached_materials_after_restart(self):
         runner, _ = self.runner()

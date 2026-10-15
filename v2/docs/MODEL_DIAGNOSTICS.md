@@ -71,3 +71,7 @@ model_state=waiting 时，model_stage 保留上一次调用的阶段；model_err
 用户报告持续 model_timeout。本机新增四条记录均已到 generation，整次约 90 秒，生成阶段约 75.7–87.7 秒；MCP 未验证服务数均为 0，其中三次经过一次新服务重建。这说明这些调用已通过工具隔离，等待模型生成至整次期限仍未完成；不能将其归为日程读取失败或前一次 MCP 清单竞态。尚无这些问题的成功会中回答证据。
 
 用户要求先保存当前 2.5 / OAuth / 隔离修复及角色修改，再新增 opencode + GLM-5.3 后端。后端接入与新验证另行记录，既有 Codex 入口保留。
+
+## OpenCode 后端诊断
+
+新增 backend=opencode 以及 server_start / server_verify / session_start / session_cleanup 阶段；turn_start / generation 含义沿用。opencode_polls 为本次消息查询次数，model_input_tokens / model_output_tokens / model_reasoning_tokens 为供应商返回的计数；mcp_servers=0 表示独立服务核对时无 MCP。不能把工具目录大小当作可调用工具数，实际由 agent deny 规则和本次 tools=false 禁用。错误仍用安全分类，包括缺少 provider 登录的 model_authentication_required。已完成真实 GLM 及假发送链路验证，证据和性能边界见 [OPENCODE_GLM](OPENCODE_GLM.md)。

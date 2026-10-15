@@ -26,11 +26,13 @@ storage:
   diagnostic_bytes: 1000000
   diagnostic_backups: 3
 
-# 阶段 2：旧配置省略 llm 时保留固定规则，使用 Codex 时选择 codex。
+# 阶段 2：省略 llm 时保留固定规则；真实模型支持 codex / opencode。
 llm:
   backend: codex
   executable: codex
   model: ""                      # 空值沿用当前 Codex 默认模型
+  opencode_executable: opencode
+  opencode_model: zai-coding-plan/glm-5.3 # backend: opencode 时使用；复用 opencode 本机登录
   role_file: ""                  # 空值使用包内 meeting_adviser.md；可设本机 Markdown 路径
   timeout_seconds: 90
   batch_seconds: 2

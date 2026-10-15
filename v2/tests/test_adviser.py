@@ -189,13 +189,31 @@ class AdviserTests(unittest.TestCase):
         self.path.write_text(self.path.read_text()+'llm:\n  batch_seconds: 0\n  introduction: false\n')
         output=io.StringIO()
         with patch('feishu_meeting_adviser.__main__.FeishuClient',return_value=self.api), \
-             patch('feishu_meeting_adviser.adviser.CodexBackend',return_value=self.backend), \
+             patch('feishu_meeting_adviser.adviser.create_backend',return_value=self.backend), \
              redirect_stdout(output),redirect_stderr(io.StringIO()):
             result=main(['--config',str(self.path),'consume','--backend','codex'])
         self.assertEqual(result,0)
         self.assertEqual(json.loads(output.getvalue())['replied'],1)
         self.assertEqual(self.source.backlog(MID,'adviser'),0)
         self.assertGreater(self.source.backlog(MID,'fake-qa'),0)
+
+    def test_cli_opencode_backend_uses_the_same_durable_adviser_consumer(self):
+        self.backend.reply=Decision('none',(),'合成 GLM CLI 回复',('s:1',))
+        stamp=utc_now()
+        self.commit(replace(self.caption,event_time=stamp,received_at=stamp))
+        self.path.write_text(self.path.read_text()+'llm:\n  batch_seconds: 0\n  introduction: false\n')
+        output=io.StringIO()
+        with patch('feishu_meeting_adviser.__main__.FeishuClient',return_value=self.api), \
+             patch('feishu_meeting_adviser.adviser.create_backend',return_value=self.backend) as factory, \
+             redirect_stdout(output),redirect_stderr(io.StringIO()):
+            result=main(['--config',str(self.path),'consume','--backend','opencode'])
+        self.assertEqual(result,0)
+        self.assertEqual(factory.call_args.args[0].backend,'opencode')
+        summary=json.loads(output.getvalue())
+        self.assertEqual(summary['backend'],'opencode')
+        self.assertEqual(summary['replied'],1)
+        self.assertEqual(self.source.backlog(MID,'adviser'),0)
+        self.assertEqual(len(self.sent),1)
 
     def test_any_participant_can_pause_and_resume_and_paused_model_keeps_listening(self):
         self.backend.reply=Decision('pause',('s:1',),None,())

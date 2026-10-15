@@ -58,7 +58,7 @@ def backend(settings,workdir,*,stop_event):
         command=[sys.executable,str(peer),'delay' if action=='watch' else 'reply',str(root/'peer-pid')])
 
 with patch('feishu_meeting_adviser.__main__.FeishuClient',return_value=api), \
-     patch('feishu_meeting_adviser.adviser.CodexBackend',side_effect=backend):
+     patch('feishu_meeting_adviser.adviser.create_backend',side_effect=backend):
     args=['--config',str(path),'consume']
     if action=='watch':
         args.append('--watch')

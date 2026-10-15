@@ -1,6 +1,6 @@
 # v2 飞书会议会参谋
 
-产品使用飞书官方会议字幕，持续采集并保存带说话人的输入，通过 **Codex app-server 与 ChatGPT 订阅**自主判断发言、沉默和自然语言控制意图，回答一次完整发送到会议内。产品代码在 `src/feishu_meeting_adviser/`，旧实验在 [reference/spike](reference/spike/README.md)，运行时互不依赖。
+产品使用飞书官方会议字幕，持续采集并保存带说话人的输入，通过 **Codex + ChatGPT 订阅，或 OpenCode + GLM-5.3** 自主判断发言、沉默和自然语言控制意图，回答一次完整发送到会议内。产品代码在 `src/feishu_meeting_adviser/`，旧实验在 [reference/spike](reference/spike/README.md)，运行时互不依赖。
 
 TODO 2.5 已实现：显式绑定日程实例，consume 启动时读取一次日程描述和关联 Docx / Wiki 中的 Docx，作为带来源、版本和省略标记的会议背景。材料不会自行触发回答，更新后重启 consume 才重新读取。用户 OAuth 只用于材料读取，VC 入会、字幕和会中发送继续使用应用身份。操作见 [USER_OAUTH](docs/USER_OAUTH.md)、[只读探测](docs/CONTEXT_PROBE.md) 和 [2.5 验证记录](docs/STAGE2_CALENDAR_VALIDATION.md)。
 
@@ -8,7 +8,7 @@ TODO 2.5 已实现：显式绑定日程实例，consume 启动时读取一次日
 
 ## 安装与配置
 
-Python 3.11+，本机 POSIX 文件系统。进入 `v2/`，使用已有虚拟环境安装产品：
+Python 3.11+，本机 POSIX 文件系统。模型后端选择与切换见下文；OpenCode 设置及实测见 [OPENCODE_GLM](docs/OPENCODE_GLM.md)。进入 `v2/`，使用已有虚拟环境安装产品：
 
 ```bash
 python3 -m pip install -e .
@@ -29,6 +29,25 @@ llm:
 默认沿用 Codex 当前模型；本机合成调用使用 `gpt-6-astra`。可设置 `llm.model`；`llm.role_file` 为空时加载包内 [meeting_adviser.md](src/feishu_meeting_adviser/meeting_adviser.md)，也可指定本机 Markdown 路径。配置或角色文件更改后需重启消费者，新角色会重新检查待发候选。
 
 默认批次等待 2 秒、模型上下文预算 30000 字符（含角色、材料、字幕及证据）、有效发言时间窗口 120 秒、两次普通回复至少间隔 10 秒、模型整次调用超时 90 秒。其余参数见配置示例。每次决定使用有界上下文，不承诺完整长会议记忆；超过窗口的资料仍保存在本机供核对。
+
+## 使用 OpenCode + GLM-5.3
+
+本机已有 OpenCode 登录时，可以在终端 B 直接切换：
+
+```bash
+.venv/bin/python -m feishu_meeting_adviser consume --backend opencode --watch
+```
+
+先停止旧 consume，同一数据目录不同时运行两个模型消费者。终端 A 的 collect 可以继续运行。默认模型为 `zai-coding-plan/glm-5.3`，不自动回退到其他模型或 Codex。希望 join / consume 默认都使用 OpenCode 时，在已有配置的 llm 块中设置：
+
+```yaml
+llm:
+  backend: opencode
+  opencode_executable: opencode
+  opencode_model: zai-coding-plan/glm-5.3
+```
+
+`llm.executable / llm.model` 继续仅用于 Codex；两组后端参数独立。角色文件、日程绑定、字幕消费、任务恢复和回复发送逻辑共用。GLM 使用 OpenCode 本机已登录的对应 provider；缺少登录时先用 `opencode auth login`，选择 Z.AI Coding Plan。凭据留在本机，不填入会议 YAML 或聊天。详细保存、超时和验证边界见 [OPENCODE_GLM](docs/OPENCODE_GLM.md)。
 
 ## 绑定日程材料
 
@@ -108,7 +127,7 @@ python3 -m feishu_meeting_adviser resolve-reply --uuid <UUID> --outcome cancel
 
 ## 资料与测试
 
-字幕、上下文、任务和回复保存在私有 `data/`，诊断不记录正文或凭据。Codex 使用 ephemeral 线程，模型工具、MCP、插件和 hooks 被禁用；恢复以产品数据库为准。停止两个进程后可用 `delete-meeting-data --confirm` 删除当前会议的托管资料，bot 控制会话保留以便离会。保存期限、预算、清理边界及删除说明见 [DATA_OPERATIONS](docs/DATA_OPERATIONS.md)。
+字幕、上下文、任务和回复保存在私有 `data/`，诊断不记录正文或凭据。Codex 使用 ephemeral 线程；OpenCode 使用独立临时服务/会话并在每次调用后清理。模型外部工具、MCP 及继承插件被禁用；恢复以产品数据库为准。停止两个进程后可用 `delete-meeting-data --confirm` 删除当前会议的托管资料，bot 控制会话保留以便离会。保存期限、预算、清理边界及删除说明见 [DATA_OPERATIONS](docs/DATA_OPERATIONS.md)。
 
 固定链路规则显式使用 `consume --backend rule`：收到“项目截止日期是明天”时发送“{speaker}，项目截止日期是今天。”；它只用于测试，不与模型消费者同时运行。正式模型依据实际上下文，不沿用这条固定更正。
 

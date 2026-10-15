@@ -1,4 +1,4 @@
-"""Bounded Codex app-server transport. Model text never executes product actions."""
+"""Model decision contract and bounded Codex transport."""
 from collections import deque
 from dataclasses import dataclass
 from importlib.resources import files
@@ -17,7 +17,7 @@ from .models import digest
 from .storage import private_directory
 
 
-MODEL_ERRORS = {'model_context_budget','model_invalid_decision','model_invalid_evidence','model_role_unavailable','model_unavailable',
+MODEL_ERRORS = {'model_authentication_required','model_context_budget','model_invalid_decision','model_invalid_evidence','model_role_unavailable','model_unavailable',
                 'model_disconnected','model_protocol','model_tool_request','model_stopped','model_timeout',
                 'model_failed','model_subscription_required','model_tools_unavailable','unknown_model_error'}
 
@@ -40,6 +40,8 @@ class LLMSettings:
     freshness_seconds: int = 120
     reply_interval_seconds: float = 10
     introduction: bool = True
+    opencode_executable: str = 'opencode'
+    opencode_model: str = 'zai-coding-plan/glm-5.3'
 
 
 DECISION_SCHEMA = {
@@ -111,6 +113,15 @@ def load_role(settings):
 class ModelBackend(Protocol):
     def decide(self, snapshot: dict, role: str) -> Decision: ...
     def close(self) -> None: ...
+
+
+def create_backend(settings, workdir, *, stop_event=None):
+    if settings.backend == 'opencode':
+        from .opencode_backend import OpenCodeBackend
+        return OpenCodeBackend(settings, workdir, stop_event=stop_event)
+    if settings.backend == 'codex':
+        return CodexBackend(settings, workdir, stop_event=stop_event)
+    raise ModelError('model_unavailable')
 
 
 class CodexBackend:
