@@ -21,7 +21,8 @@ from .storage import StorageError
 
 class AdviserRunner:
     def __init__(self, source, manager, *, backend=None, stop_event=None, clock=time.time, consumer_id='adviser', limit=100, diagnose=None,
-                 material_client=None, preview_display=None):
+                 material_client=None, preview_display=None, material_loader=load_materials,
+                 model_input_observer=None, decision_observer=None):
         self.source, self.manager = source, manager
         self.config, self.settings = manager.config, manager.config.llm
         self.session = manager.saved_meeting(require_joined=True)
@@ -53,6 +54,9 @@ class AdviserRunner:
         self.material_subject = None
         self.material_client, self.preview_display = material_client, preview_display
         self.material_oauth = getattr(material_client,'oauth_manager',None)
+        self.material_loader = material_loader
+        self.model_input_observer = model_input_observer or (lambda snapshot:None)
+        self.decision_observer = decision_observer or (lambda decision:None)
 
     def _ensure_materials(self):
         if self.material_loaded:
@@ -69,7 +73,7 @@ class AdviserRunner:
         logger = ContentPreviews(self.config.data_directory/'content_previews',self.mid,
             max_bytes=settings.preview_bytes,backups=settings.preview_backups,display=self.preview_display)
         try:
-            snapshot = load_materials(self.config,self.session,client=self.material_client,
+            snapshot = self.material_loader(self.config,self.session,client=self.material_client,
                 emit=logger.write,stop_event=self.stop_event,clock=self.clock)
         except (ApiError,OAuthError,MaterialError,StorageError,OSError,ValueError,TypeError,KeyError) as exc:
             reason = exc.kind.value if isinstance(exc,ApiError) else exc.reason if isinstance(exc,OAuthError) else 'material_load_failed'
@@ -142,6 +146,7 @@ class AdviserRunner:
 
     def _start_job(self, job):
         self.data.mark_job_running(job['job_id'])
+        self.model_input_observer(json.loads(job['snapshot']))
         def work():
             started = time.monotonic()
             try:
@@ -155,6 +160,7 @@ class AdviserRunner:
         self.worker.start()
 
     def _finish_job(self, job, decision, elapsed):
+        self.decision_observer(decision)
         self.data.finish_job(job, decision, now=self.clock(), settings=self.settings,
                              joined_at=self.session['joined_at'], bot_id=self.session.get('bot_user_id'))
         self.decisions += 1

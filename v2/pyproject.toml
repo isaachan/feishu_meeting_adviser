@@ -11,6 +11,7 @@ dependencies = ["PyYAML>=6.0,<7"]
 
 [project.scripts]
 meeting-transcripts = "feishu_meeting_adviser.__main__:main"
+meeting-adviser-harness = "meeting_adviser_harness.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

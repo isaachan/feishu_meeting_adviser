@@ -60,6 +60,8 @@ class AdviserTests(unittest.TestCase):
         self.manager.join()
         self.source.ensure_meeting(MID,{})
         self.backend = FakeBackend()
+        self.model_inputs = []
+        self.model_decisions = []
         self.sent = []
         self.send_failure = None
         def send(mid,text,message_uuid):
@@ -67,7 +69,8 @@ class AdviserTests(unittest.TestCase):
             if self.send_failure:
                 raise self.send_failure
         self.api.send_message = send
-        self.runner = AdviserRunner(self.source, self.manager, backend=self.backend, clock=lambda:NOW)
+        self.runner = AdviserRunner(self.source, self.manager, backend=self.backend, clock=lambda:NOW,
+            model_input_observer=self.model_inputs.append,decision_observer=self.model_decisions.append)
         self.addCleanup(self.runner.close)
         self.caption = Caption(MID, 's:1', '合成会议发言', '2026-10-13T00:00:01Z',
                                event_time='2026-10-13T00:00:00Z', speaker_id='synthetic-speaker')
@@ -95,6 +98,15 @@ class AdviserTests(unittest.TestCase):
         self.finish()
         self.finish()
         self.assertEqual(len(self.backend.calls),2)
+
+    def test_harness_observers_see_the_actual_model_input_and_decision(self):
+        self.backend.reply = Decision('none',(), '合成回答',('s:1',))
+        self.commit(self.caption)
+        self.runner.step()
+        self.finish()
+        self.assertEqual(self.model_inputs,self.backend.calls)
+        self.assertEqual(self.model_decisions,[self.backend.reply])
+        self.assertEqual([item[1] for item in self.sent],['合成回答'])
 
     def test_ack_failure_replays_saved_inbox_without_duplicate_model_input(self):
         self.commit(self.caption)

@@ -97,6 +97,19 @@ python3 -m feishu_meeting_adviser leave
 
 重启先启动 `collect`，再启动 `consume`；输入、任务、暂停状态和发送记录从本机数据库恢复。同一数据目录只允许一个采集进程和一个模型消费者。采集的定期清理与模型消费共用维护锁，遇到短暂占用会等待，Ctrl-C 可中断等待。
 
+## 本地 LLM harness
+
+无需创建会议或真人发言，可以用独立的 `meeting_adviser_harness` 包测试角色、会议描述、在线文档背景和多人对话。它持续接收本地字幕，后台直接运行产品的 `AdviserRunner`；上下文预算、批处理、模型调用、证据检查、过期和发送前复核与正式 consume 共用，只有日程、字幕和发送三个外部适配器改为本地文件、终端输入和终端输出。
+
+```bash
+python3 -m meeting_adviser_harness \
+  --description-file ./description.md \
+  --role-file ./meeting_advisor.md \
+  --backend opencode
+```
+
+输入 `张三: 第一段发言`、`李四: 补充意见` 模拟多人；也可用 `/speaker 张三` 后连续输入。`/context` 显示最近一次实际模型输入，`/reload` 重新读取角色、描述及其文档但保留本轮字幕，`/reset` 开始新的模拟会议，`/quit` 退出。模型运行时仍可继续输入，新字幕会按正式产品规则影响待发送回答。完整说明和 JSONL 回放格式见 [HARNESS](docs/HARNESS.md)。
+
 ## 查看状态与处理异常
 
 ```bash
@@ -137,4 +150,4 @@ python3 -m feishu_meeting_adviser resolve-reply --uuid <UUID> --outcome cancel
 python3 -m unittest discover -s tests -v
 ```
 
-自动化测试使用合成输入、假模型与假飞书，不调用真实会议。已另行验证真实订阅的沉默、暂停/恢复和合成问题回答；实际会中展示和用户对话脚本验证随相应功能项进行，20 秒 P95 仍为后续优化目标。
+自动化测试使用合成输入、假模型与假飞书，不调用真实会议。harness 可调用所选真实模型和已授权的飞书文档，但不会加入会议或发送飞书消息。已另行验证真实订阅的沉默、暂停/恢复和合成问题回答；实际会中展示和用户对话脚本验证随相应功能项进行，20 秒 P95 仍为后续优化目标。

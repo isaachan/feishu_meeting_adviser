@@ -1,0 +1,368 @@
+"""Interactive local input for the production adviser decision loop."""
+from argparse import ArgumentParser
+from dataclasses import replace
+from datetime import datetime, timezone
+import json
+from pathlib import Path
+import re
+import signal
+import sys
+import threading
+import time
+from uuid import uuid4
+
+from feishu_meeting_adviser.adviser import AdviserRunner
+from feishu_meeting_adviser.client import ApiError, StopRequested
+from feishu_meeting_adviser.config import ConfigError, DEFAULT_CONFIG, load_config
+from feishu_meeting_adviser.context_probe import UserContextClient, description_references
+from feishu_meeting_adviser.lifecycle import LifecycleError
+from feishu_meeting_adviser.materials import MaterialError, load_materials
+from feishu_meeting_adviser.models import Caption, SourceState, Status, digest
+from feishu_meeting_adviser.oauth import OAuthError, OAuthManager
+from feishu_meeting_adviser.storage import StorageError, Store, private_directory
+
+
+def _read_text(path: Path, label: str, maximum: int = 1_000_000) -> str:
+    try:
+        if path.is_symlink() or not path.is_file():
+            raise OSError()
+        raw = path.read_bytes()
+        if not 1 <= len(raw) <= maximum:
+            raise OSError()
+        value = raw.decode('utf-8')
+        if not value.strip():
+            raise OSError()
+        return value
+    except (OSError, UnicodeDecodeError):
+        raise ConfigError(f'{label} must be a non-empty local UTF-8 file') from None
+
+
+class _MaterialClient:
+    """Supplies a local event while delegating referenced document reads to user OAuth."""
+    def __init__(self, config, oauth_directory: Path, description: str, session: dict, stop_event):
+        self.config, self.description, self.session = config, description, session
+        self.timeout = config.timeout_seconds
+        self.oauth_manager = None
+        self.delegate = None
+        if description_references(description):
+            self.oauth_manager = OAuthManager(config.credentials, oauth_directory)
+            self.delegate = UserContextClient(config.credentials, oauth_manager=self.oauth_manager,
+                timeout=config.timeout_seconds, request_seconds=config.request_seconds,
+                wait=lambda seconds: stop_event.wait(seconds))
+
+    def event(self, calendar_id, event_id):
+        joined = int(self.session['joined_at'])
+        return {'event_id':event_id, 'status':'confirmed', 'summary':'Harness meeting materials',
+            'description':'', 'description_rich':self.description, 'attachments':[],
+            'vchat':{'meeting_url':'https://vc.feishu.cn/j/' + self.config.meeting_no},
+            'start_time':{'timestamp':str(joined - 60)}, 'end_time':{'timestamp':str(joined + 86400)}}
+
+    def _read(self, name, token):
+        if self.delegate is None:
+            raise MaterialError('document reference requires existing user OAuth authorization')
+        self.delegate.timeout = self.timeout
+        return getattr(self.delegate, name)(token)
+
+    def node(self, token):
+        return self._read('node', token)
+
+    def document(self, token):
+        return self._read('document', token)
+
+    def document_text(self, token):
+        return self._read('document_text', token)
+
+
+class _TerminalClient:
+    def __init__(self, display):
+        self.display = display
+
+    def send_message(self, meeting_id, text, message_uuid):
+        self.display({'kind':'reply', 'status':'allowed', 'text':text, 'uuid':message_uuid})
+
+
+class _HarnessManager:
+    def __init__(self, store, config, session, display):
+        self.store, self.config = store, config
+        self._session = session
+        self.client = _TerminalClient(display)
+
+    def session(self, store=None):
+        return dict(self._session)
+
+    def saved_meeting(self, *, require_joined=False):
+        return dict(self._session)
+
+
+class Harness:
+    def __init__(self, config_factory, description_file: Path, oauth_directory: Path, display=print):
+        self.config_factory = config_factory
+        self.description_file = description_file
+        self.oauth_directory = oauth_directory
+        self._write = display
+        self._output_lock = threading.Lock()
+        config = config_factory()
+        self.shutdown_timeout = config.llm.timeout_seconds + 10
+        self.root = config.data_directory
+        private_directory(self.root)
+        self.writer = Store(self.root / 'source.sqlite3', max_payload_bytes=config.content_capacity_bytes,
+            max_database_bytes=config.database_capacity_bytes)
+        self.speaker = '参会者 1'
+        self.counter = 0
+        self.runner = self.thread = self.stop_event = None
+        self.last_context = self.last_status = None
+        self.failure = None
+        self.ready = threading.Event()
+        self._state_lock = threading.Lock()
+        try:
+            self.start(new_meeting=True)
+        except BaseException:
+            self.writer.close()
+            raise
+
+    def display(self, record):
+        with self._output_lock:
+            self._write(json.dumps(record, ensure_ascii=False), flush=True)
+
+    def _session(self, mid):
+        now = int(time.time())
+        return {'phase':'joined', 'meeting_no':self.config_factory().meeting_no,
+            'meeting_id':mid, 'bot_user_id':'harness-bot', 'joined_at':now,
+            'join_instance':'harness-' + uuid4().hex, 'at':datetime.now(timezone.utc).isoformat()}
+
+    def start(self, *, new_meeting, mid=None):
+        if new_meeting:
+            mid = 'harness-' + uuid4().hex
+            self.session = self._session(mid)
+        self.mid = mid
+        self.writer.ensure_meeting(mid,{})
+        self.writer.publish_status(Status(mid,SourceState.COLLECTING,'harness_running',datetime.now(timezone.utc).isoformat()))
+        self.stop_event = threading.Event()
+        self.submitted_since_start = 0
+        self.ready.clear()
+        self.failure = None
+        self.thread = threading.Thread(target=self._run, name='meeting-adviser-harness', daemon=False)
+        self.thread.start()
+        if not self.ready.wait(10):
+            raise LifecycleError('harness consumer did not start')
+        if self.failure:
+            raise self.failure
+
+    def _run(self):
+        source = runner = None
+        try:
+            config = self.config_factory()
+            description = _read_text(self.description_file, 'description file')
+            source = Store(self.root / 'source.sqlite3', max_payload_bytes=config.content_capacity_bytes,
+                max_database_bytes=config.database_capacity_bytes)
+            manager = _HarnessManager(source,config,self.session,self.display)
+            client = _MaterialClient(config,self.oauth_directory,description,self.session,self.stop_event)
+            def material_loader(cfg, session, **kwargs):
+                return load_materials(cfg,session,client=client,emit=kwargs.get('emit'),
+                    stop_event=kwargs.get('stop_event'),clock=kwargs.get('clock',time.time))
+            def save_context(snapshot):
+                with self._state_lock:
+                    self.last_context = snapshot
+                self.display({'kind':'model_input', 'generation':snapshot.get('generation'),
+                    'fresh_input_keys':snapshot.get('fresh_input_keys',[]),
+                    'context_omitted':snapshot.get('context_omitted',False)})
+            def save_decision(decision):
+                self.display({'kind':'model_decision', **decision.to_dict()})
+            runner = AdviserRunner(source,manager,stop_event=self.stop_event,
+                material_client=client,material_loader=material_loader,preview_display=self.display,
+                model_input_observer=save_context,decision_observer=save_decision,
+                diagnose=lambda record:self.display({'kind':'diagnostic',**record}))
+            self.runner = runner
+            self.ready.set()
+            runner.run(watch=True,notify=self._status)
+        except BaseException as exc:
+            self.failure = exc
+            self.ready.set()
+            self.display({'kind':'harness_error','error':str(exc)})
+        finally:
+            if runner:
+                try:
+                    runner.close()
+                except BaseException as exc:
+                    self.failure = self.failure or exc
+                    self.display({'kind':'harness_error','error':str(exc)})
+            if source:
+                source.close()
+            self.runner = None
+
+    def _status(self, status):
+        with self._state_lock:
+            self.last_status = status
+        interesting = {key:status.get(key) for key in ('model_state','model_error','participation','material_state')}
+        self.display({'kind':'status',**interesting})
+
+    def submit(self, speaker: str, text: str):
+        if self.failure or not self.thread.is_alive():
+            raise LifecycleError('harness consumer is not running; inspect harness_error')
+        if not isinstance(speaker,str) or not 1 <= len(speaker.strip()) <= 80:
+            raise ValueError('speaker name must contain 1 to 80 characters')
+        if not isinstance(text,str) or not text.strip() or len(text.encode('utf-8')) > 100_000:
+            raise ValueError('caption text must contain 1 to 100000 UTF-8 bytes')
+        speaker, text = speaker.strip(), text.strip()
+        self.counter += 1
+        at = datetime.now(timezone.utc).isoformat()
+        key = f'harness:{self.counter}:{uuid4().hex}'
+        caption = Caption(self.mid,key,text,at,event_time=at,
+            speaker_id='speaker-' + digest(speaker)[:16],speaker_name=speaker)
+        self.submitted_since_start += 1
+        try:
+            self.writer.commit_page(self.mid,[caption],{'last':self.counter})
+        except BaseException:
+            self.submitted_since_start -= 1
+            raise
+        self.display({'kind':'caption','speaker':speaker,'text':text,'sentence_key':key})
+
+    def context(self):
+        with self._state_lock:
+            value = self.last_context
+        self.display({'kind':'context','status':'not_available'} if value is None else {'kind':'context','snapshot':value})
+
+    def restart(self, *, reset):
+        mid = None if reset else self.mid
+        self.stop()
+        if reset:
+            self.last_context = self.last_status = None
+            self.counter = 0
+        self.start(new_meeting=reset,mid=mid)
+        self.display({'kind':'reset' if reset else 'reload','status':'ready'})
+
+    def settled(self):
+        with self._state_lock:
+            status = dict(self.last_status or {})
+        return bool(status) and status.get('offered',0) >= self.submitted_since_start and (status.get('model_error') or
+            status.get('model_state') == 'idle' and status.get('pending_replies',0) == 0)
+
+    def stop(self):
+        if self.stop_event:
+            self.stop_event.set()
+        if self.thread and self.thread.is_alive():
+            self.thread.join(timeout=self.shutdown_timeout)
+        if self.thread and self.thread.is_alive():
+            raise LifecycleError('harness model worker did not stop')
+
+    def close(self):
+        try:
+            self.stop()
+        finally:
+            self.writer.close()
+
+
+_SPEAKER = re.compile(r'^\s*([^:：]{1,80})\s*[:：]\s*(.+)$')
+
+
+def _handle_line(harness: Harness, line: str):
+    line = line.strip()
+    if not line:
+        return True
+    if line == '/quit':
+        return False
+    if line == '/context':
+        harness.context()
+        return True
+    if line == '/reload':
+        harness.restart(reset=False)
+        return True
+    if line == '/reset':
+        harness.restart(reset=True)
+        return True
+    if line.startswith('/speaker '):
+        speaker = line[len('/speaker '):].strip()
+        if not speaker or len(speaker) > 80:
+            raise ValueError('speaker name must contain 1 to 80 characters')
+        harness.speaker = speaker
+        harness.display({'kind':'speaker','name':speaker})
+        return True
+    if line.startswith('/'):
+        raise ValueError('unknown command')
+    match = _SPEAKER.match(line)
+    speaker, text = (match.group(1).strip(),match.group(2).strip()) if match else (harness.speaker,line)
+    harness.submit(speaker,text)
+    return True
+
+
+def _parser():
+    parser = ArgumentParser(description='Exercise the production adviser loop with local simulated captions.')
+    parser.add_argument('--config',type=Path,default=DEFAULT_CONFIG)
+    parser.add_argument('--description-file',type=Path,required=True)
+    parser.add_argument('--role-file',type=Path,required=True)
+    parser.add_argument('--backend',choices=('codex','opencode'))
+    parser.add_argument('--data-dir',type=Path)
+    parser.add_argument('--script',type=Path,help='JSONL rows: speaker, text, optional delay_seconds')
+    return parser
+
+
+def main(argv=None):
+    args = _parser().parse_args(argv)
+    harness = None
+    try:
+        base = load_config(args.config)
+        description_file, role_file = args.description_file.absolute(), args.role_file.absolute()
+        _read_text(description_file,'description file')
+        _read_text(role_file,'role file',100_000)
+        data = (args.data_dir.absolute() if args.data_dir else base.data_directory / 'harness')
+        def config_factory():
+            current = load_config(args.config)
+            llm = replace(current.llm,role_file=role_file,introduction=False,
+                backend=args.backend or current.llm.backend)
+            if llm.backend not in ('codex','opencode'):
+                raise ConfigError('harness requires --backend codex or opencode')
+            context = replace(current.meeting_context,calendar_id='harness',event_id='harness',identity='user')
+            return replace(current,data_directory=data,llm=llm,meeting_context=context)
+        harness = Harness(config_factory,description_file,base.data_directory)
+        print('Harness ready. Enter “speaker: text”, or use /speaker, /context, /reload, /reset, /quit.',file=sys.stderr)
+        if args.script:
+            script = _read_text(args.script.absolute(),'script file')
+            for number,raw in enumerate(script.splitlines(),1):
+                if not raw.strip():
+                    continue
+                row = json.loads(raw)
+                if not isinstance(row,dict) or not isinstance(row.get('speaker'),str) or not isinstance(row.get('text'),str):
+                    raise ValueError(f'invalid script row {number}')
+                delay = row.get('delay_seconds',0)
+                if isinstance(delay,bool) or not isinstance(delay,(int,float)) or not 0 <= delay <= 3600:
+                    raise ValueError(f'invalid script delay at row {number}')
+                if harness.stop_event.wait(delay):
+                    break
+                harness.submit(row['speaker'],row['text'])
+            deadline = time.monotonic()+config_factory().llm.timeout_seconds+config_factory().llm.batch_seconds+10
+            while not harness.settled() and time.monotonic()<deadline and not harness.failure:
+                time.sleep(0.1)
+            return 1 if harness.failure or not harness.settled() else 0
+        previous = {}
+        if threading.current_thread() is threading.main_thread():
+            def stop_signal(*_):
+                harness.stop_event.set()
+                raise KeyboardInterrupt()
+            for signum in (signal.SIGINT,signal.SIGTERM):
+                previous[signum] = signal.getsignal(signum)
+                signal.signal(signum,stop_signal)
+        try:
+            for line in sys.stdin:
+                try:
+                    if not _handle_line(harness,line):
+                        break
+                except ValueError as exc:
+                    print('Input rejected: ' + str(exc),file=sys.stderr)
+                if harness.stop_event.is_set():
+                    break
+        finally:
+            for signum,handler in previous.items():
+                signal.signal(signum,handler)
+        return 1 if harness.failure else 0
+    except (ConfigError,StorageError,LifecycleError,MaterialError,OAuthError,ApiError,OSError,ValueError,json.JSONDecodeError) as exc:
+        print('Harness stopped: ' + str(exc),file=sys.stderr)
+        return 1
+    except (KeyboardInterrupt,StopRequested):
+        return 130
+    finally:
+        if harness:
+            harness.close()
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
