@@ -1,4 +1,4 @@
-# Adviser schema compatibility
+# SQLite schema compatibility
 
 The versioned migration accepts only the following verified, unversioned historical shapes:
 
@@ -10,4 +10,14 @@ The versioned migration accepts only the following verified, unversioned histori
 
 The fixtures reproduce the DDL from those commits and contain synthetic records only. New empty databases also migrate from version 0. Adviser versions 1 and 2 are supported; versions greater than 2, unknown tables, missing core columns, and unrecognized unversioned shapes fail without schema changes.
 
-The source database remains at version 5 and recognizes versions 0–5. Its historical fixture conversion is completed in B3 together with explicit-column INSERT cleanup.
+The source database remains at version 5. Its migration chain accepts a new empty database and these verified historical versions:
+
+| Fixture | Source commit | Result |
+| --- | --- | --- |
+| `source_v1.sql` | `9899f5937016fe271e52917743a44dea218e9553` | v5 |
+| `source_v2.sql` | `3afd0885598839ab6f4f95b65faca411f8953cf5` | v5 |
+| `source_v3.sql` | `abea6c79e306aa563c5d590e70ae4f88ff1c46ee` | v5 |
+| `source_v4.sql` | no released commit; transitional shape accepted by the old v5 initializer | v5 |
+| `source_v5.sql` | `36097c43dd4cfc2c8ee2820cfc03c8322f314133` | v5 |
+
+Both fixture families contain synthetic records only. Migrations run as an ordered chain in one transaction, preserve records, and are safe under concurrent startup. Read-only opens require the current schema and never migrate it. Future versions, missing columns or required schema objects, unknown tables, and unrecognized version-0 shapes fail without repair. Product `INSERT` statements name their columns explicitly; an architecture test prevents regressions.

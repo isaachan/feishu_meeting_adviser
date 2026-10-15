@@ -9,6 +9,7 @@ from typing import Callable
 
 from .models import Caption, ChangeKind, Delivery, IngestMode, SourceState, Status, digest, epoch_ns
 from .adapters.persistence.sqlite import CapacityError, SQLiteDatabase, StorageError, connect_private, private_directory
+from .adapters.persistence.source_migrations import migrate_source, require_current_source_schema
 
 
 def encode(value) -> str:
@@ -44,7 +45,7 @@ class Store:
         self.last_commit_changes = []
         self.db = connect_private(self.path, max_database_bytes=max_database_bytes)
         try:
-            self._initialize()
+            migrate_source(self.path, self.db, max_database_bytes)
         except BaseException:
             self.close()
             raise
@@ -61,76 +62,12 @@ class Store:
         instance.last_commit_changes = []
         instance.db = SQLiteDatabase.open_readonly(
             instance.path, max_database_bytes=max_database_bytes).connection
+        try:
+            require_current_source_schema(instance.db)
+        except BaseException:
+            instance.db.close()
+            raise
         return instance
-
-    def _initialize(self):
-        version = self.db.execute('PRAGMA user_version').fetchone()[0]
-        if version not in (0, 1, 2, 3, 4, 5):
-            raise StorageError('unsupported database schema; do not discard existing data')
-        self.db.executescript('''
-            CREATE TABLE IF NOT EXISTS meetings (
-                meeting_id TEXT PRIMARY KEY, checkpoint TEXT NOT NULL, state TEXT
-            );
-            CREATE TABLE IF NOT EXISTS captions (
-                meeting_id TEXT NOT NULL REFERENCES meetings(meeting_id),
-                sentence_key TEXT NOT NULL, fingerprint TEXT NOT NULL, body TEXT NOT NULL,
-                PRIMARY KEY (meeting_id, sentence_key)
-            );
-            CREATE TABLE IF NOT EXISTS deliveries (
-                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-                meeting_id TEXT NOT NULL REFERENCES meetings(meeting_id),
-                delivery_id TEXT NOT NULL UNIQUE, kind TEXT NOT NULL, body TEXT NOT NULL,
-                created_ns INTEGER NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS deliveries_meeting ON deliveries(meeting_id, sequence);
-            CREATE TABLE IF NOT EXISTS consumers (
-                meeting_id TEXT NOT NULL REFERENCES meetings(meeting_id), consumer_id TEXT NOT NULL,
-                acknowledged INTEGER NOT NULL DEFAULT 0, offered INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY (meeting_id, consumer_id)
-            );
-            CREATE TABLE IF NOT EXISTS attempts (
-                meeting_id TEXT NOT NULL, consumer_id TEXT NOT NULL,
-                sequence INTEGER NOT NULL REFERENCES deliveries(sequence) ON DELETE CASCADE,
-                count INTEGER NOT NULL, PRIMARY KEY (meeting_id, consumer_id, sequence)
-            );
-            CREATE TABLE IF NOT EXISTS risks (
-                meeting_id TEXT NOT NULL REFERENCES meetings(meeting_id), identity TEXT NOT NULL,
-                body TEXT NOT NULL, PRIMARY KEY (meeting_id,identity)
-            );
-            CREATE TABLE IF NOT EXISTS sessions (app_key TEXT PRIMARY KEY, body TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS conflicts (
-                meeting_id TEXT NOT NULL, sentence_key TEXT NOT NULL,
-                delivery_id TEXT PRIMARY KEY REFERENCES deliveries(delivery_id), resolved INTEGER NOT NULL DEFAULT 0
-            );
-            CREATE TABLE IF NOT EXISTS memberships (meeting_id TEXT PRIMARY KEY, active INTEGER NOT NULL, left_at TEXT);
-            CREATE TABLE IF NOT EXISTS tombstones (identity TEXT PRIMARY KEY, deleted_at TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS accounting (singleton INTEGER PRIMARY KEY CHECK(singleton=1), bytes INTEGER NOT NULL);
-            INSERT OR IGNORE INTO accounting VALUES (1,0);
-        ''')
-        if version < 5:
-            with self.transaction():
-                if version in (1, 2):
-                    for row in self.db.execute("SELECT meeting_id,delivery_id,body FROM deliveries WHERE kind='conflict'").fetchall():
-                        candidate = json.loads(row['body'])
-                        self.db.execute('INSERT OR IGNORE INTO conflicts(meeting_id,sentence_key,delivery_id) VALUES (?,?,?)',
-                                        (row['meeting_id'], candidate['sentence_key'], row['delivery_id']))
-                for row in self.db.execute('SELECT body FROM sessions').fetchall():
-                    value = json.loads(row['body'])
-                    self._record_membership(value)
-                tracked = {'meetings': ('checkpoint','state'), 'captions': ('body','sentence_key','fingerprint'),
-                           'deliveries': ('body','delivery_id'), 'risks': ('body',), 'sessions': ('body',),
-                           'consumers': ('consumer_id',), 'tombstones': ('identity','deleted_at'),
-                           'memberships': ('meeting_id','left_at')}
-                total = 0
-                for table, columns in tracked.items():
-                    expressions = lambda prefix: ' + '.join(f'COALESCE(length(CAST({prefix}{c} AS BLOB)),0)' for c in columns)
-                    old, new = expressions('OLD.'), expressions('NEW.')
-                    for action, expression in (('insert', new), ('delete', '-(' + old + ')'), ('update', '(' + new + ') - (' + old + ')')):
-                        self.db.execute(f'CREATE TRIGGER IF NOT EXISTS account_{table}_{action} AFTER {action.upper()} ON {table} '
-                                        f'BEGIN UPDATE accounting SET bytes=bytes+({expression}) WHERE singleton=1; END')
-                    total += self.db.execute(f'SELECT COALESCE(SUM({expressions("")}),0) FROM {table}').fetchone()[0]
-                self.db.execute('UPDATE accounting SET bytes=? WHERE singleton=1', (total,))
-                self.db.execute('PRAGMA user_version=5')
 
     def close(self) -> None:
         self.db.close()
@@ -190,7 +127,7 @@ class Store:
     def _status(self, status: Status) -> None:
         if status.state == SourceState.INCOMPLETE:
             identity = digest([status.reason, status.gap_start, status.gap_end])
-            self.db.execute('INSERT OR IGNORE INTO risks VALUES (?,?,?)',
+            self.db.execute('INSERT OR IGNORE INTO risks(meeting_id,identity,body) VALUES (?,?,?)',
                             (status.meeting_id, identity, encode(asdict(status))))
         previous = self.current_state(status.meeting_id)
         if previous and (previous.state, previous.reason, previous.gap_start, previous.gap_end) == (
@@ -291,14 +228,14 @@ class Store:
         phase = session.get('phase')
         if not mid or phase not in ('joined', 'left', 'leave_uncertain'):
             return
-        self.db.execute('INSERT INTO memberships VALUES (?,?,?) ON CONFLICT(meeting_id) '
+        self.db.execute('INSERT INTO memberships(meeting_id,active,left_at) VALUES (?,?,?) ON CONFLICT(meeting_id) '
                         'DO UPDATE SET active=excluded.active,left_at=excluded.left_at',
                         (mid, int(phase != 'left'), session.get('left_at') or session.get('manual_confirmation_at')))
 
     def save_session(self, app_key: str, session: dict) -> None:
         with self.transaction():
             self._record_membership(session)
-            self.db.execute('INSERT INTO sessions VALUES (?,?) ON CONFLICT(app_key) DO UPDATE SET body=excluded.body',
+            self.db.execute('INSERT INTO sessions(app_key,body) VALUES (?,?) ON CONFLICT(app_key) DO UPDATE SET body=excluded.body',
                             (app_key, encode(session)))
 
     def resolve_conflict(self, meeting_id: str, delivery_id: str, *, at: str) -> bool:
@@ -344,7 +281,7 @@ class Store:
                     result.append(Delivery.from_dict(value))
                 except (ValueError,TypeError,KeyError):
                     raise StorageError('invalid stored delivery; body hidden, not acknowledged') from None
-                self.db.execute('INSERT INTO attempts VALUES (?,?,?,1) ON CONFLICT(meeting_id,consumer_id,sequence) '
+                self.db.execute('INSERT INTO attempts(meeting_id,consumer_id,sequence,count) VALUES (?,?,?,1) ON CONFLICT(meeting_id,consumer_id,sequence) '
                                 'DO UPDATE SET count=count+1', (meeting_id, consumer_id, row['sequence']))
             if result:
                 self.db.execute('UPDATE consumers SET offered=MAX(offered,?) WHERE meeting_id=? AND consumer_id=?',
@@ -387,7 +324,7 @@ class Store:
         self.db.execute('DELETE FROM risks WHERE meeting_id=?', (meeting_id,))
         self.db.execute('DELETE FROM meetings WHERE meeting_id=?', (meeting_id,))
         self.db.execute('DELETE FROM memberships WHERE meeting_id=?', (meeting_id,))
-        self.db.execute('INSERT OR IGNORE INTO tombstones VALUES (?,?)', (digest(meeting_id), at))
+        self.db.execute('INSERT OR IGNORE INTO tombstones(identity,deleted_at) VALUES (?,?)', (digest(meeting_id), at))
 
     def forget_meeting(self, meeting_id: str, *, at: str) -> None:
         # Destructive explicit operation: bypass content quota so full storage can be cleaned.
@@ -451,11 +388,11 @@ class DurableFakeConsumer:
     def accept(self, delivery: Delivery, *, reply: tuple[str, str] | None = None) -> bool:
         try:
             self.db.execute('BEGIN IMMEDIATE')
-            inserted = self.db.execute('INSERT OR IGNORE INTO accepted VALUES (?,?)',
+            inserted = self.db.execute('INSERT OR IGNORE INTO accepted(delivery_id,body) VALUES (?,?)',
                                        (delivery.delivery_id, encode(delivery.to_dict()))).rowcount
             if inserted and delivery.caption and delivery.kind in (ChangeKind.ADDED, ChangeKind.UPDATED):
                 caption = delivery.caption
-                self.db.execute('INSERT INTO context VALUES (?,?,?) ON CONFLICT(meeting_id,sentence_key) DO UPDATE SET body=excluded.body',
+                self.db.execute('INSERT INTO context(meeting_id,sentence_key,body) VALUES (?,?,?) ON CONFLICT(meeting_id,sentence_key) DO UPDATE SET body=excluded.body',
                                 (caption.meeting_id, caption.sentence_key, encode(asdict(caption))))
             if reply is not None and delivery.caption and delivery.kind in (ChangeKind.ADDED, ChangeKind.UPDATED):
                 self.db.execute('INSERT OR IGNORE INTO rule_replies(uuid,meeting_id,content) VALUES (?,?,?)',

@@ -115,7 +115,7 @@ class AdviserStore:
                         (encode({'snapshot_hash':digest(decode_mapping(job['snapshot']))}),job['job_id']))
             self.db.execute('UPDATE meetings SET material_version=?,material_state=? WHERE meeting_id=?',
                             (version,snapshot['state'],mid))
-            self.db.execute('INSERT INTO meeting_materials VALUES (?,?,?) ON CONFLICT(meeting_id) '
+            self.db.execute('INSERT INTO meeting_materials(meeting_id,body,loaded_ns) VALUES (?,?,?) ON CONFLICT(meeting_id) '
                             'DO UPDATE SET body=excluded.body,loaded_ns=excluded.loaded_ns',
                             (mid,encode(snapshot),int(now*1_000_000_000)))
 
@@ -132,7 +132,7 @@ class AdviserStore:
                 body = delivery.caption or delivery.status
                 if not body or body.meeting_id != mid:
                     raise StorageError('adviser input meeting mismatch')
-                added = self.db.execute('INSERT OR IGNORE INTO inputs VALUES (?,?,?,?,?)',
+                added = self.db.execute('INSERT OR IGNORE INTO inputs(delivery_id,meeting_id,sequence,body,created_ns) VALUES (?,?,?,?,?)',
                     (delivery.delivery_id, mid, delivery.sequence, encode(delivery.to_dict()),
                      int((time.time() if now is None else now)*1_000_000_000))).rowcount
                 if not added:
@@ -141,7 +141,7 @@ class AdviserStore:
                 inserted += 1
                 if delivery.kind in (ChangeKind.ADDED, ChangeKind.UPDATED):
                     caption = delivery.caption
-                    self.db.execute('INSERT INTO context VALUES (?,?,?,0,?) ON CONFLICT(meeting_id,sentence_key) '
+                    self.db.execute('INSERT INTO context(meeting_id,sentence_key,body,suppressed,generation) VALUES (?,?,?,0,?) ON CONFLICT(meeting_id,sentence_key) '
                         'DO UPDATE SET body=excluded.body,suppressed=0,generation=excluded.generation',
                         (mid, caption.sentence_key, encode(asdict(caption)), generation))
                 elif delivery.kind == ChangeKind.CONFLICT:

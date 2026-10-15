@@ -12,6 +12,10 @@ SQL_TABLE = re.compile(
     r"\b(?:FROM|INTO|UPDATE|TABLE|JOIN)\s+([A-Za-z_][A-Za-z0-9_]*)",
     re.I,
 )
+IMPLICIT_INSERT = re.compile(
+    r"\bINSERT\s+(?:OR\s+[A-Z]+\s+)?INTO\s+[A-Za-z_][A-Za-z0-9_]*\s+(?:VALUES|SELECT|DEFAULT)\b",
+    re.I,
+)
 
 # These are pre-existing boundary violations, identified by stable scope and SQL intent.
 # Every entry must carry a migration reason; the set may shrink but must never grow.
@@ -89,6 +93,19 @@ def direct_sql_violations():
     return violations
 
 
+def implicit_column_inserts():
+    violations = []
+    for path in PACKAGE.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not node.args:
+                continue
+            sql = _static_sql(node.args[0])
+            if isinstance(sql, str) and IMPLICIT_INSERT.search(sql):
+                violations.append((str(path.relative_to(PACKAGE)), node.lineno))
+    return violations
+
+
 class ArchitectureBoundaryTests(unittest.TestCase):
     def test_product_direct_sql_matches_shrinking_allowlist(self):
         actual = direct_sql_violations()
@@ -97,6 +114,13 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             actual,
             expected,
             "Direct product SQL changed. New entries are forbidden; remove migrated entries from the allowlist.",
+        )
+
+    def test_product_inserts_always_name_columns(self):
+        self.assertEqual(
+            implicit_column_inserts(),
+            [],
+            "Product INSERT statements must name columns so schema evolution cannot reorder values.",
         )
 
 
