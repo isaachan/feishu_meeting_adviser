@@ -10,3 +10,6 @@ data/
 build/
 dist/
 venv/
+.coverage
+coverage.xml
+htmlcov/

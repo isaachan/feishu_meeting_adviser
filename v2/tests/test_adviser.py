@@ -108,7 +108,7 @@ class AdviserTests(unittest.TestCase):
         self.assertEqual(self.model_decisions,[self.backend.reply])
         self.assertEqual([item[1] for item in self.sent],['合成回答'])
 
-    def test_ack_failure_replays_saved_inbox_without_duplicate_model_input(self):
+    def test_reliability_contract_ack_failure_replays_saved_inbox_without_duplicate_model_input(self):
         self.commit(self.caption)
         with patch.object(self.source,'acknowledge',side_effect=StorageError('synthetic lost ack')):
             with self.assertRaises(StorageError):
@@ -119,6 +119,15 @@ class AdviserTests(unittest.TestCase):
         self.assertEqual(len(self.backend.calls),1)
         self.assertEqual(self.runner.data.meeting(MID)['generation'],1)
         self.assertEqual(self.source.backlog(MID,'adviser'),0)
+
+    def test_reliability_contract_inbox_failure_never_acknowledges_source(self):
+        self.commit(self.caption)
+        with patch.object(self.runner.data, 'ingest', side_effect=StorageError('synthetic inbox failure')), \
+             patch.object(self.source, 'acknowledge', wraps=self.source.acknowledge) as acknowledge:
+            with self.assertRaises(StorageError):
+                self.runner.ingest()
+        acknowledge.assert_not_called()
+        self.assertEqual(self.source.backlog(MID, 'adviser'), 1)
 
     def test_failed_model_job_stays_recoverable_without_hot_retry(self):
         self.backend.failure=ModelError('model_failed')
@@ -180,7 +189,7 @@ class AdviserTests(unittest.TestCase):
         self.assertEqual(len(self.backend.calls),2)
         self.assertEqual(self.source.backlog(MID,'adviser'),0)
 
-    def test_crash_after_post_before_persistence_becomes_uncertain_on_restart(self):
+    def test_reliability_contract_post_before_persistence_becomes_uncertain_without_resend(self):
         self.backend.reply=Decision('none',(),'合成回复',('s:1',))
         self.commit(self.caption)
         with patch.object(self.runner.data,'mark_sent',side_effect=StorageError('synthetic after POST crash')):
@@ -329,7 +338,7 @@ class AdviserTests(unittest.TestCase):
             self.runner.step()
         self.assertEqual(self.sent,[])
 
-    def test_manual_retry_rechecks_context_and_preserves_message_uuid(self):
+    def test_reliability_contract_manual_retry_rechecks_context_and_preserves_message_uuid(self):
         self.send_failure=ApiError(ErrorKind.NETWORK)
         self.backend.reply=Decision('none',(),'不确定回复',('s:1',))
         self.commit(self.caption)

@@ -1,5 +1,6 @@
 from dataclasses import replace
 from pathlib import Path
+import sqlite3
 import tempfile
 import unittest
 
@@ -81,6 +82,32 @@ class AdviserStoreTests(unittest.TestCase):
         self.assertTrue(self.store.finish_job(job, decision))
         self.assertFalse(self.store.finish_job(job, decision))
         self.assertIsNone(self.store.prepare_job('m1', self.settings, 'role-v1', now=NOW, joined_at=NOW-10))
+
+    def test_reliability_contract_finish_job_updates_are_atomic(self):
+        self.store.ingest('m1', [delivery()])
+        first = self.store.prepare_job('m1', self.settings, 'role-v1', now=NOW, joined_at=NOW-10)
+        self.store.finish_job(first, Decision('none', (), '旧候选', ('s:1',)), now=NOW)
+        old_uuid = self.store.next_reply('m1', now=NOW)['uuid']
+
+        self.store.ingest('m1', [delivery(2, 's:2')])
+        job = self.store.prepare_job('m1', self.settings, 'role-v1', now=NOW, joined_at=NOW-10)
+        self.store.mark_job_running(job['job_id'])
+        self.store.db.execute('''
+            CREATE TRIGGER fail_job_completion BEFORE UPDATE OF state ON jobs
+            WHEN NEW.job_id = '%s' AND NEW.state = 'complete'
+            BEGIN SELECT RAISE(ABORT, 'synthetic finish failure'); END
+        ''' % job['job_id'])
+
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.store.finish_job(job, Decision('none', (), '新候选', ('s:2',)), now=NOW)
+
+        meeting = self.store.meeting('m1')
+        self.assertEqual(meeting['decided_generation'], 1)
+        self.assertEqual(meeting['participation'], 'active')
+        saved_job = self.store.db.execute('SELECT state FROM jobs WHERE job_id=?', (job['job_id'],)).fetchone()
+        self.assertEqual(saved_job['state'], 'running')
+        replies = self.store.db.execute('SELECT uuid,state FROM outbox ORDER BY created_ns').fetchall()
+        self.assertEqual([(row['uuid'], row['state']) for row in replies], [(old_uuid, 'pending')])
 
     def test_context_budget_keeps_whole_sentences_and_deletion_removes_jobs(self):
         self.store.ingest('m1', [delivery(text='x'*1000), delivery(2,'s:2',text='y'*1000)])

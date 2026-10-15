@@ -9,6 +9,13 @@ description = "Durable Feishu meeting transcript input source"
 requires-python = ">=3.11"
 dependencies = ["PyYAML>=6.0,<7"]
 
+[project.optional-dependencies]
+dev = [
+    "coverage==7.16.2",
+    "pyright==1.1.414",
+    "ruff==0.17.0",
+]
+
 [project.scripts]
 meeting-transcripts = "feishu_meeting_adviser.__main__:main"
 meeting-adviser-harness = "meeting_adviser_harness.__main__:main"
@@ -18,3 +25,26 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 feishu_meeting_adviser = ["meeting_adviser.md"]
+
+[tool.ruff]
+target-version = "py311"
+
+[tool.ruff.lint]
+# Start with correctness rules that do not require a repository-wide style rewrite.
+select = ["E9", "F63", "F7", "F82"]
+
+[tool.pyright]
+include = ["src/feishu_meeting_adviser/models.py"]
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
+
+[tool.coverage.run]
+branch = true
+source = ["feishu_meeting_adviser", "meeting_adviser_harness"]
+
+[tool.coverage.report]
+exclude_also = [
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    '\.\.\.',
+]
