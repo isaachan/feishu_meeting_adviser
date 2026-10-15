@@ -113,9 +113,12 @@ class FeishuClient:
                 raise StopRequested()
         self._last_request = self.monotonic()
 
-    def _request(self, path, *, payload=None, query=None, token=None):
+    def _validate_request(self, path, *, payload=None):
         if path not in (TOKEN, EVENTS, JOIN, LEAVE, MESSAGE):
             raise ValueError('unsupported API endpoint')
+
+    def _request(self, path, *, payload=None, query=None, token=None):
+        self._validate_request(path, payload=payload)
         url = API + path + ('?' + parse.urlencode(query) if query else '')
         headers = {'Accept': 'application/json'}
         if token:

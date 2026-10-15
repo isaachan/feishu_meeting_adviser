@@ -42,11 +42,20 @@ class AdviserStore:
                     content TEXT NOT NULL, evidence TEXT NOT NULL, generation INTEGER NOT NULL,
                     state TEXT NOT NULL DEFAULT 'pending', error TEXT,
                     created_ns INTEGER NOT NULL, sent_at REAL);
+                CREATE TABLE IF NOT EXISTS meeting_materials (
+                    meeting_id TEXT PRIMARY KEY, body TEXT NOT NULL, loaded_ns INTEGER NOT NULL);
             ''')
             columns = {row['name'] for row in self.db.execute('PRAGMA table_info(meetings)')}
             for name in ('join_instance','role_version','source_status'):
                 if name not in columns:
                     self.db.execute(f'ALTER TABLE meetings ADD COLUMN {name} TEXT')
+            with self.transaction(check_capacity=False):
+                for table, names in (('meetings',('material_version','material_state')),
+                                     ('jobs',('context_version',)),('outbox',('context_version',))):
+                    columns = {row['name'] for row in self.db.execute(f'PRAGMA table_info({table})')}
+                    for name in names:
+                        if name not in columns:
+                            self.db.execute(f'ALTER TABLE {table} ADD COLUMN {name} TEXT')
         except BaseException:
             self.db.close()
             raise
@@ -70,7 +79,7 @@ class AdviserStore:
     def payload_bytes(self):
         return sum(self.db.execute(f'SELECT COALESCE(SUM(length(CAST({column} AS BLOB))),0) FROM {table}').fetchone()[0]
                    for table, column in (('inputs','body'), ('context','body'), ('jobs','snapshot'), ('jobs','result'),
-                                         ('outbox','content'), ('outbox','evidence')))
+                                         ('outbox','content'), ('outbox','evidence'), ('meeting_materials','body')))
 
     def meeting(self, mid):
         row = self.db.execute('SELECT * FROM meetings WHERE meeting_id=?', (mid,)).fetchone()
@@ -110,6 +119,30 @@ class AdviserStore:
             if old is not None and old != role_version:
                 self.db.execute('UPDATE meetings SET generation=generation+1,retry_at=0,error=NULL WHERE meeting_id=?',(mid,))
             self.db.execute('UPDATE meetings SET role_version=? WHERE meeting_id=?',(role_version,mid))
+
+    def set_materials(self, mid, snapshot, *, now):
+        binding = snapshot.get('binding')
+        meeting = self.meeting(mid)
+        if binding and (binding.get('meeting_id') != mid or binding.get('join_instance') != meeting['join_instance']):
+            raise StorageError('material snapshot meeting/session mismatch')
+        version = snapshot.get('context_version')
+        if snapshot['state'] not in ('disabled','ready','partial','unavailable'):
+            raise StorageError('invalid material snapshot state')
+        with self.transaction():
+            if meeting['material_version'] != version:
+                self.db.execute('UPDATE meetings SET generation=generation+1,error=NULL,retry_at=0 WHERE meeting_id=?',(mid,))
+                for job in self.db.execute('SELECT job_id,snapshot FROM jobs WHERE meeting_id=? AND state IN (\'pending\',\'running\')',(mid,)).fetchall():
+                    self.db.execute('UPDATE jobs SET state=\'abandoned\',snapshot=? WHERE job_id=?',
+                        (encode({'snapshot_hash':digest(decode_mapping(job['snapshot']))}),job['job_id']))
+            self.db.execute('UPDATE meetings SET material_version=?,material_state=? WHERE meeting_id=?',
+                            (version,snapshot['state'],mid))
+            self.db.execute('INSERT INTO meeting_materials VALUES (?,?,?) ON CONFLICT(meeting_id) '
+                            'DO UPDATE SET body=excluded.body,loaded_ns=excluded.loaded_ns',
+                            (mid,encode(snapshot),int(now*1_000_000_000)))
+
+    def materials(self, mid):
+        row = self.db.execute('SELECT body FROM meeting_materials WHERE meeting_id=?',(mid,)).fetchone()
+        return decode_mapping(row['body']) if row else None
 
     def ingest(self, mid, deliveries, *, now=None, fault=None):
         inserted = 0
@@ -151,7 +184,7 @@ class AdviserStore:
         seconds = timestamp / 1_000_000_000
         return joined_at <= seconds <= now + 5 and seconds >= now - settings.freshness_seconds
 
-    def snapshot(self, mid, settings, *, now, joined_at, bot_id=None):
+    def snapshot(self, mid, settings, *, now, joined_at, bot_id=None, role_characters=0):
         meeting = self.meeting(mid)
         if not meeting:
             raise StorageError('unknown adviser meeting')
@@ -189,18 +222,49 @@ class AdviserStore:
                         reply_keys.append(key)
         sent = [{'text':r['content'], 'state':r['state']} for r in self.db.execute(
             'SELECT content,state FROM outbox WHERE meeting_id=? AND state IN (\'sent\',\'uncertain\') ORDER BY created_ns DESC LIMIT 20', (mid,))]
-        return {'generation': meeting['generation'], 'participation': meeting['participation'],
+        result = {'generation': meeting['generation'], 'participation': meeting['participation'],
                 'source_state': meeting['source_state'], 'captions': captions,
                 'source_status': decode_mapping(meeting['source_status']) if meeting['source_status'] else None,
                 'fresh_input_keys': fresh_keys, 'evidence': fingerprints,
                 'context_omitted': len(captions) < self.db.execute('SELECT count(*) FROM context WHERE meeting_id=?', (mid,)).fetchone()[0],
                 'pending_reply': pending_reply, 'sent_replies': sent, 'reply_allowed_keys': list(set(reply_keys))}
 
-    def prepare_job(self, mid, settings, role_version, *, now, joined_at, bot_id=None):
+        material = self.materials(mid)
+        if material and material['state'] != 'disabled':
+            result['meeting_context'] = material
+        # Count the entire serialized snapshot plus role, including evidence and prior replies.
+        # Prefer captions to old sent messages and material text; keep source metadata.
+        while len(encode(result)) + role_characters > settings.context_characters:
+            result['context_omitted'] = True
+            if result['sent_replies']:
+                result['sent_replies'].pop()
+            elif result.get('meeting_context') and any(item.get('text') for item in result['meeting_context']['documents']):
+                item = max(result['meeting_context']['documents'],key=lambda value:len(value.get('text','')))
+                excess = len(encode(result)) + role_characters - settings.context_characters
+                item['text'] = item['text'][:-max(1,excess)]
+                item['truncated'] = True
+                result['meeting_context']['state'] = 'partial'
+            elif result.get('meeting_context',{}).get('description'):
+                context = result['meeting_context']
+                excess = len(encode(result)) + role_characters - settings.context_characters
+                context['description'] = context['description'][:-max(1,excess)]
+                context['description_truncated'] = True
+                context['state'] = 'partial'
+            elif result['captions']:
+                key = result['captions'].pop(0)['sentence_key']
+                result['evidence'].pop(key,None)
+                result['fresh_input_keys'] = [value for value in result['fresh_input_keys'] if value!=key]
+                result['reply_allowed_keys'] = [value for value in result['reply_allowed_keys'] if value!=key]
+            else:
+                raise ModelError('model_context_budget')
+        return result
+
+    def prepare_job(self, mid, settings, role_version, *, now, joined_at, bot_id=None, role_characters=0):
         meeting = self.meeting(mid)
-        if not meeting or meeting['generation'] <= meeting['decided_generation'] or meeting['retry_at'] > now:
+        if (not meeting or meeting['generation'] <= meeting['decided_generation'] or meeting['retry_at'] > now
+                or meeting['material_state'] in ('unavailable','loading')):
             return None
-        snapshot = self.snapshot(mid, settings, now=now, joined_at=joined_at, bot_id=bot_id)
+        snapshot = self.snapshot(mid, settings, now=now, joined_at=joined_at, bot_id=bot_id,role_characters=role_characters)
         if not snapshot['fresh_input_keys'] and snapshot['pending_reply'] is None:
             with self.transaction():
                 for old in self.db.execute('SELECT job_id,snapshot FROM jobs WHERE meeting_id=? AND state IN (\'pending\',\'running\')', (mid,)).fetchall():
@@ -209,12 +273,14 @@ class AdviserStore:
                 self.db.execute('UPDATE meetings SET decided_generation=generation,error=NULL,retry_at=0 WHERE meeting_id=?', (mid,))
             return None
         job_id = digest([mid, snapshot['generation'], role_version])
+        if meeting['material_version']:
+            job_id = digest([job_id,meeting['material_version']])
         with self.transaction():
             for old in self.db.execute('SELECT job_id,snapshot FROM jobs WHERE meeting_id=? AND state=\'pending\' AND generation<?',(mid,snapshot['generation'])).fetchall():
                 self.db.execute('UPDATE jobs SET state=\'abandoned\',snapshot=? WHERE job_id=?',
                     (encode({'snapshot_hash':digest(decode_mapping(old['snapshot']))}),old['job_id']))
-            self.db.execute('INSERT OR IGNORE INTO jobs(job_id,meeting_id,generation,snapshot,role_version,created_ns) VALUES (?,?,?,?,?,?)',
-                            (job_id, mid, snapshot['generation'], encode(snapshot), role_version, int(now*1_000_000_000)))
+            self.db.execute('INSERT OR IGNORE INTO jobs(job_id,meeting_id,generation,snapshot,role_version,created_ns,context_version) VALUES (?,?,?,?,?,?,?)',
+                            (job_id, mid, snapshot['generation'], encode(snapshot), role_version, int(now*1_000_000_000),meeting['material_version']))
         return dict(self.db.execute('SELECT * FROM jobs WHERE job_id=?', (job_id,)).fetchone())
 
     def finish_job(self, job, decision, *, now=None, settings=None, joined_at=0, bot_id=None):
@@ -239,9 +305,12 @@ class AdviserStore:
             saved = self.db.execute('SELECT state FROM jobs WHERE job_id=?', (job['job_id'],)).fetchone()
             if not saved:
                 raise StorageError('unknown adviser job')
-            if saved['state'] == 'complete':
+            if saved['state'] in ('complete','abandoned'):
                 return False
             meeting = self.meeting(job['meeting_id'])
+            if job.get('context_version') != meeting['material_version'] or meeting['material_state']=='unavailable':
+                self.db.execute('UPDATE jobs SET state=\'abandoned\' WHERE job_id=?',(job['job_id'],))
+                return False
             participation = meeting['participation']
             if control_valid:
                 if decision.control == 'pause':
@@ -253,10 +322,11 @@ class AdviserStore:
                 basis = {key:valid[key] for key in decision.reply_sentence_keys}
                 message_uuid = str(uuid5(NAMESPACE_URL, digest(['adviser-reply-v1',job['meeting_id'],job['role_version'],basis,decision.reply])))
                 # An unchanged candidate keeps its UUID across a latest-context recheck.
-                self.db.execute('INSERT INTO outbox(uuid,meeting_id,kind,content,evidence,generation,created_ns) VALUES (?,?,\'reply\',?,?,?,?) '
-                    'ON CONFLICT(uuid) DO UPDATE SET generation=excluded.generation,state=CASE WHEN outbox.state=\'cancelled\' THEN \'pending\' ELSE outbox.state END',
-                    (message_uuid,job['meeting_id'],decision.reply,encode(basis),job['generation'],int(now*1_000_000_000)))
-            brief = {'generation':job['generation'],'snapshot_hash':digest(snapshot),
+                self.db.execute('INSERT INTO outbox(uuid,meeting_id,kind,content,evidence,generation,created_ns,context_version) VALUES (?,?,\'reply\',?,?,?,?,?) '
+                    'ON CONFLICT(uuid) DO UPDATE SET generation=excluded.generation,context_version=excluded.context_version,'
+                    'state=CASE WHEN outbox.state=\'cancelled\' THEN \'pending\' ELSE outbox.state END',
+                    (message_uuid,job['meeting_id'],decision.reply,encode(basis),job['generation'],int(now*1_000_000_000),meeting['material_version']))
+            brief = {'generation':job['generation'],'snapshot_hash':digest(snapshot),'context_version':meeting['material_version'],
                      'evidence':{key:snapshot['evidence'].get(key) for key in set(decision.control_sentence_keys)|set(decision.reply_sentence_keys)}}
             self.db.execute('UPDATE jobs SET state=\'complete\',result=?,snapshot=? WHERE job_id=?',
                             (encode(decision.to_dict()),encode(brief),job['job_id']))
@@ -284,10 +354,11 @@ class AdviserStore:
 
     def next_reply(self, mid, *, now):
         meeting = self.meeting(mid)
-        if meeting['participation'] != 'active' or meeting['generation'] != meeting['decided_generation'] or meeting['cooldown_until'] > now:
+        if (meeting['participation'] != 'active' or meeting['generation'] != meeting['decided_generation']
+                or meeting['cooldown_until'] > now or meeting['material_state'] in ('unavailable','loading')):
             return None
         row = self.db.execute('SELECT * FROM outbox WHERE meeting_id=? AND kind=\'reply\' AND state=\'pending\' AND generation=? ORDER BY created_ns LIMIT 1', (mid,meeting['generation'])).fetchone()
-        return dict(row) if row else None
+        return dict(row) if row and row['context_version']==meeting['material_version'] else None
 
     def discard_expired_replies(self, mid, settings, *, now, joined_at, bot_id=None):
         cancelled = 0
@@ -364,7 +435,8 @@ class AdviserStore:
         now = time.time() if now is None else now
         state = 'running' if active and running else 'backoff' if pending and meeting['retry_at']>now else 'waiting' if pending else 'idle'
         return {'backend':'codex','consumer_active':active,'participation':meeting['participation'],
-                'model_state':state,'model_error':meeting['error'],'pending_model_inputs':pending} | self.reply_statistics(mid)
+                'model_state':state,'model_error':meeting['error'],'pending_model_inputs':pending,
+                'material_state':meeting['material_state'] or 'disabled','material_version':meeting['material_version']} | self.reply_statistics(mid)
 
     def prune_history(self, cutoff_ns):
         removed = 0
@@ -381,7 +453,7 @@ class AdviserStore:
 
     def forget_meeting(self, mid):
         with self.transaction(check_capacity=False):
-            for table in ('inputs', 'context', 'jobs', 'outbox', 'meetings'):
+            for table in ('inputs', 'context', 'jobs', 'outbox', 'meeting_materials', 'meetings'):
                 self.db.execute(f'DELETE FROM {table} WHERE meeting_id=?', (mid,))
         self.db.execute('PRAGMA wal_checkpoint(TRUNCATE)')
         self.db.execute('VACUUM')

@@ -6,6 +6,7 @@ from .lifecycle import FileLock, LifecycleError
 from .models import digest
 from .storage import DurableFakeConsumer
 from .adviser_store import AdviserStore
+from .materials import ContentPreviews
 
 
 class Maintenance:
@@ -23,6 +24,7 @@ class Maintenance:
         identities = {r[0] for r in self.store.db.execute('SELECT identity FROM tombstones')}
         if not identities:
             return
+        ContentPreviews.clean(self.config.data_directory/'content_previews',identities)
         for path in (self.config.data_directory / 'fake_consumers').glob('*.sqlite3'):
             consumer = DurableFakeConsumer(path, max_database_bytes=self.config.database_capacity_bytes)
             try:
@@ -55,6 +57,7 @@ class Maintenance:
             cutoff = int((self.clock() - self.config.retention_days * 86400) * 1_000_000_000)
             result = self.store.prune(cutoff, at=utc_now(self.clock),protected_meetings=self._protected_model_meetings())
             self._clean_consumer_copies()
+            ContentPreviews.clean(self.config.data_directory/'content_previews',cutoff_ns=cutoff)
             path = self.config.data_directory / 'adviser.sqlite3'
             if path.exists():
                 data = AdviserStore(path,max_database_bytes=self.config.database_capacity_bytes)

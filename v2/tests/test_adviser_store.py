@@ -84,11 +84,13 @@ class AdviserStoreTests(unittest.TestCase):
 
     def test_context_budget_keeps_whole_sentences_and_deletion_removes_jobs(self):
         self.store.ingest('m1', [delivery(text='x'*1000), delivery(2,'s:2',text='y'*1000)])
-        limited = replace(self.settings, context_characters=1500)
+        limited = replace(self.settings, context_characters=2000)
         snapshot = self.store.snapshot('m1', limited, now=NOW, joined_at=NOW-10)
         self.assertEqual(len(snapshot['captions']), 1)
         self.assertEqual(len(snapshot['captions'][0]['text']), 1000)
         self.assertTrue(snapshot['context_omitted'])
+        from feishu_meeting_adviser.storage import encode
+        self.assertLessEqual(len(encode(snapshot)), limited.context_characters)
         self.store.prepare_job('m1', limited, 'role-v1', now=NOW, joined_at=NOW-10)
         self.store.forget_meeting('m1')
         for table in ('inputs','context','jobs','meetings'):

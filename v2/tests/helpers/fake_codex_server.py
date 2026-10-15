@@ -9,6 +9,7 @@ mode = sys.argv[1]
 if len(sys.argv)>2:
     Path(sys.argv[2]).write_text(str(os.getpid()))
 index = 0
+thread_config = {}
 
 
 def emit(value):
@@ -40,6 +41,11 @@ for line in sys.stdin:
                        'unknown':None, 'starting':'starting', 'late-server':'connected'}.get(mode, 'disabled')
             tools = {'synthetic-private-tool': {}} if not params.get('threadId') or mode in ('exposed','cached') else {}
             data = [{'name':'synthetic-private-server','tools':tools,'runtimeStatus':runtime}]
+        if mode in ('late-disabled','changing-servers') and params.get('threadId'):
+            name = 'synthetic-late-server' if mode == 'late-disabled' else f'synthetic-late-{index}'
+            disabled = thread_config.get('mcp_servers',{}).get(name,{}).get('enabled') is False
+            data = [{'name':name,'pluginId':'synthetic-plugin','tools':{},
+                     'runtimeStatus':'disabled' if disabled else 'connected'}]
         result={'data':data,'nextCursor':None}
     elif method == 'thread/start':
         assert params['ephemeral'] is True and params['sandbox'] == 'read-only'
@@ -47,9 +53,15 @@ for line in sys.stdin:
         if mode in ('inherited','exposed','cached','empty-connected','unknown','starting'):
             assert params['config']['mcp_servers']['synthetic-private-server'] == {'command':'/usr/bin/false','enabled':False}
         index += 1
+        thread_config = params['config']
         thread_id = f'synthetic-thread-{index}'
         result = {'thread': {'id': thread_id}, 'model': 'synthetic-model', 'reasoningEffort':'high'}
     elif method == 'turn/start':
+        if mode == 'late-disabled':
+            assert index == 2
+            assert thread_config['mcp_servers']['synthetic-late-server']['enabled'] is False
+            assert thread_config['plugins']['synthetic-plugin']['enabled'] is False
+        assert mode not in ('late-server','changing-servers','empty-connected','unknown','starting','exposed')
         thread_id = params['threadId']
         turn_id = f'synthetic-turn-{index}'
         assert params['outputSchema']['additionalProperties'] is False

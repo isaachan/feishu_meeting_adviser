@@ -82,7 +82,25 @@ class LLMTests(unittest.TestCase):
             self.assertEqual(metadata['model_stage'], 'mcp_verify')
             self.assertEqual(metadata['mcp_catalog_tools'], 0)
             self.assertEqual(metadata['mcp_unverified_servers'], 1)
-            self.assertEqual(metadata['mcp_new_servers'], int(mode == 'late-server'))
+            self.assertEqual(metadata['mcp_new_servers'], 0)
+            self.assertEqual(metadata['mcp_isolation_restarts'], int(mode == 'late-server'))
+
+    def test_late_server_is_disabled_on_a_new_thread_before_any_input_is_submitted(self):
+        backend = self.backend('late-disabled')
+        self.assertIsNone(backend.decide({'synthetic':'meeting content'}, 'Synthetic role').reply)
+        metadata = backend.diagnostic_metadata()
+        self.assertEqual(metadata['mcp_isolation_restarts'],1)
+        self.assertEqual(metadata['mcp_unverified_servers'],0)
+        self.assertEqual(metadata['mcp_disabled_servers'],1)
+        self.assertNotIn('synthetic-late-server',json.dumps(metadata))
+
+    def test_changing_server_inventory_is_bounded_and_still_blocks_model_input(self):
+        backend = self.backend('changing-servers')
+        with self.assertRaises(ModelError) as caught:
+            backend.decide({}, 'Synthetic role')
+        self.assertEqual(caught.exception.reason,'model_tools_unavailable')
+        self.assertEqual(backend.diagnostic_metadata()['mcp_isolation_restarts'],2)
+        self.assertIsNone(backend.process)
 
     def test_timeout_metadata_distinguishes_verification_from_generation(self):
         for mode, stage in [('verify-stall', 'mcp_verify'), ('delay', 'turn_start'),
@@ -134,7 +152,7 @@ class LLMTests(unittest.TestCase):
 
     def test_packaged_role_and_local_override(self):
         text, version = load_role(self.settings)
-        self.assertIn('任何参会者', text)
+        self.assertTrue(text.strip())
         self.assertEqual(len(version), 64)
         local = self.root / 'role.md'
         local.write_text('Synthetic role')
@@ -143,6 +161,11 @@ class LLMTests(unittest.TestCase):
         link.symlink_to(local)
         with self.assertRaises(ModelError):
             load_role(replace(self.settings, role_file=link))
+
+    @unittest.skip('Participant controls deferred by user; restore with TODO 2.7')
+    def test_packaged_role_describes_participant_controls(self):
+        text, _ = load_role(self.settings)
+        self.assertIn('任何参会者', text)
 
     def test_llm_config_preserves_legacy_defaults_and_validates_settings(self):
         path = self.root / 'config.yaml'

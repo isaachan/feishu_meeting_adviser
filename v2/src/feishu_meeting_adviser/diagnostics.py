@@ -36,7 +36,7 @@ NUMBER_FIELDS = {'event_count','unknown_times','identity_degraded','request_ms',
                  'pruned_deliveries','expired_meetings'}
 NUMBER_FIELDS |= {'model_ms','pending_model_inputs','pending_replies','uncertain_replies','rejected_replies'}
 NUMBER_FIELDS |= {'model_stage_ms','mcp_inherited_servers','mcp_servers','mcp_catalog_tools',
-                  'mcp_disabled_servers','mcp_unverified_servers','mcp_new_servers'}
+                  'mcp_disabled_servers','mcp_unverified_servers','mcp_new_servers','mcp_isolation_restarts'}
 BOOL_FIELDS = {'has_more','checkpoint_advanced','decision_saved','reply_confirmed'}
 ENUM_COUNTERS = {'kinds': {'transcript_received','participant_joined','participant_left','chat_received','other'},
                  'counts': {'added','updated','conflict','duplicates','older'}}
@@ -104,11 +104,14 @@ class Diagnostics:
         line = (json.dumps(safe, separators=(',',':'), ensure_ascii=False) + '\n').encode()
         if len(line) > self.max_bytes:
             line = (json.dumps({'at':safe['at'],'kind':'error','error_kind':'diagnostic_record_limit'})+'\n').encode()
+        self._append(line)
+
+    def _append(self, line):
         try:
             with self._lock():
                 paths = [self.path] + [Path(str(self.path)+f'.{n}') for n in range(1,self.backups+1)]
-                for path in self.directory.glob('diagnostics.jsonl.*'):
-                    suffix = path.name.removeprefix('diagnostics.jsonl.')
+                for path in self.directory.glob(self.path.name + '.*'):
+                    suffix = path.name.removeprefix(self.path.name + '.')
                     if suffix.isdecimal() and int(suffix) > self.backups:
                         self._check_file(path)
                         path.unlink()

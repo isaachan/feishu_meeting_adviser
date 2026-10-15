@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 import hashlib
 import math
 from pathlib import Path
+import re
 import yaml
 from .client import Credentials
 from .collector import ScanSettings
@@ -13,6 +14,23 @@ DEFAULT_CONFIG = Path('config.yaml')
 
 class ConfigError(Exception):
     pass
+
+
+@dataclass(frozen=True)
+class MeetingContextSettings:
+    calendar_id: str = ''
+    event_id: str = ''
+    identity: str = 'user'
+    context_characters: int = 10000
+    max_documents: int = 10
+    timeout_seconds: float = 60
+    binding_tolerance_seconds: int = 3600
+    preview_bytes: int = 1_000_000
+    preview_backups: int = 3
+
+    @property
+    def enabled(self):
+        return bool(self.calendar_id and self.event_id)
 
 
 @dataclass(frozen=True, repr=False)
@@ -34,6 +52,7 @@ class Configuration:
     diagnostic_backups: int = 3
     database_capacity_bytes: int = 150_000_000
     llm: LLMSettings = field(default_factory=LLMSettings)
+    meeting_context: MeetingContextSettings = field(default_factory=MeetingContextSettings)
 
 
 def file_fingerprint(path: Path) -> str:
@@ -111,6 +130,25 @@ def load_config(path: Path = DEFAULT_CONFIG) -> Configuration:
         context_characters=number(llm, 'context_characters', 30000, 2000, 100000, True),
         freshness_seconds=number(llm, 'freshness_seconds', 120, 5, 3600, True),
         reply_interval_seconds=number(llm, 'reply_interval_seconds', 10, 0, 300), introduction=introduction)
+    context = section('meeting_context')
+    if set(context) - set(MeetingContextSettings.__dataclass_fields__):
+        raise ConfigError('unknown meeting_context configuration fields')
+    calendar_id, event_id = string(context, 'calendar_id'), string(context, 'event_id')
+    if bool(calendar_id) != bool(event_id):
+        raise ConfigError('meeting_context requires both calendar_id and event_id')
+    if any(value and (not re.fullmatch(r'[A-Za-z0-9_.@-]{1,256}', value) or value in ('.','..'))
+           for value in (calendar_id, event_id)):
+        raise ConfigError('invalid meeting_context resource identifier')
+    identity = string(context, 'identity', 'user')
+    if identity not in ('user', 'application'):
+        raise ConfigError('meeting_context.identity must be user or application')
+    context_settings = MeetingContextSettings(calendar_id, event_id, identity,
+        context_characters=number(context, 'context_characters', 10000, 1000, 50000, True),
+        max_documents=number(context, 'max_documents', 10, 1, 10, True),
+        timeout_seconds=number(context, 'timeout_seconds', 60, 5, 300),
+        binding_tolerance_seconds=number(context, 'binding_tolerance_seconds', 3600, 0, 86400, True),
+        preview_bytes=number(context, 'preview_bytes', 1_000_000, 10000, 100_000_000, True),
+        preview_backups=number(context, 'preview_backups', 3, 1, 20, True))
     return Configuration(path, fingerprint, credentials, meeting_no, password, directory.absolute(), scan,
         timeout_seconds=timeout,
         request_seconds=number(http, 'request_seconds', 0.7, 0.7, 30),
@@ -121,4 +159,4 @@ def load_config(path: Path = DEFAULT_CONFIG) -> Configuration:
         diagnostic_bytes=number(storage, 'diagnostic_bytes', 1_000_000, 1000, 100_000_000, True),
         diagnostic_backups=number(storage, 'diagnostic_backups', 3, 1, 20, True),
         database_capacity_bytes=number(storage, 'database_capacity_bytes', 150_000_000, 1_000_000, 2_000_000_000, True),
-        llm=llm_settings)
+        llm=llm_settings, meeting_context=context_settings)

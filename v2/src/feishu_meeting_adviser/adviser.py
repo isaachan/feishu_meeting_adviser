@@ -6,7 +6,7 @@ import threading
 import time
 
 from .adviser_store import AdviserStore
-from .client import StopRequested
+from .client import ApiError, StopRequested
 from .config import file_fingerprint
 from .diagnostics import sanitize
 from .lifecycle import FileLock, LifecycleError, LockBusy
@@ -14,10 +14,14 @@ from .llm import CodexBackend, ModelError, load_role
 from .maintenance import Maintenance
 from .reply_sender import introduce, send_saved_reply
 from .models import digest
+from .materials import ContentPreviews, MATERIAL_POLICY, MaterialError, load_materials
+from .oauth import OAuthError, OAuthManager
+from .storage import StorageError
 
 
 class AdviserRunner:
-    def __init__(self, source, manager, *, backend=None, stop_event=None, clock=time.time, consumer_id='adviser', limit=100, diagnose=None):
+    def __init__(self, source, manager, *, backend=None, stop_event=None, clock=time.time, consumer_id='adviser', limit=100, diagnose=None,
+                 material_client=None, preview_display=None):
         self.source, self.manager = source, manager
         self.config, self.settings = manager.config, manager.config.llm
         self.session = manager.saved_meeting(require_joined=True)
@@ -26,7 +30,11 @@ class AdviserRunner:
         self.consumer_id, self.limit = consumer_id, limit
         self.diagnose = diagnose or (lambda record:None)
         self.stop_event = stop_event or threading.Event()
-        self.role, self.role_version = load_role(self.settings)
+        self.role, self.role_file_version = load_role(self.settings)
+        self.role_version = self.role_file_version
+        if self.config.meeting_context.enabled:
+            self.role += MATERIAL_POLICY
+            self.role_version = digest([self.role_file_version,MATERIAL_POLICY])
         self.data = AdviserStore(self.config.data_directory / 'adviser.sqlite3',
             max_database_bytes=self.config.database_capacity_bytes, max_payload_bytes=self.config.content_capacity_bytes)
         self.data.ensure_meeting(self.mid)
@@ -38,6 +46,41 @@ class AdviserRunner:
         self.batch_due = None
         self.offered = self.persisted = self.decisions = self.replied = 0
         self.model_failure = None
+        self.material_loaded = False
+        self.material_subject = None
+        self.material_client, self.preview_display = material_client, preview_display
+        self.material_oauth = getattr(material_client,'oauth_manager',None)
+
+    def _ensure_materials(self):
+        if self.material_loaded:
+            return
+        with self._maintenance_lock():
+            self.guard()
+            self.data.ensure_session(self.session)
+            if not self.config.meeting_context.enabled:
+                self.data.set_materials(self.mid,{'state':'disabled','context_version':None,'documents':[]},now=self.clock())
+                self.material_loaded = True
+                return
+            self.data.db.execute('UPDATE meetings SET material_state=\'loading\' WHERE meeting_id=?',(self.mid,))
+        settings = self.config.meeting_context
+        logger = ContentPreviews(self.config.data_directory/'content_previews',self.mid,
+            max_bytes=settings.preview_bytes,backups=settings.preview_backups,display=self.preview_display)
+        try:
+            snapshot = load_materials(self.config,self.session,client=self.material_client,
+                emit=logger.write,stop_event=self.stop_event,clock=self.clock)
+        except (ApiError,OAuthError,MaterialError,StorageError,OSError,ValueError,TypeError,KeyError) as exc:
+            reason = exc.kind.value if isinstance(exc,ApiError) else exc.reason if isinstance(exc,OAuthError) else 'material_load_failed'
+            with self._maintenance_lock():
+                self.data.set_materials(self.mid,{'state':'unavailable','context_version':digest(['unavailable',settings.calendar_id,settings.event_id]),
+                    'reason':reason,'documents':[]},now=self.clock())
+            logger.write({'kind':'load','status':'unavailable','reason':reason,
+                'http_status':getattr(exc,'http_status',None),'code':getattr(exc,'code',None)})
+            raise MaterialError('meeting materials unavailable; collect continues independently; '+reason) from None
+        with self._maintenance_lock():
+            self.guard()
+            self.data.set_materials(self.mid,snapshot,now=self.clock())
+        self.material_subject = snapshot.get('subject_hash')
+        self.material_loaded = True
 
     @contextmanager
     def _maintenance_lock(self):
@@ -66,8 +109,16 @@ class AdviserRunner:
             raise LifecycleError('adviser session changed; restart after checking meeting state')
         if file_fingerprint(self.config.path) != self.config.fingerprint:
             raise LifecycleError('adviser configuration changed; restart consumer')
-        if load_role(self.settings)[1] != self.role_version:
+        if load_role(self.settings)[1] != self.role_file_version:
             raise LifecycleError('adviser role changed; restart consumer')
+        if self.material_loaded and self.material_subject is not None:
+            try:
+                oauth = self.material_oauth or OAuthManager(self.config.credentials,self.config.data_directory)
+                subject = oauth.subject_hash()
+            except OAuthError:
+                raise MaterialError('material user authorization unavailable; restart after authorizing') from None
+            if subject != self.material_subject:
+                raise MaterialError('material user account changed; restart consume')
         state = self.source.current_state(self.mid)
         if state and state.state.value in ('action_required','ended','stopped'):
             raise LifecycleError('transcript source is unavailable or stopped; check status, restart collect, then restart consume')
@@ -129,6 +180,7 @@ class AdviserRunner:
                                 interval=self.settings.reply_interval_seconds,diagnose=self.diagnose))
 
     def step(self):
+        self._ensure_materials()
         self.ingest()
         with self._maintenance_lock():
             self.data.discard_expired_replies(self.mid,self.settings,now=self.clock(),
@@ -154,7 +206,8 @@ class AdviserRunner:
             with self._maintenance_lock():
                 self.guard()
                 job = self.data.prepare_job(self.mid, self.settings, self.role_version,
-                    now=self.clock(), joined_at=self.session['joined_at'], bot_id=self.session.get('bot_user_id'))
+                    now=self.clock(), joined_at=self.session['joined_at'], bot_id=self.session.get('bot_user_id'),
+                    role_characters=len(self.role))
             if job:
                 self._start_job(job)
             self.batch_due = None
@@ -171,7 +224,8 @@ class AdviserRunner:
         return {'backend': 'codex', 'participation': meeting['participation'],
                 'model_state': 'running' if self.worker else 'waiting' if meeting['generation']>meeting['decided_generation'] else 'idle',
                 'model_error': meeting['error'], 'offered': self.offered, 'newly_persisted': self.persisted,
-                'decisions': self.decisions, 'replied': self.replied} | self.data.reply_statistics(self.mid) | live
+                'decisions': self.decisions, 'replied': self.replied,
+                'material_state':meeting['material_state'] or 'disabled'} | self.data.reply_statistics(self.mid) | live
 
     def run(self, *, watch=False, notify=None):
         previous = None
@@ -180,6 +234,7 @@ class AdviserRunner:
                 self.data.recover_sends()
                 self.data.ensure_session(self.session)
                 self.data.ensure_role(self.mid,self.role_version)
+                self._ensure_materials()
                 if self.settings.introduction:
                     with self._maintenance_lock():
                         if not introduce(self.data,self.manager,clock=self.clock,diagnose=self.diagnose):
