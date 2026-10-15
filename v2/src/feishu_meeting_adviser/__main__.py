@@ -3,10 +3,8 @@ import argparse
 from dataclasses import replace
 import json
 from pathlib import Path
-import signal
 import sqlite3
 import sys
-import threading
 import time
 
 from . import __version__
@@ -16,6 +14,7 @@ from .collector import utc_now
 from .config import ConfigError, DEFAULT_CONFIG, load_config
 from .infrastructure.errors import LifecycleError, LockBusy
 from .infrastructure.file_lock import FileLock
+from .infrastructure.signals import stop_on_signals
 from .lifecycle import MeetingSource, SessionManager
 from .diagnostics import Diagnostics
 from .maintenance import Maintenance
@@ -115,12 +114,7 @@ def main(argv=None):
                                   'mode': caption.mode.value}, ensure_ascii=False), flush=True)
             source = MeetingSource(store, manager, diagnose=diagnostics.write,
                                    on_caption=print_caption if args.show_text else None)
-            previous = {}
-            if threading.current_thread() is threading.main_thread():
-                for signum in (signal.SIGINT, signal.SIGTERM):
-                    previous[signum] = signal.getsignal(signum)
-                    signal.signal(signum, lambda *_: source.stop_event.set())
-            try:
+            with stop_on_signals(source.stop_event.set):
                 source.start(max_successful_cycles=1 if args.once else None)
                 print('Collecting to private product storage; stopping does not leave the meeting.', file=sys.stderr)
                 while source.running:
@@ -129,10 +123,7 @@ def main(argv=None):
                 print(json.dumps({'state': status.state.value, 'reason': status.reason}))
                 if status.state == SourceState.ACTION_REQUIRED:
                     return 1
-            finally:
-                source.stop()
-                for signum, handler in previous.items():
-                    signal.signal(signum, handler)
+            source.stop()
         elif args.command == 'status':
             session = manager.session()
             result = {'session_phase': session['phase'] if session else 'none'}
@@ -161,23 +152,17 @@ def main(argv=None):
             adviser = AdviserService(
                 store, manager, consumer_id=args.consumer, limit=args.limit,
                 diagnose=diagnostics.write)
-            previous = {}
-            if threading.current_thread() is threading.main_thread():
-                for signum in (signal.SIGINT,signal.SIGTERM):
-                    previous[signum] = signal.getsignal(signum)
-                    signal.signal(signum,lambda *_: adviser.stop_event.set())
             try:
-                print(f'Consuming with {config.llm.backend}; stopping does not stop collect or leave the meeting.',file=sys.stderr)
-                summary = adviser.run(watch=args.watch,notify=(lambda value: print(json.dumps(value),flush=True)) if args.watch else None)
-                if not args.watch:
-                    print(json.dumps(summary))
-                if summary['model_error'] or summary['uncertain_replies'] or summary['rejected_replies']:
-                    return 1
+                with stop_on_signals(adviser.stop_event.set):
+                    print(f'Consuming with {config.llm.backend}; stopping does not stop collect or leave the meeting.',file=sys.stderr)
+                    summary = adviser.run(watch=args.watch,notify=(lambda value: print(json.dumps(value),flush=True)) if args.watch else None)
+                    if not args.watch:
+                        print(json.dumps(summary))
+                    if summary['model_error'] or summary['uncertain_replies'] or summary['rejected_replies']:
+                        return 1
             finally:
                 adviser.close()
                 adviser = None
-                for signum,handler in previous.items():
-                    signal.signal(signum,handler)
         elif args.command == 'consume':
             if args.watch:
                 raise ConfigError('consume --watch requires llm.backend or --backend codex/opencode')
