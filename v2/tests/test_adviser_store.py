@@ -6,7 +6,18 @@ import unittest
 
 from feishu_meeting_adviser.adviser_store import AdviserStore
 from feishu_meeting_adviser.llm import Decision, LLMSettings
-from feishu_meeting_adviser.models import Caption, ChangeKind, Delivery, IngestMode, SourceState, Status
+from feishu_meeting_adviser.models import (
+    Caption,
+    ChangeKind,
+    Delivery,
+    IngestMode,
+    JobState,
+    MaterialState,
+    ParticipationState,
+    ReplyState,
+    SourceState,
+    Status,
+)
 from feishu_meeting_adviser.storage import CapacityError, StorageError
 
 NOW = 1791849601
@@ -26,6 +37,18 @@ class AdviserStoreTests(unittest.TestCase):
         self.store = AdviserStore(self.path)
         self.addCleanup(lambda: self.store.close())
         self.settings = LLMSettings()
+
+    def test_persisted_state_types_keep_existing_values(self):
+        self.assertEqual({state.value for state in JobState}, {'pending', 'running', 'complete', 'abandoned'})
+        self.assertEqual(
+            {state.value for state in ReplyState},
+            {'pending', 'sending', 'sent', 'uncertain', 'rejected', 'cancelled'},
+        )
+        self.assertEqual(
+            {state.value for state in MaterialState},
+            {'disabled', 'loading', 'ready', 'partial', 'unavailable'},
+        )
+        self.assertEqual({state.value for state in ParticipationState}, {'active', 'paused'})
 
     def snapshot(self, mid='m1', **kwargs):
         return self.store.snapshot(mid, self.settings, now=NOW, joined_at=NOW-10, **kwargs)

@@ -2,7 +2,7 @@ from dataclasses import replace
 from pathlib import Path
 import tempfile
 import unittest
-from feishu_meeting_adviser.models import Caption, ChangeKind, SourceState, Status
+from feishu_meeting_adviser.models import Caption, ChangeKind, SourceState, Status, digest
 from feishu_meeting_adviser.storage import CapacityError, DurableFakeConsumer, StorageError, Store
 
 
@@ -60,6 +60,8 @@ class StorageTests(unittest.TestCase):
         self.assertEqual([r.kind for r in rows], [ChangeKind.ADDED, ChangeKind.UPDATED, ChangeKind.CONFLICT, ChangeKind.STATUS])
         self.assertEqual(self.store.caption('m1', 's:1'), newer)
         self.assertEqual(self.store.current_state('m1').state, SourceState.INCOMPLETE)
+        self.assertEqual(self.store.list_conflicts('m1'), [{'delivery_id': rows[2].delivery_id}])
+        self.assertEqual(self.store.list_conflicts('m1', show_text=True)[0]['text'], 'unknown order')
 
     def test_capacity_failure_preserves_checkpoint_and_input(self):
         self.store.max_payload_bytes = self.store.payload_bytes() + 10
@@ -91,3 +93,9 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(self.path.parent.stat().st_mode & 0o777, 0o700)
         for suffix in ('-wal', '-shm'):
             self.assertEqual(Path(str(self.path) + suffix).stat().st_mode & 0o777, 0o600)
+
+    def test_deletion_queries_hide_meeting_identity_behind_store_api(self):
+        self.assertFalse(self.store.is_deleted('m1'))
+        self.store.forget_meeting('m1', at='now')
+        self.assertTrue(self.store.is_deleted('m1'))
+        self.assertEqual(self.store.deleted_identities(), {digest('m1')})

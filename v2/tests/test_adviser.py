@@ -407,10 +407,12 @@ class AdviserTests(unittest.TestCase):
     def test_status_and_model_diagnostics_do_not_expose_content(self):
         self.commit(self.caption)
         self.runner.ingest()
+        self.path.write_text(self.path.read_text() + 'llm:\n  backend: opencode\n')
         output=io.StringIO()
         with patch('feishu_meeting_adviser.__main__.FeishuClient',return_value=self.api),redirect_stdout(output):
             self.assertEqual(main(['--config',str(self.path),'status']),0)
         value=json.loads(output.getvalue())
+        self.assertEqual(value['adviser']['backend'],'opencode')
         self.assertEqual(value['adviser']['model_state'],'waiting')
         self.assertEqual(value['adviser']['pending_model_inputs'],1)
         self.assertNotIn(self.caption.text,output.getvalue())

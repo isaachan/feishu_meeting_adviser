@@ -68,7 +68,7 @@ class AdviserRunner:
                 self.data.set_materials(self.mid,{'state':'disabled','context_version':None,'documents':[]},now=self.clock())
                 self.material_loaded = True
                 return
-            self.data.db.execute('UPDATE meetings SET material_state=\'loading\' WHERE meeting_id=?',(self.mid,))
+            self.data.mark_material_loading(self.mid)
         settings = self.config.meeting_context
         logger = ContentPreviews(self.config.data_directory/'content_previews',self.mid,
             max_bytes=settings.preview_bytes,backups=settings.preview_backups,display=self.preview_display)
@@ -110,7 +110,7 @@ class AdviserRunner:
             lock.release()
 
     def guard(self):
-        if self.source.db.execute('SELECT 1 FROM tombstones WHERE identity=?',(digest(self.mid),)).fetchone():
+        if self.source.is_deleted(self.mid):
             raise LifecycleError('meeting content was deleted; model consumption cannot restart for this meeting')
         if self.manager.session() != self.session:
             raise LifecycleError('adviser session changed; restart after checking meeting state')

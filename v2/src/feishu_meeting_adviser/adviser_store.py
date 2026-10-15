@@ -7,7 +7,7 @@ import sqlite3
 import time
 from uuid import NAMESPACE_URL, uuid5
 
-from .models import ChangeKind, digest, epoch_ns
+from .models import ChangeKind, MaterialState, digest, epoch_ns
 from .llm import ModelError
 from .storage import CapacityError, StorageError, caption_from_json, connect_private, decode_mapping, encode
 from .adapters.persistence.sqlite import SQLiteDatabase
@@ -105,7 +105,8 @@ class AdviserStore:
         if binding and (binding.get('meeting_id') != mid or binding.get('join_instance') != meeting['join_instance']):
             raise StorageError('material snapshot meeting/session mismatch')
         version = snapshot.get('context_version')
-        if snapshot['state'] not in ('disabled','ready','partial','unavailable'):
+        if snapshot['state'] not in {
+                MaterialState.DISABLED, MaterialState.READY, MaterialState.PARTIAL, MaterialState.UNAVAILABLE}:
             raise StorageError('invalid material snapshot state')
         with self.transaction():
             if meeting['material_version'] != version:
@@ -118,6 +119,18 @@ class AdviserStore:
             self.db.execute('INSERT INTO meeting_materials(meeting_id,body,loaded_ns) VALUES (?,?,?) ON CONFLICT(meeting_id) '
                             'DO UPDATE SET body=excluded.body,loaded_ns=excluded.loaded_ns',
                             (mid,encode(snapshot),int(now*1_000_000_000)))
+
+    def mark_material_loading(self, mid):
+        with self.transaction():
+            changed = self.db.execute(
+                'UPDATE meetings SET material_state=? WHERE meeting_id=?',
+                (MaterialState.LOADING, mid),
+            ).rowcount
+            if changed != 1:
+                raise StorageError('unknown adviser meeting')
+
+    def list_meeting_ids(self):
+        return [row['meeting_id'] for row in self.db.execute('SELECT meeting_id FROM meetings')]
 
     def materials(self, mid):
         row = self.db.execute('SELECT body FROM meeting_materials WHERE meeting_id=?',(mid,)).fetchone()
@@ -408,12 +421,12 @@ class AdviserStore:
     def status(self, mid, *, active=False, now=None):
         meeting = self.meeting(mid)
         if not meeting:
-            return {'backend':'codex','model_state':'not_started'}
+            return {'model_state':'not_started'}
         pending = max(0,meeting['generation']-meeting['decided_generation'])
         running = self.db.execute('SELECT 1 FROM jobs WHERE meeting_id=? AND state=\'running\' LIMIT 1',(mid,)).fetchone()
         now = time.time() if now is None else now
         state = 'running' if active and running else 'backoff' if pending and meeting['retry_at']>now else 'waiting' if pending else 'idle'
-        return {'backend':'codex','consumer_active':active,'participation':meeting['participation'],
+        return {'consumer_active':active,'participation':meeting['participation'],
                 'model_state':state,'model_error':meeting['error'],'pending_model_inputs':pending,
                 'material_state':meeting['material_state'] or 'disabled','material_version':meeting['material_version']} | self.reply_statistics(mid)
 

@@ -115,6 +115,31 @@ class Store:
             raise StorageError('unknown meeting')
         return decode_mapping(row['checkpoint'])
 
+    def is_deleted(self, meeting_id: str) -> bool:
+        return self.db.execute(
+            'SELECT 1 FROM tombstones WHERE identity=?', (digest(meeting_id),)).fetchone() is not None
+
+    def deleted_identities(self) -> set[str]:
+        return {row['identity'] for row in self.db.execute('SELECT identity FROM tombstones')}
+
+    def list_conflicts(self, meeting_id: str, *, show_text: bool = False) -> list[dict]:
+        rows = self.db.execute(
+            '''SELECT c.delivery_id,d.body FROM conflicts c
+               JOIN deliveries d USING(delivery_id)
+               WHERE c.meeting_id=? AND c.resolved=0''',
+            (meeting_id,),
+        ).fetchall()
+        result = []
+        for row in rows:
+            item = {'delivery_id': row['delivery_id']}
+            if show_text:
+                body = decode_mapping(row['body'])
+                if not isinstance(body.get('text'), str):
+                    raise StorageError('invalid stored conflict; body hidden')
+                item['text'] = body['text']
+            result.append(item)
+        return result
+
     def caption(self, meeting_id: str, key: str) -> Caption | None:
         row = self.db.execute('SELECT body FROM captions WHERE meeting_id=? AND sentence_key=?', (meeting_id, key)).fetchone()
         return caption_from_json(row['body']) if row else None

@@ -30,6 +30,35 @@ class SourceState(StrEnum):
     ENDED = 'ended'
 
 
+class JobState(StrEnum):
+    PENDING = 'pending'
+    RUNNING = 'running'
+    COMPLETE = 'complete'
+    ABANDONED = 'abandoned'
+
+
+class ReplyState(StrEnum):
+    PENDING = 'pending'
+    SENDING = 'sending'
+    SENT = 'sent'
+    UNCERTAIN = 'uncertain'
+    REJECTED = 'rejected'
+    CANCELLED = 'cancelled'
+
+
+class MaterialState(StrEnum):
+    DISABLED = 'disabled'
+    LOADING = 'loading'
+    READY = 'ready'
+    PARTIAL = 'partial'
+    UNAVAILABLE = 'unavailable'
+
+
+class ParticipationState(StrEnum):
+    ACTIVE = 'active'
+    PAUSED = 'paused'
+
+
 RawTime = str | int | None
 _RFC3339 = re.compile(r'^(\d{4}-\d\d-\d\d[Tt]\d\d:\d\d:\d\d)(?:\.(\d{1,9}))?([Zz]|[+-]\d\d:\d\d)$')
 

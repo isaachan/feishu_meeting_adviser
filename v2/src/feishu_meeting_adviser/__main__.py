@@ -140,7 +140,7 @@ def main(argv=None):
                 mid = session['meeting_id']
                 status = store.current_state(mid)
                 result.update(store.statistics(mid, args.consumer))
-                result['content_deleted'] = bool(store.db.execute('SELECT 1 FROM tombstones WHERE identity=?',(digest(mid),)).fetchone())
+                result['content_deleted'] = store.is_deleted(mid)
                 path = config.data_directory / 'adviser.sqlite3'
                 if path.exists():
                     lock = FileLock(config.data_directory / 'locks' / 'adviser.lock')
@@ -153,7 +153,7 @@ def main(argv=None):
                         lock.release()
                     data = storage_factory.adviser(readonly=plan.adviser_readonly)
                     try:
-                        result['adviser'] = data.status(mid,active=active)
+                        result['adviser'] = {'backend': config.llm.backend} | data.status(mid,active=active)
                     finally:
                         data.close()
             print(json.dumps(result))
@@ -243,14 +243,7 @@ def main(argv=None):
             print('Saved meeting content and managed consumer copies deleted; bot session retained for explicit leave.')
         elif args.command == 'conflicts':
             session = manager.saved_meeting()
-            rows = store.db.execute('SELECT c.delivery_id,d.body FROM conflicts c JOIN deliveries d USING(delivery_id) '
-                                    'WHERE c.meeting_id=? AND c.resolved=0', (session['meeting_id'],)).fetchall()
-            result = []
-            for row in rows:
-                item = {'delivery_id': row['delivery_id']}
-                if args.show_text:
-                    item['text'] = json.loads(row['body'])['text']
-                result.append(item)
+            result = store.list_conflicts(session['meeting_id'], show_text=args.show_text)
             print(json.dumps(result, ensure_ascii=False))
         return 0
     except (ConfigError, StorageError, LifecycleError, ApiError, ModelError) as exc:

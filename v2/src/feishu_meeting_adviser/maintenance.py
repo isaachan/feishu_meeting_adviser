@@ -23,7 +23,7 @@ class Maintenance:
         return FileLock(self.config.data_directory / 'locks' / 'maintenance.lock')
 
     def _clean_consumer_copies(self, *, strict_runtime=False):
-        identities = {r[0] for r in self.store.db.execute('SELECT identity FROM tombstones')}
+        identities = self.store.deleted_identities()
         if not identities:
             return
         ContentPreviews.clean(self.config.data_directory/'content_previews',identities)
@@ -40,8 +40,7 @@ class Maintenance:
         if path.exists():
             data = self.storage_factory.adviser()
             try:
-                mids = [r['meeting_id'] for r in data.db.execute('SELECT meeting_id FROM meetings')]
-                for mid in mids:
+                for mid in data.list_meeting_ids():
                     if digest(mid) in identities:
                         data.forget_meeting(mid)
             finally:

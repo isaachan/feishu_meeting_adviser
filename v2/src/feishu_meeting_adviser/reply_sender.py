@@ -2,7 +2,6 @@
 from .client import ApiError, ErrorKind, StopRequested
 from .config import file_fingerprint
 from .lifecycle import LifecycleError
-from .models import digest
 
 INTRODUCTION = ('大家好，我是会参谋，会结合讨论内容判断是否需要补充或回答。'
                 '会议字幕会保存在本机，并发送给配置的 LLM 处理。'
@@ -34,7 +33,7 @@ def introduce(data, manager, *, clock, diagnose=None):
     if file_fingerprint(manager.config.path)!=manager.config.fingerprint:
         raise LifecycleError('configuration changed; restart before introducing bot')
     session = manager.saved_meeting(require_joined=True)
-    if manager.store.db.execute('SELECT 1 FROM tombstones WHERE identity=?',(digest(session['meeting_id']),)).fetchone():
+    if manager.store.is_deleted(session['meeting_id']):
         raise LifecycleError('meeting content was deleted; do not restart model consumption for this meeting')
     row = data.ensure_introduction(session,INTRODUCTION,now=clock())
     if row['state']=='sent':

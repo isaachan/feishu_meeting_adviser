@@ -19,15 +19,7 @@ IMPLICIT_INSERT = re.compile(
 
 # These are pre-existing boundary violations, identified by stable scope and SQL intent.
 # Every entry must carry a migration reason; the set may shrink but must never grow.
-DIRECT_SQL_ALLOWLIST = {
-    ("__main__.py", "main", "SELECT", "tombstones"): "stage C1 source query API",
-    ("__main__.py", "main", "SELECT", "conflicts"): "stage C1 conflict query API",
-    ("adviser.py", "AdviserRunner._ensure_materials", "UPDATE", "meetings"): "stage C1 material state API",
-    ("adviser.py", "AdviserRunner.guard", "SELECT", "tombstones"): "stage C1 deletion query API",
-    ("maintenance.py", "Maintenance._clean_consumer_copies", "SELECT", "tombstones"): "stage C1 deletion query API",
-    ("maintenance.py", "Maintenance._clean_consumer_copies", "SELECT", "meetings"): "stage C1 meeting query API",
-    ("reply_sender.py", "introduce", "SELECT", "tombstones"): "stage C1 deletion query API",
-}
+DIRECT_SQL_ALLOWLIST = {}
 
 
 def _scope(parents):
