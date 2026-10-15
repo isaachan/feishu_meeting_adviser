@@ -104,7 +104,7 @@ python3 -m feishu_meeting_adviser leave
 ```bash
 python3 -m meeting_adviser_harness \
   --description-file ./description.md \
-  --role-file ./meeting_advisor.md \
+  --role-file ./meeting_adviser.md \
   --backend opencode
 ```
 
