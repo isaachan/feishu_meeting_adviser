@@ -10,6 +10,7 @@ from uuid import NAMESPACE_URL, uuid5
 from .models import ChangeKind, digest, epoch_ns
 from .llm import ModelError
 from .storage import CapacityError, StorageError, caption_from_json, connect_private, decode_mapping, encode
+from .adapters.persistence.sqlite import SQLiteDatabase
 
 
 class AdviserStore:
@@ -59,6 +60,15 @@ class AdviserStore:
         except BaseException:
             self.db.close()
             raise
+
+    @classmethod
+    def open_readonly(cls, path: Path, *, max_database_bytes=150_000_000, max_payload_bytes=100_000_000):
+        instance = cls.__new__(cls)
+        instance.path = Path(path)
+        instance.max_payload_bytes = max_payload_bytes
+        instance.db = SQLiteDatabase.open_readonly(
+            instance.path, max_database_bytes=max_database_bytes).connection
+        return instance
 
     def close(self):
         self.db.close()

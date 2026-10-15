@@ -17,7 +17,8 @@ import threading
 import time
 from urllib import error, request
 
-from .lifecycle import FileLock, LockBusy
+from .infrastructure.errors import LockBusy
+from .infrastructure.file_lock import FileLock
 from .llm import DECISION_SCHEMA, Decision, ModelError
 from .storage import private_directory
 

@@ -5,11 +5,11 @@ import queue
 import threading
 import time
 
-from .adviser_store import AdviserStore
 from .client import ApiError, StopRequested
 from .config import file_fingerprint
 from .diagnostics import sanitize
-from .lifecycle import FileLock, LifecycleError, LockBusy
+from .infrastructure.errors import LifecycleError, LockBusy
+from .infrastructure.file_lock import FileLock
 from .llm import create_backend, ModelError, load_role
 from .maintenance import Maintenance
 from .reply_sender import introduce, send_saved_reply
@@ -17,6 +17,7 @@ from .models import digest
 from .materials import ContentPreviews, MATERIAL_POLICY, MaterialError, load_materials
 from .oauth import OAuthError, OAuthManager
 from .storage import StorageError
+from .adapters.persistence.factory import StorageFactory
 
 
 class AdviserRunner:
@@ -36,8 +37,7 @@ class AdviserRunner:
         if self.config.meeting_context.enabled:
             self.role += MATERIAL_POLICY
             self.role_version = digest([self.role_file_version,MATERIAL_POLICY])
-        self.data = AdviserStore(self.config.data_directory / 'adviser.sqlite3',
-            max_database_bytes=self.config.database_capacity_bytes, max_payload_bytes=self.config.content_capacity_bytes)
+        self.data = StorageFactory(self.config).adviser()
         self.data.ensure_meeting(self.mid)
         self.maintenance = Maintenance(source, self.config)
         self.lock = FileLock(self.config.data_directory / 'locks' / 'adviser.lock')

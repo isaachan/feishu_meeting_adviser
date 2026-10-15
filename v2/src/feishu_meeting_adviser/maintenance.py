@@ -2,11 +2,12 @@
 from pathlib import Path
 import time
 from .collector import utc_now
-from .lifecycle import FileLock, LifecycleError
+from .infrastructure.errors import LifecycleError
+from .infrastructure.file_lock import FileLock
 from .models import digest
 from .storage import DurableFakeConsumer
-from .adviser_store import AdviserStore
 from .materials import ContentPreviews
+from .adapters.persistence.factory import StorageFactory
 
 
 class Maintenance:
@@ -16,6 +17,7 @@ class Maintenance:
         self.clock = clock
         self.diagnose = diagnose or (lambda record:None)
         self.last_run = None
+        self.storage_factory = StorageFactory(config)
 
     def lock(self):
         return FileLock(self.config.data_directory / 'locks' / 'maintenance.lock')
@@ -36,7 +38,7 @@ class Maintenance:
                 consumer.close()
         path = self.config.data_directory / 'adviser.sqlite3'
         if path.exists():
-            data = AdviserStore(path,max_database_bytes=self.config.database_capacity_bytes)
+            data = self.storage_factory.adviser()
             try:
                 mids = [r['meeting_id'] for r in data.db.execute('SELECT meeting_id FROM meetings')]
                 for mid in mids:
@@ -49,7 +51,7 @@ class Maintenance:
         path = self.config.data_directory / 'adviser.sqlite3'
         if not path.exists():
             return set()
-        data = AdviserStore(path,max_database_bytes=self.config.database_capacity_bytes)
+        data = self.storage_factory.adviser()
         try:
             return data.protected_meetings()
         finally:
@@ -63,7 +65,7 @@ class Maintenance:
             ContentPreviews.clean(self.config.data_directory/'content_previews',cutoff_ns=cutoff)
             path = self.config.data_directory / 'adviser.sqlite3'
             if path.exists():
-                data = AdviserStore(path,max_database_bytes=self.config.database_capacity_bytes)
+                data = self.storage_factory.adviser()
                 try:
                     data.prune_history(cutoff)
                 finally:

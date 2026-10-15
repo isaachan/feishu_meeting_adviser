@@ -20,7 +20,8 @@ import tempfile
 import time
 from urllib import error, parse, request
 
-from .lifecycle import FileLock, LifecycleError, LockBusy
+from .infrastructure.errors import LifecycleError, LockBusy
+from .infrastructure.file_lock import FileLock
 from .models import digest
 from .storage import StorageError, private_directory
 

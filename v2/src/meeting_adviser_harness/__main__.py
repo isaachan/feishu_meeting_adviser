@@ -22,7 +22,8 @@ from feishu_meeting_adviser.lifecycle import LifecycleError
 from feishu_meeting_adviser.materials import MaterialError, load_materials
 from feishu_meeting_adviser.models import Caption, SourceState, Status, digest
 from feishu_meeting_adviser.oauth import OAuthError, OAuthManager
-from feishu_meeting_adviser.storage import StorageError, Store, private_directory
+from feishu_meeting_adviser.storage import StorageError, private_directory
+from feishu_meeting_adviser.adapters.persistence.factory import StorageFactory
 
 
 def _read_text(path: Path, label: str, maximum: int = 1_000_000) -> str:
@@ -190,8 +191,8 @@ class Harness:
         self.shutdown_timeout = config.llm.timeout_seconds + 10
         self.root = config.data_directory
         private_directory(self.root)
-        self.writer = Store(self.root / 'source.sqlite3', max_payload_bytes=config.content_capacity_bytes,
-            max_database_bytes=config.database_capacity_bytes)
+        self.storage_factory = StorageFactory(config, root=self.root)
+        self.writer = self.storage_factory.source()
         self.speaker = '参会者 1'
         self.counter = 0
         self.runner = self.thread = self.stop_event = None
@@ -238,8 +239,7 @@ class Harness:
         try:
             config = self.config_factory()
             description = _read_text(self.description_file, 'description file')
-            source = Store(self.root / 'source.sqlite3', max_payload_bytes=config.content_capacity_bytes,
-                max_database_bytes=config.database_capacity_bytes)
+            source = self.storage_factory.source()
             manager = _HarnessManager(source,config,self.session,self.display)
             client = _MaterialClient(config,self.oauth_directory,description,self.session,self.stop_event)
             def material_loader(cfg, session, **kwargs):

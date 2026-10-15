@@ -11,18 +11,21 @@ import time
 
 from . import __version__
 from .adviser import AdviserRunner
-from .adviser_store import AdviserStore
 from .client import ApiError, FeishuClient, StopRequested
 from .collector import utc_now
 from .config import ConfigError, DEFAULT_CONFIG, load_config
-from .lifecycle import FileLock, LifecycleError, LockBusy, MeetingSource, SessionManager
+from .infrastructure.errors import LifecycleError, LockBusy
+from .infrastructure.file_lock import FileLock
+from .lifecycle import MeetingSource, SessionManager
 from .diagnostics import Diagnostics
 from .maintenance import Maintenance
 from .models import SourceState, digest
 from .llm import ModelError
 from .rules import deadline_reply
 from .reply_sender import introduce
-from .storage import DurableFakeConsumer, StorageError, Store
+from .storage import StorageError
+from .adapters.persistence.factory import StorageFactory
+from .cli.bootstrap import storage_plan
 
 
 def parser():
@@ -72,8 +75,14 @@ def main(argv=None):
             config = replace(config,llm=replace(config.llm,backend=args.backend))
         if args.command in ('status','consume'):
             args.consumer = args.consumer or ('adviser' if config.llm.backend in ('codex','opencode') else 'fake-qa')
-        store = Store(config.data_directory / 'source.sqlite3', max_payload_bytes=config.content_capacity_bytes,
-                      max_database_bytes=config.database_capacity_bytes)
+        storage_factory = StorageFactory(config)
+        plan = storage_plan(args.command)
+        if plan.source_readonly and not storage_factory.source_path.exists():
+            if args.command == 'status':
+                print(json.dumps({'session_phase':'none'}))
+                return 0
+            raise StorageError('no saved product database for read-only command')
+        store = storage_factory.source(readonly=plan.source_readonly)
         diagnostics = Diagnostics(config.data_directory / 'diagnostics', max_bytes=config.diagnostic_bytes,
                                   backups=config.diagnostic_backups)
         maintenance = Maintenance(store, config, diagnose=diagnostics.write)
@@ -83,8 +92,7 @@ def main(argv=None):
             manager.join()
             if config.llm.backend in ('codex','opencode') and config.llm.introduction:
                 with FileLock(config.data_directory / 'locks' / 'adviser.lock'),maintenance.lock():
-                    data = AdviserStore(config.data_directory / 'adviser.sqlite3',
-                        max_database_bytes=config.database_capacity_bytes,max_payload_bytes=config.content_capacity_bytes)
+                    data = storage_factory.adviser()
                     try:
                         data.recover_sends()
                         if not introduce(data,manager,clock=time.time,diagnose=diagnostics.write):
@@ -143,7 +151,7 @@ def main(argv=None):
                     else:
                         active = False
                         lock.release()
-                    data = AdviserStore(path,max_database_bytes=config.database_capacity_bytes)
+                    data = storage_factory.adviser(readonly=plan.adviser_readonly)
                     try:
                         result['adviser'] = data.status(mid,active=active)
                     finally:
@@ -174,8 +182,7 @@ def main(argv=None):
             session = manager.saved_meeting()
             with maintenance.lock():
                 rows = store.read(session['meeting_id'], args.consumer, limit=args.limit)
-                consumer = DurableFakeConsumer(config.data_directory / 'fake_consumers' / (digest(args.consumer) + '.sqlite3'),
-                                                max_database_bytes=config.database_capacity_bytes)
+                consumer = storage_factory.fake_consumer(digest(args.consumer))
                 try:
                     accepted = replied = 0
                     for row in rows:
@@ -208,7 +215,7 @@ def main(argv=None):
                 if args.command == 'resolve-reply':
                     lock.acquire()
                 try:
-                    data = AdviserStore(path,max_database_bytes=config.database_capacity_bytes)
+                    data = storage_factory.adviser(readonly=plan.adviser_readonly)
                     try:
                         if args.command == 'replies':
                             print(json.dumps(data.list_replies(session['meeting_id'],show_text=args.show_text),ensure_ascii=False))

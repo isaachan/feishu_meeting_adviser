@@ -7,7 +7,7 @@ import subprocess
 import sys
 import threading
 
-from .lifecycle import FileLock
+from .infrastructure.file_lock import FileLock
 from .storage import private_directory
 
 

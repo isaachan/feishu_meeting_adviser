@@ -3,56 +3,12 @@ from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
 import json
-import os
 import sqlite3
-import stat
 import time
 from typing import Callable
 
 from .models import Caption, ChangeKind, Delivery, IngestMode, SourceState, Status, digest, epoch_ns
-
-
-class StorageError(Exception):
-    """Safe local error, never includes database contents or a sensitive path."""
-
-
-class CapacityError(StorageError):
-    pass
-
-
-def private_directory(path: Path) -> None:
-    path.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if path.is_symlink() or not path.is_dir() or stat.S_IMODE(path.stat().st_mode) & 0o077:
-        raise StorageError('data directory must be a real directory with mode 700')
-
-
-def connect_private(path: Path, *, max_database_bytes: int = 150_000_000) -> sqlite3.Connection:
-    private_directory(path.parent)
-    if path.is_symlink():
-        raise StorageError('database must not be a symlink')
-    if path.exists() and (not path.is_file() or path.stat().st_mode & 0o077):
-        raise StorageError('database must be a regular file with mode 600')
-    fd = os.open(path, os.O_CREAT | os.O_RDWR | getattr(os, 'O_NOFOLLOW', 0), 0o600)
-    os.close(fd)
-    db = sqlite3.connect(path, isolation_level=None, timeout=5)
-    try:
-        db.row_factory = sqlite3.Row
-        db.execute('PRAGMA journal_mode=WAL')
-        db.execute('PRAGMA synchronous=FULL')
-        db.execute('PRAGMA foreign_keys=ON')
-        db.execute('PRAGMA secure_delete=ON')
-        db.execute('PRAGMA wal_autocheckpoint=256')
-        db.execute('PRAGMA journal_size_limit=1048576')
-        page_size = db.execute('PRAGMA page_size').fetchone()[0]
-        max_pages = max_database_bytes // page_size
-        if max_pages < db.execute('PRAGMA page_count').fetchone()[0]:
-            raise CapacityError('database already exceeds configured capacity; data preserved')
-        db.execute(f'PRAGMA max_page_count={max_pages}')
-        db.execute('PRAGMA busy_timeout=5000')
-        return db
-    except BaseException:
-        db.close()
-        raise
+from .adapters.persistence.sqlite import CapacityError, SQLiteDatabase, StorageError, connect_private, private_directory
 
 
 def encode(value) -> str:
@@ -92,6 +48,20 @@ class Store:
         except BaseException:
             self.close()
             raise
+
+    @classmethod
+    def open_readonly(cls, path: Path, *, max_payload_bytes: int = 100_000_000,
+                      max_database_bytes: int = 150_000_000):
+        instance = cls.__new__(cls)
+        instance.path = Path(path)
+        instance.max_payload_bytes = max_payload_bytes
+        instance.opened_ns = time.time_ns()
+        instance.max_database_bytes = max_database_bytes
+        instance.last_commit_captions = []
+        instance.last_commit_changes = []
+        instance.db = SQLiteDatabase.open_readonly(
+            instance.path, max_database_bytes=max_database_bytes).connection
+        return instance
 
     def _initialize(self):
         version = self.db.execute('PRAGMA user_version').fetchone()[0]
