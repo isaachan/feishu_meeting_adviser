@@ -7,12 +7,13 @@ import sqlite3
 import time
 from uuid import NAMESPACE_URL, uuid5
 
-from .models import ChangeKind, JobState, MaterialState, ParticipationState, digest, epoch_ns
+from .models import ChangeKind, JobState, MaterialState, ParticipationState, digest
 from .llm import ModelError
 from .storage import CapacityError, StorageError, caption_from_json, connect_private, decode_mapping, encode
 from .adapters.persistence.sqlite import SQLiteDatabase
 from .adapters.persistence.adviser_migrations import migrate_adviser, require_current_adviser_schema
 from .adapters.persistence.adviser_repositories import AdviserUnitOfWork
+from .snapshot import SnapshotBuilder, is_fresh_caption
 
 
 class AdviserStore:
@@ -176,88 +177,40 @@ class AdviserStore:
                 fault('before_commit')
         return inserted
 
-    @staticmethod
-    def fresh(caption, *, now, joined_at, settings, bot_id=None):
-        timestamp = caption.end_ns if caption.end_ns is not None else caption.event_ns
-        if timestamp is None or caption.speaker_id == bot_id and bot_id is not None:
-            return False
-        seconds = timestamp / 1_000_000_000
-        return joined_at <= seconds <= now + 5 and seconds >= now - settings.freshness_seconds
+    fresh = staticmethod(is_fresh_caption)
+
+    def context_rows(self, mid, *, limit):
+        return [dict(row) for row in self.db.execute(
+            'SELECT * FROM context WHERE meeting_id=? ORDER BY generation DESC LIMIT ?', (mid, limit))]
+
+    def pending_reply_row(self, mid):
+        row = self.db.execute(
+            '''SELECT * FROM outbox WHERE meeting_id=? AND kind='reply' AND state='pending'
+               ORDER BY created_ns DESC LIMIT 1''',
+            (mid,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def recent_reply_rows(self, mid, *, limit):
+        return [dict(row) for row in self.db.execute(
+            '''SELECT content,state FROM outbox WHERE meeting_id=? AND state IN ('sent','uncertain')
+               ORDER BY created_ns DESC LIMIT ?''',
+            (mid, limit),
+        )]
+
+    def context_count(self, mid):
+        return self.db.execute(
+            'SELECT count(*) FROM context WHERE meeting_id=?', (mid,)).fetchone()[0]
 
     def snapshot(self, mid, settings, *, now, joined_at, bot_id=None, role_characters=0):
-        meeting = self.meeting(mid)
-        if not meeting:
-            raise StorageError('unknown adviser meeting')
-        rows = self.db.execute('SELECT * FROM context WHERE meeting_id=? ORDER BY generation DESC LIMIT 1000', (mid,)).fetchall()
-        captions, fresh_keys, fingerprints = [], [], {}
-        used = 0
-        for row in rows:
-            caption = caption_from_json(row['body'])
-            item = asdict(caption) | {'conflicted': bool(row['suppressed'])}
-            size = len(encode(item))
-            if used + size > settings.context_characters:
-                continue  # Keep whole sentences; never trigger from silently truncated text.
-            used += size
-            captions.append(item)
-            if not row['suppressed']:
-                fingerprints[caption.sentence_key] = caption.fingerprint
-                if row['generation'] > meeting['decided_generation'] and self.fresh(
-                        caption, now=now, joined_at=joined_at, settings=settings, bot_id=bot_id):
-                    fresh_keys.append(caption.sentence_key)
-        def order(item):
-            stamp = epoch_ns(item['end_time'], numeric_milliseconds=True) or epoch_ns(item['event_time'])
-            return (stamp is None, stamp or 0, item['sentence_key'])
-        captions.sort(key=order)
-        pending = self.db.execute('SELECT * FROM outbox WHERE meeting_id=? AND kind=\'reply\' AND state=\'pending\' ORDER BY created_ns DESC LIMIT 1', (mid,)).fetchone()
-        pending_reply = None
-        reply_keys = list(fresh_keys)
-        if pending:
-            basis = decode_mapping(pending['evidence'])
-            pending_reply = {'uuid': pending['uuid'], 'text': pending['content'], 'reply_sentence_keys': list(basis)}
-            for key, fingerprint in basis.items():
-                row = next((item for item in captions if item['sentence_key']==key), None)
-                if row and fingerprints.get(key)==fingerprint:
-                    caption = caption_from_json(encode({k:v for k,v in row.items() if k!='conflicted'}))
-                    if self.fresh(caption, now=now, joined_at=joined_at, settings=settings, bot_id=bot_id):
-                        reply_keys.append(key)
-        sent = [{'text':r['content'], 'state':r['state']} for r in self.db.execute(
-            'SELECT content,state FROM outbox WHERE meeting_id=? AND state IN (\'sent\',\'uncertain\') ORDER BY created_ns DESC LIMIT 20', (mid,))]
-        result = {'generation': meeting['generation'], 'participation': meeting['participation'],
-                'source_state': meeting['source_state'], 'captions': captions,
-                'source_status': decode_mapping(meeting['source_status']) if meeting['source_status'] else None,
-                'fresh_input_keys': fresh_keys, 'evidence': fingerprints,
-                'context_omitted': len(captions) < self.db.execute('SELECT count(*) FROM context WHERE meeting_id=?', (mid,)).fetchone()[0],
-                'pending_reply': pending_reply, 'sent_replies': sent, 'reply_allowed_keys': list(set(reply_keys))}
-
-        material = self.materials(mid)
-        if material and material['state'] != 'disabled':
-            result['meeting_context'] = material
-        # Count the entire serialized snapshot plus role, including evidence and prior replies.
-        # Prefer captions to old sent messages and material text; keep source metadata.
-        while len(encode(result)) + role_characters > settings.context_characters:
-            result['context_omitted'] = True
-            if result['sent_replies']:
-                result['sent_replies'].pop()
-            elif result.get('meeting_context') and any(item.get('text') for item in result['meeting_context']['documents']):
-                item = max(result['meeting_context']['documents'],key=lambda value:len(value.get('text','')))
-                excess = len(encode(result)) + role_characters - settings.context_characters
-                item['text'] = item['text'][:-max(1,excess)]
-                item['truncated'] = True
-                result['meeting_context']['state'] = 'partial'
-            elif result.get('meeting_context',{}).get('description'):
-                context = result['meeting_context']
-                excess = len(encode(result)) + role_characters - settings.context_characters
-                context['description'] = context['description'][:-max(1,excess)]
-                context['description_truncated'] = True
-                context['state'] = 'partial'
-            elif result['captions']:
-                key = result['captions'].pop(0)['sentence_key']
-                result['evidence'].pop(key,None)
-                result['fresh_input_keys'] = [value for value in result['fresh_input_keys'] if value!=key]
-                result['reply_allowed_keys'] = [value for value in result['reply_allowed_keys'] if value!=key]
-            else:
-                raise ModelError('model_context_budget')
-        return result
+        return SnapshotBuilder(self).build(
+            mid,
+            settings,
+            now=now,
+            joined_at=joined_at,
+            bot_id=bot_id,
+            role_characters=role_characters,
+        )
 
     def prepare_job(self, mid, settings, role_version, *, now, joined_at, bot_id=None, role_characters=0):
         meeting = self.meeting(mid)
