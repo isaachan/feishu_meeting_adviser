@@ -9,7 +9,7 @@ from contextlib import redirect_stdout, redirect_stderr
 import io
 import json
 
-from feishu_meeting_adviser.adviser import AdviserRunner
+from feishu_meeting_adviser.adviser import AdviserRunner, AdviserService
 from feishu_meeting_adviser.__main__ import main
 from feishu_meeting_adviser.client import ApiError, ErrorKind
 from feishu_meeting_adviser.collector import utc_now
@@ -74,6 +74,10 @@ class AdviserTests(unittest.TestCase):
         self.addCleanup(self.runner.close)
         self.caption = Caption(MID, 's:1', '合成会议发言', '2026-10-13T00:00:01Z',
                                event_time='2026-10-13T00:00:00Z', speaker_id='synthetic-speaker')
+
+    def test_runner_name_remains_a_service_compatibility_alias(self):
+        self.assertIs(AdviserRunner, AdviserService)
+        self.assertIsInstance(self.runner, AdviserService)
 
     def commit(self, *captions):
         self.source.commit_page(MID,list(captions),{})

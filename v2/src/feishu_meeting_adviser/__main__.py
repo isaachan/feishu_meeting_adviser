@@ -10,7 +10,7 @@ import threading
 import time
 
 from . import __version__
-from .adviser import AdviserRunner
+from .adviser import AdviserService
 from .client import ApiError, FeishuClient, StopRequested
 from .collector import utc_now
 from .config import ConfigError, DEFAULT_CONFIG, load_config
@@ -158,7 +158,9 @@ def main(argv=None):
                         data.close()
             print(json.dumps(result))
         elif args.command == 'consume' and config.llm.backend in ('codex','opencode'):
-            adviser = AdviserRunner(store,manager,consumer_id=args.consumer,limit=args.limit,diagnose=diagnostics.write)
+            adviser = AdviserService(
+                store, manager, consumer_id=args.consumer, limit=args.limit,
+                diagnose=diagnostics.write)
             previous = {}
             if threading.current_thread() is threading.main_thread():
                 for signum in (signal.SIGINT,signal.SIGTERM):

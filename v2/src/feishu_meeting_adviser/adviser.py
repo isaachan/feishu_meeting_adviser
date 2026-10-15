@@ -1,4 +1,4 @@
-"""Independent durable inbox and one bounded model worker per meeting consumer."""
+"""Application service orchestrating durable input, model work and reply dispatch."""
 from contextlib import contextmanager
 import threading
 import time
@@ -19,7 +19,7 @@ from .reply_dispatcher import ReplyDispatcher
 from .material_bootstrap import MaterialBootstrapper
 
 
-class AdviserRunner:
+class AdviserService:
     def __init__(self, source, manager, *, backend=None, stop_event=None, clock=time.time, consumer_id='adviser', limit=100, diagnose=None,
                  material_client=None, preview_display=None, material_loader=load_materials,
                  model_input_observer=None, decision_observer=None):
@@ -237,3 +237,7 @@ class AdviserRunner:
         if not self.executor.close(timeout=self.settings.timeout_seconds + 5):
             raise LifecycleError('model worker still shutting down; retry stopping before closing storage')
         self.data.close()
+
+
+# Compatibility for callers that imported the pre-refactor orchestration name.
+AdviserRunner = AdviserService

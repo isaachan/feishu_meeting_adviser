@@ -13,7 +13,7 @@ import threading
 import time
 from uuid import uuid4
 
-from feishu_meeting_adviser.adviser import AdviserRunner
+from feishu_meeting_adviser.adviser import AdviserService
 from feishu_meeting_adviser.client import ApiError, StopRequested
 from feishu_meeting_adviser.config import ConfigError, DEFAULT_CONFIG, load_config
 from feishu_meeting_adviser.context_probe import UserContextClient, description_references
@@ -253,7 +253,7 @@ class Harness:
                     'context_omitted':snapshot.get('context_omitted',False)})
             def save_decision(decision):
                 self.display({'kind':'model_decision', **decision.to_dict()})
-            runner = AdviserRunner(source,manager,stop_event=self.stop_event,
+            runner = AdviserService(source,manager,stop_event=self.stop_event,
                 material_client=client,material_loader=material_loader,preview_display=self.display,
                 model_input_observer=save_context,decision_observer=save_decision,
                 diagnose=lambda record:self.display({'kind':'diagnostic',**record}))
