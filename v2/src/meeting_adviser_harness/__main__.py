@@ -16,14 +16,13 @@ from uuid import uuid4
 from feishu_meeting_adviser.adviser import AdviserService
 from feishu_meeting_adviser.client import ApiError, StopRequested
 from feishu_meeting_adviser.config import ConfigError, DEFAULT_CONFIG, load_config
-from feishu_meeting_adviser.context_probe import UserContextClient, description_references
 from feishu_meeting_adviser.diagnostics import Diagnostics
 from feishu_meeting_adviser.lifecycle import LifecycleError
 from feishu_meeting_adviser.materials import MaterialError, load_materials
-from feishu_meeting_adviser.models import Caption, SourceState, Status, digest
-from feishu_meeting_adviser.oauth import OAuthError, OAuthManager
+from feishu_meeting_adviser.oauth import OAuthError
 from feishu_meeting_adviser.storage import StorageError, private_directory
 from feishu_meeting_adviser.adapters.persistence.factory import StorageFactory
+from .adapters import MaterialAdapter, SessionAdapter, TranscriptAdapter
 
 
 def _read_text(path: Path, label: str, maximum: int = 1_000_000) -> str:
@@ -123,62 +122,6 @@ def _watch_events(path: Path, stop_event, write=print, *, poll_seconds=.2, initi
             stream.close()
 
 
-class _MaterialClient:
-    """Supplies a local event while delegating referenced document reads to user OAuth."""
-    def __init__(self, config, oauth_directory: Path, description: str, session: dict, stop_event):
-        self.config, self.description, self.session = config, description, session
-        self.timeout = config.timeout_seconds
-        self.oauth_manager = None
-        self.delegate = None
-        if description_references(description):
-            self.oauth_manager = OAuthManager(config.credentials, oauth_directory)
-            self.delegate = UserContextClient(config.credentials, oauth_manager=self.oauth_manager,
-                timeout=config.timeout_seconds, request_seconds=config.request_seconds,
-                wait=lambda seconds: stop_event.wait(seconds))
-
-    def event(self, calendar_id, event_id, *, timeout=None):
-        joined = int(self.session['joined_at'])
-        return {'event_id':event_id, 'status':'confirmed', 'summary':'Harness meeting materials',
-            'description':'', 'description_rich':self.description, 'attachments':[],
-            'vchat':{'meeting_url':'https://vc.feishu.cn/j/' + self.config.meeting_no},
-            'start_time':{'timestamp':str(joined - 60)}, 'end_time':{'timestamp':str(joined + 86400)}}
-
-    def _read(self, name, token, *, timeout=None):
-        if self.delegate is None:
-            raise MaterialError('document reference requires existing user OAuth authorization')
-        return getattr(self.delegate, name)(token, timeout=timeout)
-
-    def node(self, token, *, timeout=None):
-        return self._read('node', token, timeout=timeout)
-
-    def document(self, token, *, timeout=None):
-        return self._read('document', token, timeout=timeout)
-
-    def document_text(self, token, *, timeout=None):
-        return self._read('document_text', token, timeout=timeout)
-
-
-class _TerminalClient:
-    def __init__(self, display):
-        self.display = display
-
-    def send_message(self, meeting_id, text, message_uuid):
-        self.display({'kind':'reply', 'status':'allowed', 'text':text, 'uuid':message_uuid})
-
-
-class _HarnessManager:
-    def __init__(self, store, config, session, display):
-        self.store, self.config = store, config
-        self._session = session
-        self.client = _TerminalClient(display)
-
-    def session(self, store=None):
-        return dict(self._session)
-
-    def saved_meeting(self, *, require_joined=False):
-        return dict(self._session)
-
-
 class Harness:
     def __init__(self, config_factory, description_file: Path, oauth_directory: Path, display=print):
         self.config_factory = config_factory
@@ -191,7 +134,7 @@ class Harness:
         self.root = config.data_directory
         private_directory(self.root)
         self.storage_factory = StorageFactory(config, root=self.root)
-        self.writer = self.storage_factory.source()
+        self.transcript = TranscriptAdapter(self.storage_factory.source())
         self.speaker = '参会者 1'
         self.counter = 0
         self.runner = self.thread = self.stop_event = None
@@ -202,7 +145,7 @@ class Harness:
         try:
             self.start(new_meeting=True)
         except BaseException:
-            self.writer.close()
+            self.transcript.close()
             raise
 
     def display(self, record):
@@ -220,8 +163,7 @@ class Harness:
             mid = 'harness-' + uuid4().hex
             self.session = self._session(mid)
         self.mid = mid
-        self.writer.ensure_meeting(mid,{})
-        self.writer.publish_status(Status(mid,SourceState.COLLECTING,'harness_running',datetime.now(timezone.utc).isoformat()))
+        self.transcript.start(mid)
         self.stop_event = threading.Event()
         self.submitted_since_start = 0
         self.ready.clear()
@@ -239,8 +181,9 @@ class Harness:
             config = self.config_factory()
             description = _read_text(self.description_file, 'description file')
             source = self.storage_factory.source()
-            manager = _HarnessManager(source,config,self.session,self.display)
-            client = _MaterialClient(config,self.oauth_directory,description,self.session,self.stop_event)
+            manager = SessionAdapter(source, config, self.session, self.display)
+            client = MaterialAdapter(
+                config, self.oauth_directory, description, self.session, self.stop_event)
             def material_loader(cfg, session, **kwargs):
                 return load_materials(cfg,session,client=client,emit=kwargs.get('emit'),
                     stop_event=kwargs.get('stop_event'),clock=kwargs.get('clock',time.time))
@@ -289,13 +232,10 @@ class Harness:
             raise ValueError('caption text must contain 1 to 100000 UTF-8 bytes')
         speaker, text = speaker.strip(), text.strip()
         self.counter += 1
-        at = datetime.now(timezone.utc).isoformat()
-        key = f'harness:{self.counter}:{uuid4().hex}'
-        caption = Caption(self.mid,key,text,at,event_time=at,
-            speaker_id='speaker-' + digest(speaker)[:16],speaker_name=speaker)
         self.submitted_since_start += 1
         try:
-            self.writer.commit_page(self.mid,[caption],{'last':self.counter})
+            key = self.transcript.submit(
+                self.mid, self.counter, speaker, text)
         except BaseException:
             self.submitted_since_start -= 1
             raise
@@ -333,7 +273,7 @@ class Harness:
         try:
             self.stop()
         finally:
-            self.writer.close()
+            self.transcript.close()
 
 
 _SPEAKER = re.compile(r'^\s*([^:：]{1,80})\s*[:：]\s*(.+)$')

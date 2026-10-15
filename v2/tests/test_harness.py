@@ -11,8 +11,9 @@ from unittest.mock import patch
 
 from feishu_meeting_adviser.config import load_config
 from feishu_meeting_adviser.llm import Decision
+from meeting_adviser_harness.adapters import MaterialAdapter
 from meeting_adviser_harness.__main__ import (
-    Harness, _HarnessOutput, _MaterialClient, _handle_line, _read_text, _watch_events,
+    Harness, _HarnessOutput, _handle_line, _read_text, _watch_events,
 )
 
 
@@ -88,7 +89,8 @@ class HarnessAdapterTests(unittest.TestCase):
         config = SimpleNamespace(timeout_seconds=10,request_seconds=.7,
             credentials=SimpleNamespace(app_id='x',app_secret='y'),meeting_no='012345678')
         session = {'joined_at':100}
-        client = _MaterialClient(config,Path('/unused'),'只有本地文字',session,threading.Event())
+        client = MaterialAdapter(
+            config, Path('/unused'), '只有本地文字', session, threading.Event())
         self.assertIsNone(client.oauth_manager)
         event = client.event('harness','harness')
         self.assertEqual(event['description_rich'],'只有本地文字')
