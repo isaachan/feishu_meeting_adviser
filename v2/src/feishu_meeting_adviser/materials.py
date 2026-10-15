@@ -31,7 +31,7 @@ class ContentPreviews(Diagnostics):
         private_directory(Path(root))
         super().__init__(Path(root) / digest(mid), max_bytes=max_bytes, backups=backups)
         self.path = self.directory / 'materials.jsonl'
-        self.display = display or (lambda record: print(json.dumps(record, ensure_ascii=False), flush=True))
+        self.display = display or (lambda record: None)
 
     def write(self, record):
         # Constructed material fields only. No raw responses, headers or authentication payloads.

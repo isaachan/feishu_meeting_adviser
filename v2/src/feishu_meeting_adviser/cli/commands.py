@@ -168,6 +168,8 @@ def _consume_model(context, args):
         consumer_id=args.consumer,
         limit=args.limit,
         diagnose=context.diagnostics.write,
+        preview_display=lambda value: print(
+            json.dumps(value, ensure_ascii=False), flush=True),
     )
     try:
         with stop_on_signals(adviser.stop_event.set):

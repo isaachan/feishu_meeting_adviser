@@ -20,6 +20,14 @@ IMPLICIT_INSERT = re.compile(
 # These are pre-existing boundary violations, identified by stable scope and SQL intent.
 # Every entry must carry a migration reason; the set may shrink but must never grow.
 DIRECT_SQL_ALLOWLIST = {}
+APPLICATION_MODULES = {
+    "adviser.py",
+    "decision.py",
+    "material_bootstrap.py",
+    "model_jobs.py",
+    "reply_dispatcher.py",
+    "snapshot.py",
+}
 
 
 def _scope(parents):
@@ -99,6 +107,21 @@ def implicit_column_inserts():
 
 
 class ArchitectureBoundaryTests(unittest.TestCase):
+    def test_application_services_do_not_print(self):
+        violations = []
+        for name in APPLICATION_MODULES:
+            path = PACKAGE / name
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                        and node.func.id == "print"):
+                    violations.append((name, node.lineno))
+        self.assertEqual(
+            violations,
+            [],
+            "Application services return values or emit callbacks; entrypoints own display.",
+        )
+
     def test_product_direct_sql_matches_shrinking_allowlist(self):
         actual = direct_sql_violations()
         expected = Counter(DIRECT_SQL_ALLOWLIST.keys())

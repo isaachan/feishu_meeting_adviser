@@ -6,7 +6,6 @@ import json
 import os
 from pathlib import Path
 import re
-import signal
 import stat
 import sys
 import threading
@@ -18,6 +17,7 @@ from feishu_meeting_adviser.client import ApiError, StopRequested
 from feishu_meeting_adviser.config import ConfigError, DEFAULT_CONFIG, load_config
 from feishu_meeting_adviser.diagnostics import Diagnostics
 from feishu_meeting_adviser.lifecycle import LifecycleError
+from feishu_meeting_adviser.infrastructure.signals import stop_on_signals
 from feishu_meeting_adviser.materials import MaterialError, load_materials
 from feishu_meeting_adviser.oauth import OAuthError
 from feishu_meeting_adviser.storage import StorageError, private_directory
@@ -335,18 +335,8 @@ def _watch_main(argv):
         path = _event_file(data)
         print('Watching harness events: ' + str(path),file=sys.stderr)
         stop_event = threading.Event()
-        previous = {}
-        if threading.current_thread() is threading.main_thread():
-            def stop_signal(*_):
-                stop_event.set()
-            for signum in (signal.SIGINT,signal.SIGTERM):
-                previous[signum] = signal.getsignal(signum)
-                signal.signal(signum,stop_signal)
-        try:
+        with stop_on_signals(stop_event.set):
             _watch_events(path,stop_event)
-        finally:
-            for signum,handler in previous.items():
-                signal.signal(signum,handler)
         return 0
     except (ConfigError,StorageError,OSError,UnicodeError) as exc:
         print('Watch stopped: ' + str(exc),file=sys.stderr)
@@ -395,15 +385,10 @@ def main(argv=None):
             while not harness.settled() and time.monotonic()<deadline and not harness.failure:
                 time.sleep(0.1)
             return 1 if harness.failure or not harness.settled() else 0
-        previous = {}
-        if threading.current_thread() is threading.main_thread():
-            def stop_signal(*_):
-                harness.stop_event.set()
-                raise KeyboardInterrupt()
-            for signum in (signal.SIGINT,signal.SIGTERM):
-                previous[signum] = signal.getsignal(signum)
-                signal.signal(signum,stop_signal)
-        try:
+        def stop_input():
+            harness.stop_event.set()
+            raise KeyboardInterrupt()
+        with stop_on_signals(stop_input):
             def lines():
                 if not sys.stdin.isatty():
                     yield from sys.stdin
@@ -421,9 +406,6 @@ def main(argv=None):
                     print('Input rejected: ' + str(exc),file=sys.stderr)
                 if harness.stop_event.is_set():
                     break
-        finally:
-            for signum,handler in previous.items():
-                signal.signal(signum,handler)
         return 1 if harness.failure else 0
     except (ConfigError,StorageError,LifecycleError,MaterialError,OAuthError,ApiError,OSError,ValueError,json.JSONDecodeError) as exc:
         print('Harness stopped: ' + str(exc),file=sys.stderr)
