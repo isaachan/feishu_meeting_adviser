@@ -18,7 +18,15 @@ python3 -m meeting_adviser_harness \
 
 角色和描述文件必须是本机 UTF-8 普通文件，符号链接会被拒绝。harness 数据默认保存在产品数据目录下的 `harness/`，也可用 `--data-dir` 指定独立目录。
 
-交互终端默认只显示模型的沉默决定、最终允许回复、显式命令结果和错误，后台状态、材料预览及诊断不会打断输入。完整 JSON 事件保存在启动时显示的私有 `events/harness.jsonl`，文件有大小上限并轮转。需要在终端实时查看全部事件时添加 `--verbose`。
+交互终端只显示模型的沉默决定、最终允许回复、显式命令结果和错误，后台状态、材料预览及诊断不会打断输入。完整 JSON 事件保存在启动时显示的私有 `events/harness.jsonl`，文件有大小上限并轮转。
+
+如需实时查看全部事件，另开一个终端运行：
+
+```bash
+python3 -m meeting_adviser_harness watch
+```
+
+`watch` 默认读取 `config.yaml` 对应的 `data/harness/events/harness.jsonl`，先显示最近 10 条，再持续跟随新增事件和日志轮转。主命令使用了 `--config` 或 `--data-dir` 时，watch 传入相同参数。
 
 ## 模拟发言
 

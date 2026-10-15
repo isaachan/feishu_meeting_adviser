@@ -11,7 +11,9 @@ from unittest.mock import patch
 
 from feishu_meeting_adviser.config import load_config
 from feishu_meeting_adviser.llm import Decision
-from meeting_adviser_harness.__main__ import Harness, _HarnessOutput, _MaterialClient, _handle_line, _read_text
+from meeting_adviser_harness.__main__ import (
+    Harness, _HarnessOutput, _MaterialClient, _handle_line, _read_text, _watch_events,
+)
 
 
 class FakeHarness:
@@ -44,13 +46,33 @@ class HarnessAdapterTests(unittest.TestCase):
             saved = [json.loads(line) for line in output.path.read_text().splitlines()]
             self.assertEqual(saved,events)
 
-    def test_verbose_output_prints_background_json(self):
+    def test_watch_follows_new_events_and_log_rotation(self):
         with tempfile.TemporaryDirectory() as directory:
-            stdout = io.StringIO()
-            output = _HarnessOutput(Path(directory),verbose=True,stdout=stdout)
-            event = {'kind':'status','model_state':'running'}
-            output(json.dumps(event))
-            self.assertEqual(json.loads(stdout.getvalue()),event)
+            output = _HarnessOutput(Path(directory),stdout=io.StringIO())
+            first = {'kind':'status','model_state':'waiting'}
+            second = {'kind':'status','model_state':'running'}
+            third = {'kind':'model_decision','control':'none','reply':None}
+            output(json.dumps(first))
+            stop,seen = threading.Event(),[]
+            watcher = threading.Thread(target=_watch_events,
+                args=(output.path,stop,seen.append),kwargs={'poll_seconds':.01})
+            watcher.start()
+            deadline = time.monotonic()+1
+            while time.monotonic()<deadline and len(seen)<1:
+                time.sleep(.01)
+            output(json.dumps(second))
+            deadline = time.monotonic()+1
+            while time.monotonic()<deadline and len(seen)<2:
+                time.sleep(.01)
+            output.path.replace(Path(str(output.path)+'.manual'))
+            output(json.dumps(third))
+            deadline = time.monotonic()+1
+            while time.monotonic()<deadline and len(seen)<3:
+                time.sleep(.01)
+            stop.set()
+            watcher.join(1)
+            self.assertFalse(watcher.is_alive())
+            self.assertEqual([json.loads(line) for line in seen],[first,second,third])
 
     def test_multi_speaker_and_sticky_speaker_input(self):
         harness = FakeHarness()

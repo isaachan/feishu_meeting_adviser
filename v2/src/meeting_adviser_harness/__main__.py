@@ -3,9 +3,11 @@ from argparse import ArgumentParser
 from dataclasses import replace
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import re
 import signal
+import stat
 import sys
 import threading
 import time
@@ -40,8 +42,8 @@ def _read_text(path: Path, label: str, maximum: int = 1_000_000) -> str:
 
 class _HarnessOutput:
     """Keep the interactive terminal concise while retaining bounded full event records."""
-    def __init__(self, directory: Path, *, verbose=False, stdout=sys.stdout, stderr=sys.stderr):
-        self.verbose, self.stdout, self.stderr = verbose, stdout, stderr
+    def __init__(self, directory: Path, *, stdout=sys.stdout, stderr=sys.stderr):
+        self.stdout, self.stderr = stdout, stderr
         self.rotation = Diagnostics(Path(directory) / 'events',max_bytes=5_000_000,backups=3)
         self.rotation.path = self.rotation.directory / 'harness.jsonl'
         self.path = self.rotation.path
@@ -57,9 +59,6 @@ class _HarnessOutput:
         if len(encoded) > self.rotation.max_bytes:
             encoded = (json.dumps({'kind':'harness_error','error':'event exceeds local log limit'})+'\n').encode()
         self.rotation._append(encoded)
-        if self.verbose:
-            print(line,file=self.stdout,flush=True)
-            return
         kind = record.get('kind')
         if kind == 'reply' and record.get('status') == 'allowed':
             print('\n会参谋：' + record.get('text',''),file=self.stdout,flush=True)
@@ -76,6 +75,55 @@ class _HarnessOutput:
         elif kind == 'status' and record.get('model_error') and record.get('model_error') != self.last_error:
             self.last_error = record['model_error']
             print('\nModel error: ' + self.last_error,file=self.stderr,flush=True)
+
+
+def _event_file(data_directory: Path) -> Path:
+    return Path(data_directory) / 'events' / 'harness.jsonl'
+
+
+def _open_event_file(path: Path):
+    if path.is_symlink() or not path.is_file() or stat.S_IMODE(path.stat().st_mode) & 0o077:
+        raise StorageError('harness event log must be a private regular file')
+    fd = os.open(path,os.O_RDONLY|getattr(os,'O_NOFOLLOW',0))
+    return os.fdopen(fd,'r',encoding='utf-8')
+
+
+def _watch_events(path: Path, stop_event, write=print, *, poll_seconds=.2, initial_lines=10):
+    """Follow the active event file and reopen it after bounded-log rotation."""
+    stream = None
+    first_open = True
+    try:
+        while not stop_event.is_set():
+            if stream is None:
+                if not path.exists():
+                    stop_event.wait(poll_seconds)
+                    continue
+                stream = _open_event_file(path)
+                lines = stream.readlines()
+                for line in (lines[-initial_lines:] if first_open else lines):
+                    write(line.rstrip('\n'))
+                first_open = False
+            line = stream.readline()
+            if line:
+                write(line.rstrip('\n'))
+                continue
+            try:
+                current = path.stat()
+                opened = os.fstat(stream.fileno())
+                rotated = (current.st_dev,current.st_ino) != (opened.st_dev,opened.st_ino)
+                truncated = current.st_size < stream.tell()
+            except FileNotFoundError:
+                rotated = True
+                truncated = False
+            if rotated:
+                stream.close()
+                stream = None
+            elif truncated:
+                stream.seek(0)
+            stop_event.wait(poll_seconds)
+    finally:
+        if stream is not None:
+            stream.close()
 
 
 class _MaterialClient:
@@ -334,11 +382,46 @@ def _parser():
     parser.add_argument('--backend',choices=('codex','opencode'))
     parser.add_argument('--data-dir',type=Path)
     parser.add_argument('--script',type=Path,help='JSONL rows: speaker, text, optional delay_seconds')
-    parser.add_argument('--verbose',action='store_true',help='print every JSON event while running')
     return parser
 
 
+def _watch_parser():
+    parser = ArgumentParser(description='Follow the complete harness JSON event stream.')
+    parser.add_argument('--config',type=Path,default=DEFAULT_CONFIG)
+    parser.add_argument('--data-dir',type=Path)
+    return parser
+
+
+def _watch_main(argv):
+    args = _watch_parser().parse_args(argv)
+    try:
+        config = load_config(args.config)
+        data = args.data_dir.absolute() if args.data_dir else config.data_directory / 'harness'
+        path = _event_file(data)
+        print('Watching harness events: ' + str(path),file=sys.stderr)
+        stop_event = threading.Event()
+        previous = {}
+        if threading.current_thread() is threading.main_thread():
+            def stop_signal(*_):
+                stop_event.set()
+            for signum in (signal.SIGINT,signal.SIGTERM):
+                previous[signum] = signal.getsignal(signum)
+                signal.signal(signum,stop_signal)
+        try:
+            _watch_events(path,stop_event)
+        finally:
+            for signum,handler in previous.items():
+                signal.signal(signum,handler)
+        return 0
+    except (ConfigError,StorageError,OSError,UnicodeError) as exc:
+        print('Watch stopped: ' + str(exc),file=sys.stderr)
+        return 1
+
+
 def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == 'watch':
+        return _watch_main(argv[1:])
     args = _parser().parse_args(argv)
     harness = None
     try:
@@ -355,7 +438,7 @@ def main(argv=None):
                 raise ConfigError('harness requires --backend codex or opencode')
             context = replace(current.meeting_context,calendar_id='harness',event_id='harness',identity='user')
             return replace(current,data_directory=data,llm=llm,meeting_context=context)
-        output = _HarnessOutput(data,verbose=args.verbose)
+        output = _HarnessOutput(data)
         harness = Harness(config_factory,description_file,base.data_directory,display=output)
         print('Harness ready. Enter “speaker: text”, or use /speaker, /context, /reload, /reset, /quit.',file=sys.stderr)
         print('Full event log: ' + str(output.path),file=sys.stderr)
