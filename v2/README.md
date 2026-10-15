@@ -110,7 +110,7 @@ python3 -m meeting_adviser_harness \
 
 输入 `张三: 第一段发言`、`李四: 补充意见` 模拟多人；也可用 `/speaker 张三` 后连续输入。`/context` 显示最近一次实际模型输入，`/reload` 重新读取角色、描述及其文档但保留本轮字幕，`/reset` 开始新的模拟会议，`/quit` 退出。模型运行时仍可继续输入，新字幕会按正式产品规则影响待发送回答。完整说明和 JSONL 回放格式见 [HARNESS](docs/HARNESS.md)。
 
-交互终端隐藏后台状态、材料预览和诊断，只显示模型决定、最终回复及错误；完整 JSON 事件写入启动时显示的私有轮转日志。需要实时查看全部事件时，另开终端运行 `python3 -m meeting_adviser_harness watch`。
+交互终端只显示最终允许回复、显式命令结果和错误；模型保持沉默时不输出，后台状态、材料预览和诊断也不会打断输入。完整 JSON 事件写入启动时显示的私有轮转日志。需要实时查看全部事件时，另开终端运行 `python3 -m meeting_adviser_harness watch`。
 
 ## 查看状态与处理异常
 

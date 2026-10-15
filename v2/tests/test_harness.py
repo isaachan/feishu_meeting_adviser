@@ -38,6 +38,7 @@ class HarnessAdapterTests(unittest.TestCase):
             events = [
                 {'kind':'status','model_state':'running','model_error':None},
                 {'kind':'diagnostic','model_stage':'generation'},
+                {'kind':'model_decision','control':'none','reply':None},
                 {'kind':'reply','status':'allowed','text':'最终回答','uuid':'synthetic'},
             ]
             for event in events:

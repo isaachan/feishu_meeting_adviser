@@ -62,10 +62,6 @@ class _HarnessOutput:
         kind = record.get('kind')
         if kind == 'reply' and record.get('status') == 'allowed':
             print('\n会参谋：' + record.get('text',''),file=self.stdout,flush=True)
-        elif kind == 'model_decision' and record.get('reply') is None:
-            control = record.get('control')
-            message = '保持沉默' if control == 'none' else '控制决定：' + str(control)
-            print('\n[模型决定：' + message + ']',file=self.stdout,flush=True)
         elif kind == 'context':
             print(json.dumps(record,ensure_ascii=False,indent=2),file=self.stdout,flush=True)
         elif kind in ('reload','reset','speaker'):
