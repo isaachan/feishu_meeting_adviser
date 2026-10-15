@@ -15,6 +15,7 @@ from feishu_meeting_adviser.adviser import AdviserRunner
 from feishu_meeting_adviser.client import ApiError, StopRequested
 from feishu_meeting_adviser.config import ConfigError, DEFAULT_CONFIG, load_config
 from feishu_meeting_adviser.context_probe import UserContextClient, description_references
+from feishu_meeting_adviser.diagnostics import Diagnostics
 from feishu_meeting_adviser.lifecycle import LifecycleError
 from feishu_meeting_adviser.materials import MaterialError, load_materials
 from feishu_meeting_adviser.models import Caption, SourceState, Status, digest
@@ -35,6 +36,46 @@ def _read_text(path: Path, label: str, maximum: int = 1_000_000) -> str:
         return value
     except (OSError, UnicodeDecodeError):
         raise ConfigError(f'{label} must be a non-empty local UTF-8 file') from None
+
+
+class _HarnessOutput:
+    """Keep the interactive terminal concise while retaining bounded full event records."""
+    def __init__(self, directory: Path, *, verbose=False, stdout=sys.stdout, stderr=sys.stderr):
+        self.verbose, self.stdout, self.stderr = verbose, stdout, stderr
+        self.rotation = Diagnostics(Path(directory) / 'events',max_bytes=5_000_000,backups=3)
+        self.rotation.path = self.rotation.directory / 'harness.jsonl'
+        self.path = self.rotation.path
+        self.last_error = None
+
+    def __call__(self, line, flush=False):
+        try:
+            record = json.loads(line)
+        except (TypeError,ValueError):
+            record = {'kind':'harness_error','error':'invalid local harness event'}
+            line = json.dumps(record,ensure_ascii=False)
+        encoded = (line + '\n').encode()
+        if len(encoded) > self.rotation.max_bytes:
+            encoded = (json.dumps({'kind':'harness_error','error':'event exceeds local log limit'})+'\n').encode()
+        self.rotation._append(encoded)
+        if self.verbose:
+            print(line,file=self.stdout,flush=True)
+            return
+        kind = record.get('kind')
+        if kind == 'reply' and record.get('status') == 'allowed':
+            print('\n会参谋：' + record.get('text',''),file=self.stdout,flush=True)
+        elif kind == 'model_decision' and record.get('reply') is None:
+            control = record.get('control')
+            message = '保持沉默' if control == 'none' else '控制决定：' + str(control)
+            print('\n[模型决定：' + message + ']',file=self.stdout,flush=True)
+        elif kind == 'context':
+            print(json.dumps(record,ensure_ascii=False,indent=2),file=self.stdout,flush=True)
+        elif kind in ('reload','reset','speaker'):
+            print(json.dumps(record,ensure_ascii=False),file=self.stdout,flush=True)
+        elif kind == 'harness_error':
+            print('\nHarness error: ' + str(record.get('error','unknown error')),file=self.stderr,flush=True)
+        elif kind == 'status' and record.get('model_error') and record.get('model_error') != self.last_error:
+            self.last_error = record['model_error']
+            print('\nModel error: ' + self.last_error,file=self.stderr,flush=True)
 
 
 class _MaterialClient:
@@ -293,6 +334,7 @@ def _parser():
     parser.add_argument('--backend',choices=('codex','opencode'))
     parser.add_argument('--data-dir',type=Path)
     parser.add_argument('--script',type=Path,help='JSONL rows: speaker, text, optional delay_seconds')
+    parser.add_argument('--verbose',action='store_true',help='print every JSON event while running')
     return parser
 
 
@@ -313,8 +355,10 @@ def main(argv=None):
                 raise ConfigError('harness requires --backend codex or opencode')
             context = replace(current.meeting_context,calendar_id='harness',event_id='harness',identity='user')
             return replace(current,data_directory=data,llm=llm,meeting_context=context)
-        harness = Harness(config_factory,description_file,base.data_directory)
+        output = _HarnessOutput(data,verbose=args.verbose)
+        harness = Harness(config_factory,description_file,base.data_directory,display=output)
         print('Harness ready. Enter “speaker: text”, or use /speaker, /context, /reload, /reset, /quit.',file=sys.stderr)
+        print('Full event log: ' + str(output.path),file=sys.stderr)
         if args.script:
             script = _read_text(args.script.absolute(),'script file')
             for number,raw in enumerate(script.splitlines(),1):
@@ -342,7 +386,16 @@ def main(argv=None):
                 previous[signum] = signal.getsignal(signum)
                 signal.signal(signum,stop_signal)
         try:
-            for line in sys.stdin:
+            def lines():
+                if not sys.stdin.isatty():
+                    yield from sys.stdin
+                    return
+                while True:
+                    try:
+                        yield input('发言> ')
+                    except EOFError:
+                        return
+            for line in lines():
                 try:
                     if not _handle_line(harness,line):
                         break

@@ -1,5 +1,6 @@
 from pathlib import Path
 from dataclasses import replace
+import io
 import json
 from types import SimpleNamespace
 import tempfile
@@ -10,7 +11,7 @@ from unittest.mock import patch
 
 from feishu_meeting_adviser.config import load_config
 from feishu_meeting_adviser.llm import Decision
-from meeting_adviser_harness.__main__ import Harness, _MaterialClient, _handle_line, _read_text
+from meeting_adviser_harness.__main__ import Harness, _HarnessOutput, _MaterialClient, _handle_line, _read_text
 
 
 class FakeHarness:
@@ -28,6 +29,29 @@ class FakeHarness:
 
 
 class HarnessAdapterTests(unittest.TestCase):
+    def test_default_output_hides_background_logs_but_saves_every_event(self):
+        with tempfile.TemporaryDirectory() as directory:
+            stdout,stderr = io.StringIO(),io.StringIO()
+            output = _HarnessOutput(Path(directory),stdout=stdout,stderr=stderr)
+            events = [
+                {'kind':'status','model_state':'running','model_error':None},
+                {'kind':'diagnostic','model_stage':'generation'},
+                {'kind':'reply','status':'allowed','text':'最终回答','uuid':'synthetic'},
+            ]
+            for event in events:
+                output(json.dumps(event,ensure_ascii=False))
+            self.assertEqual(stdout.getvalue().strip(),'会参谋：最终回答')
+            saved = [json.loads(line) for line in output.path.read_text().splitlines()]
+            self.assertEqual(saved,events)
+
+    def test_verbose_output_prints_background_json(self):
+        with tempfile.TemporaryDirectory() as directory:
+            stdout = io.StringIO()
+            output = _HarnessOutput(Path(directory),verbose=True,stdout=stdout)
+            event = {'kind':'status','model_state':'running'}
+            output(json.dumps(event))
+            self.assertEqual(json.loads(stdout.getvalue()),event)
+
     def test_multi_speaker_and_sticky_speaker_input(self):
         harness = FakeHarness()
         self.assertTrue(_handle_line(harness,'张三：第一段发言'))
