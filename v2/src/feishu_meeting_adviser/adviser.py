@@ -10,13 +10,14 @@ from .infrastructure.errors import LifecycleError, LockBusy
 from .infrastructure.file_lock import FileLock
 from .llm import create_backend, ModelError, load_role
 from .maintenance import Maintenance
-from .reply_sender import introduce, send_saved_reply
+from .reply_sender import introduce
 from .models import digest
 from .materials import ContentPreviews, MATERIAL_POLICY, MaterialError, load_materials
 from .oauth import OAuthError, OAuthManager
 from .storage import StorageError
 from .adapters.persistence.factory import StorageFactory
 from .model_jobs import ModelJobExecutor
+from .reply_dispatcher import ReplyDispatcher
 
 
 class AdviserRunner:
@@ -46,6 +47,17 @@ class AdviserRunner:
         self.backend = backend or create_backend(self.settings, runtime, stop_event=self.stop_event)
         self.executor = ModelJobExecutor(
             self.backend, self.role, input_observer=model_input_observer)
+        self.dispatcher = ReplyDispatcher(
+            self.data,
+            self.source,
+            self.manager.client,
+            meeting_id=self.mid,
+            consumer_id=self.consumer_id,
+            settings=self.settings,
+            session=self.session,
+            clock=lambda: self.clock(),
+            diagnose=self.diagnose,
+        )
         self.batch_due = None
         self.offered = self.persisted = self.decisions = self.replied = 0
         self.model_failure = None
@@ -172,22 +184,13 @@ class AdviserRunner:
         with self._maintenance_lock():
             self.guard()
             # Source may have committed captions after this step's ingest or model completion.
-            if self.source.backlog(self.mid,self.consumer_id):
-                return
-            self.data.discard_expired_replies(self.mid,self.settings,now=self.clock(),
-                joined_at=self.session['joined_at'],bot_id=self.session.get('bot_user_id'))
-            row = self.data.next_reply(self.mid, now=self.clock())
-            if row is None:
-                return
-            self.replied += int(send_saved_reply(self.data,self.manager.client,row,clock=self.clock,
-                                interval=self.settings.reply_interval_seconds,diagnose=self.diagnose))
+            self.replied += int(self.dispatcher.dispatch())
 
     def step(self):
         self._ensure_materials()
         self.ingest()
         with self._maintenance_lock():
-            self.data.discard_expired_replies(self.mid,self.settings,now=self.clock(),
-                joined_at=self.session['joined_at'],bot_id=self.session.get('bot_user_id'))
+            self.dispatcher.discard_expired()
         completed = self.executor.take_finished()
         if completed is not None:
             with self._maintenance_lock():
