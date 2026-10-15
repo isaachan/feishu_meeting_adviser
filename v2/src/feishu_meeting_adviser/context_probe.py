@@ -121,26 +121,28 @@ class ContextProbeClient(FeishuClient):
         elif payload is not None or not _READ_PATH.fullmatch(path):
             raise ValueError('probe permits only allowlisted read endpoints')
 
-    def authenticated(self, path, *, payload=None, query=None):
+    def authenticated(self, path, *, payload=None, query=None, timeout=None):
         self._validate_request(path, payload=payload)
-        return super().authenticated(path, payload=payload, query=query)
+        return super().authenticated(path, payload=payload, query=query, timeout=timeout)
 
-    def event(self, calendar_id, event_id):
+    def event(self, calendar_id, event_id, *, timeout=None):
         calendar_id, event_id = resource_id(calendar_id), resource_id(event_id)
         path = f'/open-apis/calendar/v4/calendars/{quote(calendar_id, safe="")}/events/{quote(event_id, safe="")}'
-        return _data(self.authenticated(path), 'event')
+        return _data(self.authenticated(path, timeout=timeout), 'event')
 
-    def node(self, token):
+    def node(self, token, *, timeout=None):
         return _data(self.authenticated('/open-apis/wiki/v2/spaces/get_node',
-            query={'token': resource_id(token)}), 'node')
+            query={'token': resource_id(token)}, timeout=timeout), 'node')
 
-    def document(self, token):
+    def document(self, token, *, timeout=None):
         token = quote(resource_id(token), safe='')
-        return _data(self.authenticated(f'/open-apis/docx/v1/documents/{token}'), 'document')
+        return _data(self.authenticated(
+            f'/open-apis/docx/v1/documents/{token}', timeout=timeout), 'document')
 
-    def document_text(self, token):
+    def document_text(self, token, *, timeout=None):
         token = quote(resource_id(token), safe='')
-        value = _data(self.authenticated(f'/open-apis/docx/v1/documents/{token}/raw_content')).get('content')
+        value = _data(self.authenticated(
+            f'/open-apis/docx/v1/documents/{token}/raw_content', timeout=timeout)).get('content')
         if not isinstance(value, str):
             raise ApiError(ErrorKind.RESPONSE)
         return value
@@ -214,17 +216,17 @@ class UserContextClient(ContextProbeClient):
             raise ValueError('user material client does not acquire application tokens or mutate data')
         super()._validate_request(path, payload=payload)
 
-    def authenticated(self, path, *, payload=None, query=None):
+    def authenticated(self, path, *, payload=None, query=None, timeout=None):
         self._validate_request(path, payload=payload)
-        token = self.oauth_manager.access_token()
+        token = self.oauth_manager.access_token(timeout=timeout)
         try:
-            return self._request(path, query=query, token=token)
+            return self._request(path, query=query, token=token, timeout=timeout)
         except ApiError as exc:
             # These are token-invalid/expired codes, not missing scopes or document ACL errors.
             if exc.kind != ErrorKind.TOKEN and exc.code not in (99991668, 99991677, 20005):
                 raise
-        token = self.oauth_manager.access_token(rejected_token=token)
-        return self._request(path, query=query, token=token)
+        token = self.oauth_manager.access_token(rejected_token=token, timeout=timeout)
+        return self._request(path, query=query, token=token, timeout=timeout)
 
 
 def probe_document(client, reference):

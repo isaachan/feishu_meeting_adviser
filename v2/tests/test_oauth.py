@@ -37,7 +37,7 @@ class FakeTransport:
         self.calls.append(('subject', token))
         return 'synthetic-subject-hash'
 
-    def refresh(self, token):
+    def refresh(self, token, *, timeout=None):
         self.calls.append(('refresh', token))
         if isinstance(self.refresh_result, BaseException):
             raise self.refresh_result

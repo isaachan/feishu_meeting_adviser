@@ -28,6 +28,8 @@ WIKI = 'https://synthetic.feishu.cn/wiki/WikiToken123'
 class MaterialsAPI:
     def __init__(self):
         self.calls = []
+        self.timeout = 37
+        self.request_timeouts = []
         self.text = '合成材料记载：阶段完成日期是十月二十日。'
         self.failure = None
         self.object_type = 'docx'
@@ -37,21 +39,25 @@ class MaterialsAPI:
             'start_time':{'timestamp':str(NOW-3600)}, 'end_time':{'timestamp':str(NOW+3600)},
             'attachments':[]}
 
-    def event(self, calendar_id, event_id):
+    def event(self, calendar_id, event_id, *, timeout=None):
+        self.request_timeouts.append(timeout)
         self.calls.append(('event',calendar_id,event_id))
         if self.failure:
             raise self.failure
         return self.event_value
 
-    def node(self, token):
+    def node(self, token, *, timeout=None):
+        self.request_timeouts.append(timeout)
         self.calls.append(('node',token))
         return {'obj_type':self.object_type,'obj_token':'ActualDoc123','title':'合成文档'}
 
-    def document(self, token):
+    def document(self, token, *, timeout=None):
+        self.request_timeouts.append(timeout)
         self.calls.append(('metadata',token))
         return {'title':'合成文档','revision_id':1}
 
-    def document_text(self, token):
+    def document_text(self, token, *, timeout=None):
+        self.request_timeouts.append(timeout)
         self.calls.append(('body',token))
         return self.text
 
@@ -114,6 +120,13 @@ class MaterialsTests(unittest.TestCase):
         self.assertEqual(references['count'],1)
         self.assertEqual(references['items'][0]['source'],WIKI)
         self.assertIn(('body','ActualDoc123'),self.materials.calls)
+
+    def test_request_deadline_does_not_mutate_shared_client_timeout(self):
+        load_materials(self.config, self.session, client=self.materials)
+        self.assertEqual(self.materials.timeout, 37)
+        self.assertTrue(self.materials.request_timeouts)
+        self.assertTrue(all(0 < timeout <= self.config.timeout_seconds
+                            for timeout in self.materials.request_timeouts))
 
     def test_explicit_binding_rejects_other_meeting_old_instance_and_recurring_series(self):
         for change in ({'vchat':{'meeting_url':'https://vc.feishu.cn/j/999999999'}},
@@ -220,7 +233,7 @@ class MaterialsTests(unittest.TestCase):
         runner.run()
         self.assertTrue(runner.data.materials(MID)['documents'])
         self.commit_question()
-        def rejected(token):
+        def rejected(token, *, timeout=None):
             raise ApiError(ErrorKind.DENIED,http_status=403,code=1770001)
         self.materials.document_text = rejected
         restarted, backend = self.runner(now=NOW+1)
@@ -235,9 +248,9 @@ class MaterialsTests(unittest.TestCase):
     def test_loading_deadline_and_capacity_failure_stop_before_model_or_source_ack(self):
         now = [0.0]
         original_event = self.materials.event
-        def delayed(*args):
+        def delayed(*args, **kwargs):
             now[0] = 61
-            return original_event(*args)
+            return original_event(*args, **kwargs)
         self.materials.event = delayed
         with self.assertRaises(MaterialError):
             load_materials(self.config,self.session,client=self.materials,monotonic=lambda:now[0])

@@ -99,12 +99,7 @@ def load_materials(config, session, *, client=None, emit=None, stop_event=None,
     def read(method, *args):
         guard()
         remaining = max(0.01, deadline - monotonic())
-        if hasattr(client, 'timeout'):
-            client.timeout = min(config.timeout_seconds, remaining)
-        provider = getattr(client, 'oauth_manager', None)
-        if provider:
-            provider.transport.timeout = min(config.timeout_seconds, remaining)
-        value = method(*args)
+        value = method(*args, timeout=min(config.timeout_seconds, remaining))
         guard()
         return value
     def logged_read(method, kind, source, *args):

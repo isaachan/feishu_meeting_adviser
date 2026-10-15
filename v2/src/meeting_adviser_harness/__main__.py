@@ -136,27 +136,26 @@ class _MaterialClient:
                 timeout=config.timeout_seconds, request_seconds=config.request_seconds,
                 wait=lambda seconds: stop_event.wait(seconds))
 
-    def event(self, calendar_id, event_id):
+    def event(self, calendar_id, event_id, *, timeout=None):
         joined = int(self.session['joined_at'])
         return {'event_id':event_id, 'status':'confirmed', 'summary':'Harness meeting materials',
             'description':'', 'description_rich':self.description, 'attachments':[],
             'vchat':{'meeting_url':'https://vc.feishu.cn/j/' + self.config.meeting_no},
             'start_time':{'timestamp':str(joined - 60)}, 'end_time':{'timestamp':str(joined + 86400)}}
 
-    def _read(self, name, token):
+    def _read(self, name, token, *, timeout=None):
         if self.delegate is None:
             raise MaterialError('document reference requires existing user OAuth authorization')
-        self.delegate.timeout = self.timeout
-        return getattr(self.delegate, name)(token)
+        return getattr(self.delegate, name)(token, timeout=timeout)
 
-    def node(self, token):
-        return self._read('node', token)
+    def node(self, token, *, timeout=None):
+        return self._read('node', token, timeout=timeout)
 
-    def document(self, token):
-        return self._read('document', token)
+    def document(self, token, *, timeout=None):
+        return self._read('document', token, timeout=timeout)
 
-    def document_text(self, token):
-        return self._read('document_text', token)
+    def document_text(self, token, *, timeout=None):
+        return self._read('document_text', token, timeout=timeout)
 
 
 class _TerminalClient:

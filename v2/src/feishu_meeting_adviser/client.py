@@ -117,7 +117,7 @@ class FeishuClient:
         if path not in (TOKEN, EVENTS, JOIN, LEAVE, MESSAGE):
             raise ValueError('unsupported API endpoint')
 
-    def _request(self, path, *, payload=None, query=None, token=None):
+    def _request(self, path, *, payload=None, query=None, token=None, timeout=None):
         self._validate_request(path, payload=payload)
         url = API + path + ('?' + parse.urlencode(query) if query else '')
         headers = {'Accept': 'application/json'}
@@ -129,7 +129,8 @@ class FeishuClient:
         req = request.Request(url, data=body, headers=headers, method='POST' if body is not None else 'GET')
         self._rate_limit()
         try:
-            response = self.opener(req, timeout=self.timeout)
+            request_timeout = self.timeout if timeout is None else min(self.timeout, max(0.01, timeout))
+            response = self.opener(req, timeout=request_timeout)
         except error.HTTPError as exc:
             response = exc
         except (error.URLError, TimeoutError, OSError, HTTPException):
@@ -179,8 +180,12 @@ class FeishuClient:
             raise ApiError(ErrorKind.RESPONSE, http_status=status, request_ids=ids)
         return data
 
-    def _refresh(self):
-        result = self._request(TOKEN, payload={'app_id': self.credentials.app_id, 'app_secret': self.credentials.app_secret})
+    def _refresh(self, *, timeout=None):
+        result = self._request(
+            TOKEN,
+            payload={'app_id': self.credentials.app_id, 'app_secret': self.credentials.app_secret},
+            timeout=timeout,
+        )
         token = result.get('tenant_access_token')
         expiry = result.get('expire')
         if not isinstance(token, str) or not token or type(expiry) is not int or not 1 <= expiry <= 7200:
@@ -189,18 +194,18 @@ class FeishuClient:
         self._expires_at = self.monotonic() + expiry
         self._refresh_margin = min(300, expiry / 2)
 
-    def authenticated(self, path, *, payload=None, query=None):
+    def authenticated(self, path, *, payload=None, query=None, timeout=None):
         if self._token is None or self.monotonic() >= self._expires_at - self._refresh_margin:
-            self._refresh()
+            self._refresh(timeout=timeout)
         try:
-            return self._request(path, payload=payload, query=query, token=self._token)
+            return self._request(path, payload=payload, query=query, token=self._token, timeout=timeout)
         except ApiError as exc:
             if exc.kind != ErrorKind.TOKEN:
                 raise
         # One refresh, one replay after an explicit authentication rejection. No network replay for mutations.
         self._token = None
-        self._refresh()
-        return self._request(path, payload=payload, query=query, token=self._token)
+        self._refresh(timeout=timeout)
+        return self._request(path, payload=payload, query=query, token=self._token, timeout=timeout)
 
     def events(self, query: dict) -> dict:
         return self.authenticated(EVENTS, query=query)

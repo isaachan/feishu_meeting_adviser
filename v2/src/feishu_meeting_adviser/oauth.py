@@ -63,7 +63,7 @@ class OAuthTransport:
         self.credentials, self.timeout = credentials, timeout
         self.opener = opener or request.build_opener(_NoRedirect()).open
 
-    def _call(self, url, *, payload=None, token=None):
+    def _call(self, url, *, payload=None, token=None, timeout=None):
         if url not in (CODE_TOKEN_URL, TOKEN_URL, USER_INFO_URL) or (url != USER_INFO_URL) != (payload is not None):
             raise ValueError('unsupported OAuth request')
         stage = 'code_exchange' if url == CODE_TOKEN_URL else 'refresh' if url == TOKEN_URL else 'user_identity'
@@ -81,7 +81,8 @@ class OAuthTransport:
         req = request.Request(url, data=body, headers=headers, method='POST' if body else 'GET')
         try:
             try:
-                response = self.opener(req, timeout=self.timeout)
+                request_timeout = self.timeout if timeout is None else min(self.timeout, max(0.01, timeout))
+                response = self.opener(req, timeout=request_timeout)
             except error.HTTPError as exc:
                 response = exc
             with response:
@@ -108,10 +109,10 @@ class OAuthTransport:
             'code': code, 'redirect_uri': redirect_uri, 'code_verifier': verifier,
             'scope': ' '.join(SCOPES)})
 
-    def refresh(self, refresh_token):
+    def refresh(self, refresh_token, *, timeout=None):
         return self._call(TOKEN_URL, payload={'grant_type': 'refresh_token',
             'client_id': self.credentials.app_id, 'client_secret': self.credentials.app_secret,
-            'refresh_token': refresh_token, 'scope': ' '.join(SCOPES)})
+            'refresh_token': refresh_token, 'scope': ' '.join(SCOPES)}, timeout=timeout)
 
     def subject(self, token):
         data = self._call(USER_INFO_URL, token=token).get('data')
@@ -220,7 +221,7 @@ class OAuthManager:
         self._write(value)
         return {'authorized': True, 'identity': 'user', 'scopes': list(SCOPES)}
 
-    def access_token(self, *, rejected_token=None):
+    def access_token(self, *, rejected_token=None, timeout=None):
         with self.locked():
             value = self._read()
             if value['state'] != 'ready':
@@ -248,7 +249,8 @@ class OAuthManager:
             self._write(marker)
             started = self.clock()
             try:
-                result = self.transport.refresh(value['refresh_token'])
+                result = (self.transport.refresh(value['refresh_token']) if timeout is None
+                          else self.transport.refresh(value['refresh_token'], timeout=timeout))
                 replacement = self._token_record(result, started=started, subject_hash=value.get('subject_hash'))
                 if replacement['refresh_token'] == value['refresh_token']:
                     raise OAuthError('oauth_invalid_response')
