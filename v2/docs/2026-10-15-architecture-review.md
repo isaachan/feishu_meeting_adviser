@@ -1,6 +1,19 @@
 # v2 架构评审与重构建议
 
-日期：2026-10-15。评审范围：`v2/src/feishu_meeting_adviser/`、`v2/src/meeting_adviser_harness/`、相关测试与项目配置。本文记录当前实现的架构判断和后续重构建议，不表示已经实施这些改动。
+日期：2026-10-15。评审范围：`v2/src/feishu_meeting_adviser/`、`v2/src/meeting_adviser_harness/`、相关测试与项目配置。本文先记录评审时的架构判断和重构建议；下方“实施状态”记录随后完成的落地结果。
+
+### 实施状态（2026-10-15）
+
+阶段 A–F 已按独立切片完成，核心提交范围为 `4ea166c..753368f`；其中 `9512174` 完成了 persistence 外无原始 SQL 的边界收口。主要结果如下：
+
+- 阶段 A：固定 Ruff、Pyright、coverage、unittest 和 Python 3.11/3.14 CI；加入 SQL、显式 INSERT 和输出边界架构测试。
+- 阶段 B：建立公共 SQLite 基础层、读写分离、统一 factory、迁移锁策略，以及 source/adviser 显式版本迁移和历史 fixture。
+- 阶段 C：引入状态枚举、repository 与共享 `AdviserUnitOfWork`，集中 job/reply 状态转换，并将 SQL 实现收进 `adapters/persistence/`。
+- 阶段 D：提取 `SnapshotBuilder`、`DecisionApplier`、`ModelJobExecutor`、`ReplyDispatcher`、`MaterialBootstrapper`，将原 Runner 收窄为 `AdviserService`。
+- 阶段 E：补全模型后端协议、统一诊断映射、使用单请求 deadline、拆分材料流水线，并按 section 类型解析配置。
+- 阶段 F：拆分独立 CLI handlers，复用 command-aware bootstrap/factory，提取信号上下文管理器和 harness 三类适配器，并由入口统一负责展示。
+
+最终本地验收为 262 项测试通过、1 项既有范围跳过，Ruff 与 Pyright 零错误，branch coverage 总计 83%。后续章节保留评审时的问题描述和实施计划，作为设计依据与回归检查清单。
 
 ## 1. 结论摘要
 
