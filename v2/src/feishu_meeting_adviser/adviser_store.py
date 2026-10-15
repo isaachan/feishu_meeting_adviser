@@ -7,13 +7,13 @@ import sqlite3
 import time
 from uuid import NAMESPACE_URL, uuid5
 
-from .models import ChangeKind, JobState, MaterialState, ParticipationState, digest
-from .llm import ModelError
+from .models import ChangeKind, MaterialState, digest
 from .storage import CapacityError, StorageError, caption_from_json, connect_private, decode_mapping, encode
 from .adapters.persistence.sqlite import SQLiteDatabase
 from .adapters.persistence.adviser_migrations import migrate_adviser, require_current_adviser_schema
 from .adapters.persistence.adviser_repositories import AdviserUnitOfWork
 from .snapshot import SnapshotBuilder, is_fresh_caption
+from .decision import DecisionApplier
 
 
 class AdviserStore:
@@ -202,6 +202,13 @@ class AdviserStore:
         return self.db.execute(
             'SELECT count(*) FROM context WHERE meeting_id=?', (mid,)).fetchone()[0]
 
+    def context_row(self, mid, sentence_key):
+        row = self.db.execute(
+            'SELECT body,suppressed FROM context WHERE meeting_id=? AND sentence_key=?',
+            (mid, sentence_key),
+        ).fetchone()
+        return dict(row) if row else None
+
     def snapshot(self, mid, settings, *, now, joined_at, bot_id=None, role_characters=0):
         return SnapshotBuilder(self).build(
             mid,
@@ -237,59 +244,15 @@ class AdviserStore:
         return dict(self.db.execute('SELECT * FROM jobs WHERE job_id=?', (job_id,)).fetchone())
 
     def finish_job(self, job, decision, *, now=None, settings=None, joined_at=0, bot_id=None, fault=None):
-        now = time.time() if now is None else now
-        snapshot = decode_mapping(job['snapshot'])
-        fresh_keys = set(snapshot['fresh_input_keys'])
-        reply_keys = set(snapshot.get('reply_allowed_keys', snapshot['fresh_input_keys']))
-        if not set(decision.control_sentence_keys) <= fresh_keys or not set(decision.reply_sentence_keys) <= reply_keys:
-            raise ModelError('model_invalid_evidence')
-        # Check evidence against accepted current captions; do not act on revised/expired inputs.
-        valid = {}
-        for key in set(decision.control_sentence_keys) | set(decision.reply_sentence_keys):
-            row = self.db.execute('SELECT body,suppressed FROM context WHERE meeting_id=? AND sentence_key=?', (job['meeting_id'],key)).fetchone()
-            if row and not row['suppressed']:
-                caption = caption_from_json(row['body'])
-                if caption.fingerprint == snapshot['evidence'].get(key) and (settings is None or self.fresh(
-                        caption, now=now, joined_at=joined_at, settings=settings, bot_id=bot_id)):
-                    valid[key] = caption.fingerprint
-        control_valid = all(key in valid for key in decision.control_sentence_keys)
-        reply_valid = decision.reply is not None and all(key in valid for key in decision.reply_sentence_keys)
-        with self.unit_of_work(fault=fault) as tx:
-            state = tx.jobs.decision_state(job['job_id'])
-            if state in (JobState.COMPLETE, JobState.ABANDONED):
-                return False
-            meeting = tx.meetings.require(job['meeting_id'])
-            if job.get('context_version') != meeting['material_version'] or meeting['material_state']=='unavailable':
-                tx.jobs.abandon(job['job_id'])
-                return False
-            participation = ParticipationState(meeting['participation'])
-            if control_valid:
-                if decision.control == 'pause':
-                    participation = ParticipationState.PAUSED
-                elif decision.control == 'resume':
-                    participation = ParticipationState.ACTIVE
-            tx.outbox.cancel_pending(job['meeting_id'])
-            if (reply_valid and participation == ParticipationState.ACTIVE
-                    and not (control_valid and decision.control in ('pause','cancel'))):
-                basis = {key:valid[key] for key in decision.reply_sentence_keys}
-                message_uuid = str(uuid5(NAMESPACE_URL, digest(['adviser-reply-v1',job['meeting_id'],job['role_version'],basis,decision.reply])))
-                # An unchanged candidate keeps its UUID across a latest-context recheck.
-                tx.outbox.save_reply(
-                    message_uuid=message_uuid,
-                    meeting_id=job['meeting_id'],
-                    content=decision.reply,
-                    evidence=encode(basis),
-                    generation=job['generation'],
-                    created_ns=int(now*1_000_000_000),
-                    context_version=meeting['material_version'],
-                )
-            brief = {'generation':job['generation'],'snapshot_hash':digest(snapshot),'context_version':meeting['material_version'],
-                     'evidence':{key:snapshot['evidence'].get(key) for key in set(decision.control_sentence_keys)|set(decision.reply_sentence_keys)}}
-            tx.jobs.complete(
-                job['job_id'], result=encode(decision.to_dict()), snapshot=encode(brief))
-            tx.meetings.complete_decision(
-                job['meeting_id'], generation=job['generation'], participation=participation)
-        return True
+        return DecisionApplier(self).apply(
+            job,
+            decision,
+            now=now,
+            settings=settings,
+            joined_at=joined_at,
+            bot_id=bot_id,
+            fault=fault,
+        )
 
     def fail_job(self, job, reason, *, retry_at):
         with self.unit_of_work() as tx:
