@@ -53,7 +53,7 @@ class SQLiteFoundationTests(unittest.TestCase):
         runner = MigrationRunner([Migration(0, 1, lambda db: db.execute('CREATE TABLE first(value TEXT)')),
                                   Migration(1, 2, fail)])
         with self.assertRaises(RuntimeError):
-            runner.migrate(database, current_version=0, target_version=2)
+            runner.migrate(database, target_version=2)
         self.assertEqual(database.connection.execute('PRAGMA user_version').fetchone()[0], 0)
         self.assertEqual(database.connection.execute(
             "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('first','incomplete')").fetchone()[0], 0)

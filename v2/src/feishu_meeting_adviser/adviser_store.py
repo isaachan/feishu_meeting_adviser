@@ -11,6 +11,7 @@ from .models import ChangeKind, digest, epoch_ns
 from .llm import ModelError
 from .storage import CapacityError, StorageError, caption_from_json, connect_private, decode_mapping, encode
 from .adapters.persistence.sqlite import SQLiteDatabase
+from .adapters.persistence.adviser_migrations import migrate_adviser, require_current_adviser_schema
 
 
 class AdviserStore:
@@ -19,44 +20,7 @@ class AdviserStore:
         self.max_payload_bytes = max_payload_bytes
         self.db = connect_private(self.path, max_database_bytes=max_database_bytes)
         try:
-            self.db.executescript('''
-                CREATE TABLE IF NOT EXISTS meetings (
-                    meeting_id TEXT PRIMARY KEY, generation INTEGER NOT NULL DEFAULT 0,
-                    decided_generation INTEGER NOT NULL DEFAULT 0, participation TEXT NOT NULL DEFAULT 'active',
-                    source_state TEXT, error TEXT, retry_at REAL NOT NULL DEFAULT 0,
-                    cooldown_until REAL NOT NULL DEFAULT 0, join_instance TEXT, role_version TEXT, source_status TEXT);
-                CREATE TABLE IF NOT EXISTS inputs (
-                    delivery_id TEXT PRIMARY KEY, meeting_id TEXT NOT NULL, sequence INTEGER NOT NULL,
-                    body TEXT NOT NULL, created_ns INTEGER NOT NULL);
-                CREATE TABLE IF NOT EXISTS context (
-                    meeting_id TEXT NOT NULL, sentence_key TEXT NOT NULL, body TEXT NOT NULL,
-                    suppressed INTEGER NOT NULL DEFAULT 0, generation INTEGER NOT NULL,
-                    PRIMARY KEY (meeting_id,sentence_key));
-                CREATE TABLE IF NOT EXISTS jobs (
-                    job_id TEXT PRIMARY KEY, meeting_id TEXT NOT NULL, generation INTEGER NOT NULL,
-                    snapshot TEXT NOT NULL, role_version TEXT NOT NULL,
-                    state TEXT NOT NULL DEFAULT 'pending', result TEXT, created_ns INTEGER NOT NULL);
-                CREATE INDEX IF NOT EXISTS input_meeting ON inputs(meeting_id,sequence);
-                CREATE INDEX IF NOT EXISTS job_meeting ON jobs(meeting_id,generation);
-                CREATE TABLE IF NOT EXISTS outbox (
-                    uuid TEXT PRIMARY KEY, meeting_id TEXT NOT NULL, kind TEXT NOT NULL,
-                    content TEXT NOT NULL, evidence TEXT NOT NULL, generation INTEGER NOT NULL,
-                    state TEXT NOT NULL DEFAULT 'pending', error TEXT,
-                    created_ns INTEGER NOT NULL, sent_at REAL);
-                CREATE TABLE IF NOT EXISTS meeting_materials (
-                    meeting_id TEXT PRIMARY KEY, body TEXT NOT NULL, loaded_ns INTEGER NOT NULL);
-            ''')
-            columns = {row['name'] for row in self.db.execute('PRAGMA table_info(meetings)')}
-            for name in ('join_instance','role_version','source_status'):
-                if name not in columns:
-                    self.db.execute(f'ALTER TABLE meetings ADD COLUMN {name} TEXT')
-            with self.transaction(check_capacity=False):
-                for table, names in (('meetings',('material_version','material_state')),
-                                     ('jobs',('context_version',)),('outbox',('context_version',))):
-                    columns = {row['name'] for row in self.db.execute(f'PRAGMA table_info({table})')}
-                    for name in names:
-                        if name not in columns:
-                            self.db.execute(f'ALTER TABLE {table} ADD COLUMN {name} TEXT')
+            migrate_adviser(self.path, self.db, max_database_bytes)
         except BaseException:
             self.db.close()
             raise
@@ -68,6 +32,11 @@ class AdviserStore:
         instance.max_payload_bytes = max_payload_bytes
         instance.db = SQLiteDatabase.open_readonly(
             instance.path, max_database_bytes=max_database_bytes).connection
+        try:
+            require_current_adviser_schema(instance.db)
+        except BaseException:
+            instance.db.close()
+            raise
         return instance
 
     def close(self):

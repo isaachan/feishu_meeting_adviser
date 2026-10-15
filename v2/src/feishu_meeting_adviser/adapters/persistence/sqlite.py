@@ -120,11 +120,13 @@ class MigrationRunner:
     def __init__(self, migrations: Iterable[Migration]):
         self.migrations = {migration.from_version: migration for migration in migrations}
 
-    def migrate(self, database: SQLiteDatabase, *, current_version: int, target_version: int) -> None:
+    def migrate(self, database: SQLiteDatabase, *, target_version: int) -> None:
         if database.readonly:
             raise StorageError('read-only database cannot be migrated')
         with database.transaction():
-            version = current_version
+            version = database.connection.execute('PRAGMA user_version').fetchone()[0]
+            if not isinstance(version, int) or version < 0 or version > target_version:
+                raise StorageError('unsupported database schema; do not discard existing data')
             while version < target_version:
                 migration = self.migrations.get(version)
                 if migration is None or migration.to_version <= version or migration.to_version > target_version:
@@ -132,8 +134,6 @@ class MigrationRunner:
                 migration.apply(database.connection)
                 version = migration.to_version
                 database.connection.execute(f'PRAGMA user_version={version}')
-            if version != target_version:
-                raise StorageError('unsupported database schema; do not discard existing data')
 
 
 def connect_private(path: Path, *, max_database_bytes: int = 150_000_000) -> sqlite3.Connection:
