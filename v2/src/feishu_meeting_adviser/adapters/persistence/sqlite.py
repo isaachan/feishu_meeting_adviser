@@ -103,7 +103,13 @@ class SQLiteDatabase:
     def open_readonly(cls, path: Path, *, max_database_bytes: int = 150_000_000):
         path = Path(path)
         _check_database_file(path, required=True)
-        uri = 'file:' + quote(str(path.absolute()), safe='/') + '?mode=ro'
+        wal = Path(str(path) + '-wal')
+        shared_memory = Path(str(path) + '-shm')
+        if wal.exists() and not shared_memory.exists():
+            raise StorageError(
+                'database recovery is required before a strictly read-only operation')
+        query = 'mode=ro' if shared_memory.exists() else 'mode=ro&immutable=1'
+        uri = 'file:' + quote(str(path.absolute()), safe='/') + '?' + query
         db = sqlite3.connect(uri, uri=True, isolation_level=None, timeout=5)
         try:
             db.row_factory = sqlite3.Row

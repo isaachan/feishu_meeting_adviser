@@ -9,7 +9,7 @@ from ..client import ApiError, StopRequested
 from ..collector import utc_now
 from ..config import ConfigError, Configuration
 from ..diagnostics import Diagnostics
-from ..infrastructure.errors import LifecycleError, LockBusy
+from ..infrastructure.errors import LifecycleError
 from ..infrastructure.file_lock import FileLock
 from ..infrastructure.signals import stop_on_signals
 from ..lifecycle import MeetingSource, SessionManager
@@ -143,13 +143,7 @@ def handle_status(context, args):
         path = context.config.data_directory / 'adviser.sqlite3'
         if path.exists():
             lock = FileLock(context.config.data_directory / 'locks' / 'adviser.lock')
-            try:
-                lock.acquire()
-            except LockBusy:
-                active = True
-            else:
-                active = False
-                lock.release()
+            active = lock.is_locked()
             data = context.storage_factory.adviser(
                 readonly=context.storage_plan.adviser_readonly)
             try:

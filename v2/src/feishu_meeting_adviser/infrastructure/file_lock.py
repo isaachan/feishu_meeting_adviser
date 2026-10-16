@@ -27,6 +27,34 @@ class FileLock:
             raise LifecycleError('unable to acquire local operation lock') from None
         self.fd = fd
 
+    def is_locked(self) -> bool:
+        """Probe an existing lock without creating or modifying filesystem entries."""
+        if self.path.is_symlink():
+            raise LifecycleError('invalid lock file permissions')
+        try:
+            mode = self.path.stat().st_mode
+        except FileNotFoundError:
+            return False
+        if mode & 0o077:
+            raise LifecycleError('invalid lock file permissions')
+        try:
+            fd = os.open(self.path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+        except FileNotFoundError:
+            return False
+        except OSError:
+            raise LifecycleError('unable to inspect local operation lock') from None
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        except OSError:
+            raise LifecycleError('unable to inspect local operation lock') from None
+        else:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            return False
+        finally:
+            os.close(fd)
+
     def release(self):
         if self.fd is not None:
             fcntl.flock(self.fd, fcntl.LOCK_UN)
