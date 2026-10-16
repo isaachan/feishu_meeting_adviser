@@ -8,9 +8,9 @@ import time
 from uuid import NAMESPACE_URL, uuid5
 
 from ...models import ChangeKind, MaterialState, digest
-from .source_store import CapacityError, StorageError, caption_from_json, connect_private, decode_mapping, encode
+from .source_store import CapacityError, StorageError, caption_from_json, decode_mapping, encode
 from .sqlite import SQLiteDatabase
-from .adviser_migrations import migrate_adviser, require_current_adviser_schema
+from .adviser_schema import initialize_adviser_schema, require_current_adviser_schema
 from .adviser_repositories import AdviserUnitOfWork
 from ...snapshot import SnapshotBuilder, is_fresh_caption
 from ...decision import DecisionApplier
@@ -20,12 +20,23 @@ class AdviserStore:
     def __init__(self, path: Path, *, max_database_bytes=150_000_000, max_payload_bytes=100_000_000):
         self.path = Path(path)
         self.max_payload_bytes = max_payload_bytes
-        self.db = connect_private(self.path, max_database_bytes=max_database_bytes)
+        database = SQLiteDatabase.open_current(
+            self.path, max_database_bytes=max_database_bytes)
+        self.db = database.connection
         try:
-            migrate_adviser(self.path, self.db, max_database_bytes)
+            require_current_adviser_schema(self.db)
         except BaseException:
             self.db.close()
             raise
+
+    @classmethod
+    def initialize(cls, path: Path, *, max_database_bytes=150_000_000) -> None:
+        database = SQLiteDatabase.initialize(
+            path, max_database_bytes=max_database_bytes)
+        try:
+            initialize_adviser_schema(database)
+        finally:
+            database.close()
 
     @classmethod
     def open_readonly(cls, path: Path, *, max_database_bytes=150_000_000, max_payload_bytes=100_000_000):

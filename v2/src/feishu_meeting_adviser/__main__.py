@@ -70,6 +70,8 @@ def main(argv=None):
                 print('{"session_phase": "none"}')
                 return 0
             raise StorageError('no saved product database for read-only command')
+        if not plan.source_readonly:
+            storage_factory.initialize_source()
         store = storage_factory.source(readonly=plan.source_readonly)
         context = CommandContext(
             config, storage_factory, plan, store, FeishuClient)

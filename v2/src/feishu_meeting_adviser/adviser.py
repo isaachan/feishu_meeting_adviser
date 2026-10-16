@@ -36,10 +36,11 @@ class AdviserService:
         if self.config.meeting_context.enabled:
             self.role += MATERIAL_POLICY
             self.role_version = digest([self.role_file_version,MATERIAL_POLICY])
-        self.data = StorageFactory(self.config).adviser()
-        self.data.ensure_meeting(self.mid)
-        self.maintenance = Maintenance(source, self.config)
         self.lock = FileLock(self.config.data_directory / 'locks' / 'adviser.lock')
+        with self.lock:
+            self.data = StorageFactory(self.config).adviser()
+            self.data.ensure_meeting(self.mid)
+        self.maintenance = Maintenance(source, self.config)
         runtime = self.config.data_directory / 'model_runtime'
         if self.settings.backend == 'opencode':
             runtime = runtime / 'opencode' / digest(self.mid)

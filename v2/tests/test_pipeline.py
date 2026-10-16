@@ -22,6 +22,7 @@ class PipelineTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
+        Store.initialize(self.root/'data'/'source.sqlite3')
         self.store = Store(self.root/'data'/'source.sqlite3')
         self.addCleanup(lambda:self.store.close())
 
@@ -88,6 +89,7 @@ class PipelineTests(unittest.TestCase):
         self.store.commit_page('large',rows,{})
         path = self.store.path
         self.store.close()
+        Store.initialize(path)
         self.store = Store(path)
         counts = self.store.commit_page('large',[rows[0],rows[-1]],{})
         self.assertEqual(counts['duplicates'],2)

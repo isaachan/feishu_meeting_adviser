@@ -34,6 +34,7 @@ class CollectorTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.path = Path(self.tmp.name) / 'data' / 'source.db'
+        Store.initialize(self.path)
         self.store = Store(self.path)
         self.addCleanup(lambda: self.store.close())
         self.now = [1_800_000_000]

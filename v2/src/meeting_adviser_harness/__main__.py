@@ -134,6 +134,8 @@ class Harness:
         self.root = config.data_directory
         private_directory(self.root)
         self.storage_factory = StorageFactory(config, root=self.root)
+        self.storage_factory.initialize_source()
+        self.storage_factory.initialize_adviser()
         self.transcript = TranscriptAdapter(self.storage_factory.source())
         self.speaker = '参会者 1'
         self.counter = 0

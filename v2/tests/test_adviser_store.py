@@ -34,6 +34,7 @@ class AdviserStoreTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.path = Path(self.tmp.name) / 'data' / 'adviser.db'
+        AdviserStore.initialize(self.path)
         self.store = AdviserStore(self.path)
         self.addCleanup(lambda: self.store.close())
         self.settings = LLMSettings()

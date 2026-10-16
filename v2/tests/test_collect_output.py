@@ -33,6 +33,7 @@ class CollectOutputTests(unittest.TestCase):
         self.config_path.write_text('app:\n  id: synthetic\n  secret: synthetic-secret\nmeeting:\n  meeting_no: "012345678"\n')
         self.config_path.chmod(0o600)
         self.config = load_config(self.config_path)
+        Store.initialize(self.config.data_directory / 'source.sqlite3')
         self.store = Store(self.config.data_directory / 'source.sqlite3')
         self.addCleanup(self.store.close)
         self.api = BotAPI()

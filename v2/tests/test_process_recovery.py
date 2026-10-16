@@ -37,6 +37,7 @@ class ProcessRecoveryTests(unittest.TestCase):
     def test_real_consumer_exit_after_persist_before_ack(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            Store.initialize(root/'data'/'source.sqlite3')
             store = Store(root/'data'/'source.sqlite3')
             store.ensure_meeting('synthetic-meeting',{})
             store.commit_page('synthetic-meeting',[Caption('synthetic-meeting','s:1','synthetic input','now')],{})

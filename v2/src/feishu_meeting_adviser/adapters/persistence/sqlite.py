@@ -1,11 +1,11 @@
-"""Private SQLite connections, transactions and ordered schema migrations."""
+"""Private SQLite connections and transactions for current-schema stores."""
 from contextlib import contextmanager
-from dataclasses import dataclass
 import os
 from pathlib import Path
 import sqlite3
 import stat
-from typing import Callable, Iterable
+import time
+from typing import Callable
 from urllib.parse import quote
 
 
@@ -15,6 +15,18 @@ class StorageError(Exception):
 
 class CapacityError(StorageError):
     pass
+
+
+def _enable_wal(connection: sqlite3.Connection) -> None:
+    deadline = time.monotonic() + 5
+    while True:
+        try:
+            connection.execute('PRAGMA journal_mode=WAL')
+            return
+        except sqlite3.OperationalError as exc:
+            if 'locked' not in str(exc).lower() or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.01)
 
 
 def private_directory(path: Path) -> None:
@@ -40,16 +52,26 @@ class SQLiteDatabase:
         self.max_database_bytes = max_database_bytes
 
     @classmethod
-    def open_and_migrate(cls, path: Path, *, max_database_bytes: int = 150_000_000):
+    def _open_writable(cls, path: Path, *, create: bool,
+                       max_database_bytes: int = 150_000_000):
         path = Path(path)
-        private_directory(path.parent)
-        _check_database_file(path, required=False)
-        fd = os.open(path, os.O_CREAT | os.O_RDWR | getattr(os, 'O_NOFOLLOW', 0), 0o600)
-        os.close(fd)
-        db = sqlite3.connect(path, isolation_level=None, timeout=5)
+        if create:
+            private_directory(path.parent)
+            _check_database_file(path, required=False)
+            fd = os.open(
+                path, os.O_CREAT | os.O_RDWR | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+            os.close(fd)
+            target = str(path)
+            uri = False
+        else:
+            _check_database_file(path, required=True)
+            target = 'file:' + quote(str(path.absolute()), safe='/') + '?mode=rw'
+            uri = True
+        db = sqlite3.connect(target, uri=uri, isolation_level=None, timeout=5)
         try:
             db.row_factory = sqlite3.Row
-            db.execute('PRAGMA journal_mode=WAL')
+            db.execute('PRAGMA busy_timeout=5000')
+            _enable_wal(db)
             db.execute('PRAGMA synchronous=FULL')
             db.execute('PRAGMA foreign_keys=ON')
             db.execute('PRAGMA secure_delete=ON')
@@ -60,11 +82,22 @@ class SQLiteDatabase:
             if max_pages < db.execute('PRAGMA page_count').fetchone()[0]:
                 raise CapacityError('database already exceeds configured capacity; data preserved')
             db.execute(f'PRAGMA max_page_count={max_pages}')
-            db.execute('PRAGMA busy_timeout=5000')
             return cls(path, db, readonly=False, max_database_bytes=max_database_bytes)
         except BaseException:
             db.close()
             raise
+
+    @classmethod
+    def initialize(cls, path: Path, *, max_database_bytes: int = 150_000_000):
+        """Open or create a database for an explicit current-schema initializer."""
+        return cls._open_writable(
+            path, create=True, max_database_bytes=max_database_bytes)
+
+    @classmethod
+    def open_current(cls, path: Path, *, max_database_bytes: int = 150_000_000):
+        """Open an existing writable database without creating or changing its schema."""
+        return cls._open_writable(
+            path, create=False, max_database_bytes=max_database_bytes)
 
     @classmethod
     def open_readonly(cls, path: Path, *, max_database_bytes: int = 150_000_000):
@@ -106,36 +139,7 @@ class SQLiteDatabase:
     def close(self):
         self.connection.close()
 
-
-@dataclass(frozen=True)
-class Migration:
-    from_version: int
-    to_version: int
-    apply: Callable[[sqlite3.Connection], None]
-
-
-class MigrationRunner:
-    """Runs an explicit, contiguous migration chain in one caller-owned lock."""
-
-    def __init__(self, migrations: Iterable[Migration]):
-        self.migrations = {migration.from_version: migration for migration in migrations}
-
-    def migrate(self, database: SQLiteDatabase, *, target_version: int) -> None:
-        if database.readonly:
-            raise StorageError('read-only database cannot be migrated')
-        with database.transaction():
-            version = database.connection.execute('PRAGMA user_version').fetchone()[0]
-            if not isinstance(version, int) or version < 0 or version > target_version:
-                raise StorageError('unsupported database schema; do not discard existing data')
-            while version < target_version:
-                migration = self.migrations.get(version)
-                if migration is None or migration.to_version <= version or migration.to_version > target_version:
-                    raise StorageError('unsupported database schema; do not discard existing data')
-                migration.apply(database.connection)
-                version = migration.to_version
-                database.connection.execute(f'PRAGMA user_version={version}')
-
-
 def connect_private(path: Path, *, max_database_bytes: int = 150_000_000) -> sqlite3.Connection:
-    """Compatibility bridge while legacy stores adopt SQLiteDatabase directly."""
-    return SQLiteDatabase.open_and_migrate(path, max_database_bytes=max_database_bytes).connection
+    """Compatibility bridge for opening an existing current-schema database."""
+    return SQLiteDatabase.open_current(
+        path, max_database_bytes=max_database_bytes).connection

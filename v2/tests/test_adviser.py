@@ -14,6 +14,7 @@ from feishu_meeting_adviser.__main__ import main
 from feishu_meeting_adviser.client import ApiError, ErrorKind
 from feishu_meeting_adviser.collector import utc_now
 from feishu_meeting_adviser.config import load_config
+from feishu_meeting_adviser.adapters.persistence.factory import StorageFactory
 from feishu_meeting_adviser.lifecycle import LifecycleError, SessionManager
 from feishu_meeting_adviser.llm import Decision, ModelError
 from feishu_meeting_adviser.models import Caption, SourceState, Status
@@ -53,6 +54,8 @@ class AdviserTests(unittest.TestCase):
         self.path.chmod(0o600)
         self.config = load_config(self.path)
         self.config = replace(self.config, llm=replace(self.config.llm, backend='codex', batch_seconds=0, introduction=False))
+        StorageFactory(self.config).initialize_source()
+        StorageFactory(self.config).initialize_adviser()
         self.source = Store(self.config.data_directory / 'source.sqlite3')
         self.addCleanup(self.source.close)
         self.api = BotAPI()

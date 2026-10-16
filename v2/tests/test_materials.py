@@ -10,6 +10,7 @@ from feishu_meeting_adviser.adviser import AdviserRunner
 from feishu_meeting_adviser.client import ApiError, ErrorKind
 from feishu_meeting_adviser.collector import utc_now
 from feishu_meeting_adviser.config import ConfigError, MeetingContextSettings, load_config
+from feishu_meeting_adviser.adapters.persistence.factory import StorageFactory
 from feishu_meeting_adviser.lifecycle import SessionManager
 from feishu_meeting_adviser.llm import Decision
 from feishu_meeting_adviser.maintenance import Maintenance
@@ -82,6 +83,8 @@ class MaterialsTests(unittest.TestCase):
             llm=replace(self.config.llm,backend='codex',batch_seconds=0,introduction=False,role_file=role_path),
             meeting_context=MeetingContextSettings(
                 calendar_id='calendar', identity='application'))
+        StorageFactory(self.config).initialize_source()
+        StorageFactory(self.config).initialize_adviser()
         self.source = Store(self.config.data_directory/'source.sqlite3')
         self.addCleanup(self.source.close)
         self.api, self.materials = BotAPI(), MaterialsAPI()

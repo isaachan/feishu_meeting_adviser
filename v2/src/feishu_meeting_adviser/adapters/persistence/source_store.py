@@ -8,8 +8,8 @@ import time
 from typing import Callable
 
 from ...models import Caption, ChangeKind, Delivery, IngestMode, SourceState, Status, digest, epoch_ns
-from .sqlite import CapacityError, SQLiteDatabase, StorageError, connect_private, private_directory
-from .source_migrations import migrate_source, require_current_source_schema
+from .sqlite import CapacityError, SQLiteDatabase, StorageError, private_directory
+from .source_schema import initialize_source_schema, require_current_source_schema
 
 
 def encode(value) -> str:
@@ -43,12 +43,23 @@ class Store:
         self.max_database_bytes = max_database_bytes
         self.last_commit_captions = []
         self.last_commit_changes = []
-        self.db = connect_private(self.path, max_database_bytes=max_database_bytes)
+        database = SQLiteDatabase.open_current(
+            self.path, max_database_bytes=max_database_bytes)
+        self.db = database.connection
         try:
-            migrate_source(self.path, self.db, max_database_bytes)
+            require_current_source_schema(self.db)
         except BaseException:
             self.close()
             raise
+
+    @classmethod
+    def initialize(cls, path: Path, *, max_database_bytes: int = 150_000_000) -> None:
+        database = SQLiteDatabase.initialize(
+            path, max_database_bytes=max_database_bytes)
+        try:
+            initialize_source_schema(database)
+        finally:
+            database.close()
 
     @classmethod
     def open_readonly(cls, path: Path, *, max_payload_bytes: int = 100_000_000,
@@ -401,7 +412,9 @@ class Store:
 class DurableFakeConsumer:
     """Persist context and idempotency before separately acknowledging the source."""
     def __init__(self, path: Path, *, max_database_bytes=150_000_000):
-        self.db = connect_private(Path(path), max_database_bytes=max_database_bytes)
+        database = SQLiteDatabase.initialize(
+            Path(path), max_database_bytes=max_database_bytes)
+        self.db = database.connection
         self.db.executescript('''
             CREATE TABLE IF NOT EXISTS accepted (delivery_id TEXT PRIMARY KEY, body TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS context (meeting_id TEXT, sentence_key TEXT, body TEXT NOT NULL,

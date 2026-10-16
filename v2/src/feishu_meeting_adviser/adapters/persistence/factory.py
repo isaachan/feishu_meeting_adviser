@@ -24,6 +24,26 @@ class StorageFactory:
     def adviser_path(self):
         return self.directory / 'adviser.sqlite3'
 
+    def initialize_source(self):
+        if self.source_path.exists():
+            store = self.source()
+            store.close()
+            return
+        Store.initialize(
+            self.source_path,
+            max_database_bytes=self.config.database_capacity_bytes,
+        )
+
+    def initialize_adviser(self):
+        if self.adviser_path.exists():
+            store = self.adviser()
+            store.close()
+            return
+        AdviserStore.initialize(
+            self.adviser_path,
+            max_database_bytes=self.config.database_capacity_bytes,
+        )
+
     def source(self, *, readonly=False):
         constructor = Store.open_readonly if readonly else Store
         return constructor(self.source_path,

@@ -42,6 +42,7 @@ class API:
 
 api=API()
 config=load_config(path)
+Store.initialize(config.data_directory/'source.sqlite3')
 source=Store(config.data_directory/'source.sqlite3')
 manager=SessionManager(source,config,api)
 manager.join()

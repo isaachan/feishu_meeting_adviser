@@ -15,6 +15,7 @@ root = Path(sys.argv[2])
 action = sys.argv[1]
 
 if action == 'crash-page':
+    Store.initialize(root / 'data' / 'source.sqlite3')
     store = Store(root / 'data' / 'source.sqlite3')
     store.ensure_meeting('synthetic-meeting', {'cursor':None})
     def fault(point):
@@ -52,6 +53,7 @@ if action in ('source','source-once'):
                     'event_time':'2026-10-13T00:00:00.100Z','payload':{'text':'synthetic input','sentence_id':'s1'}}]}}
     api = API()
     config = load_config(path)
+    Store.initialize(config.data_directory / 'source.sqlite3')
     store = Store(config.data_directory / 'source.sqlite3')
     manager = SessionManager(store,config,api)
     manager.join()  # Existing joined session is reused when restarting.

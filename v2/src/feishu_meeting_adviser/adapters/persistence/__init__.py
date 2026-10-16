@@ -1,6 +1,6 @@
 """SQLite persistence infrastructure."""
 
-from .sqlite import CapacityError, Migration, MigrationRunner, SQLiteDatabase, StorageError
+from .sqlite import CapacityError, SQLiteDatabase, StorageError
 from .adviser_repositories import (
     AdviserUnitOfWork,
     JobRepository,
@@ -13,8 +13,6 @@ __all__ = [
     'CapacityError',
     'JobRepository',
     'MeetingRepository',
-    'Migration',
-    'MigrationRunner',
     'ReplyOutboxRepository',
     'SQLiteDatabase',
     'StorageError',

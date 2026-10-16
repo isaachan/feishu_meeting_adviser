@@ -5,11 +5,11 @@ from .adapters.persistence.source_store import (
     StorageError,
     Store,
     caption_from_json,
-    connect_private,
     decode_mapping,
     encode,
     private_directory,
 )
+from .adapters.persistence.sqlite import connect_private
 
 __all__ = [
     'CapacityError',

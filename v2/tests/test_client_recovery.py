@@ -131,7 +131,9 @@ class RecoveryTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.store = Store(Path(self.tmp.name)/'data'/'source.db')
+        path = Path(self.tmp.name)/'data'/'source.db'
+        Store.initialize(path)
+        self.store = Store(path)
         self.addCleanup(self.store.close)
         self.clock = lambda: 1_800_000_000
     def loop(self, outcomes, **kwargs):

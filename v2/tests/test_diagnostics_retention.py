@@ -23,6 +23,7 @@ class DiagnosticsRetentionTests(unittest.TestCase):
         self.config_path.write_text('app:\n  id: synthetic\n  secret: private-secret\nmeeting:\n  meeting_no: "012345678"\n')
         self.config_path.chmod(0o600)
         self.config = load_config(self.config_path)
+        Store.initialize(self.config.data_directory / 'source.sqlite3')
         self.store = Store(self.config.data_directory / 'source.sqlite3')
         self.addCleanup(self.store.close)
         self.store.ensure_meeting('m1', {'cursor':None})
@@ -129,6 +130,7 @@ class DiagnosticsRetentionTests(unittest.TestCase):
         consumer.close()
 
     def test_physical_database_limit_rolls_back_without_advancing_cursor(self):
+        Store.initialize(self.config.data_directory / 'small.sqlite3', max_database_bytes=262144)
         small = Store(self.config.data_directory / 'small.sqlite3', max_database_bytes=262144)
         try:
             small.ensure_meeting('m',{'cursor':None})

@@ -11,6 +11,7 @@ class StorageTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.path = Path(self.tmp.name) / 'private' / 'source.sqlite3'
+        Store.initialize(self.path)
         self.store = Store(self.path)
         self.addCleanup(lambda: self.store.close())
         self.store.ensure_meeting('m1', {'cursor': None, 'start': 1})

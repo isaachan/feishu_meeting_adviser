@@ -45,6 +45,7 @@ class LifecycleTests(unittest.TestCase):
         self.path.write_text('app:\n  id: synthetic\n  secret: private-secret\nmeeting:\n  meeting_no: "012345678"\nhttp:\n  timeout_seconds: 1\n')
         self.path.chmod(0o600)
         self.config = replace(load_config(self.path), poll_seconds=0.01)
+        Store.initialize(self.config.data_directory / 'source.sqlite3')
         self.store = Store(self.config.data_directory / 'source.sqlite3')
         self.addCleanup(self.store.close)
         self.api = BotAPI()

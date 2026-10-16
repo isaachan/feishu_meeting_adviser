@@ -72,6 +72,7 @@ def handle_join(context, args):
     if config.llm.backend in ('codex', 'opencode') and config.llm.introduction:
         with (FileLock(config.data_directory / 'locks' / 'adviser.lock'),
               context.maintenance.lock()):
+            context.storage_factory.initialize_adviser()
             data = context.storage_factory.adviser()
             try:
                 data.recover_sends()
@@ -162,6 +163,7 @@ def handle_status(context, args):
 
 
 def _consume_model(context, args):
+    context.storage_factory.initialize_adviser()
     adviser = AdviserService(
         context.store,
         context.manager,
