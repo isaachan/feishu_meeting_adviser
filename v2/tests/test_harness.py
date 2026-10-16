@@ -135,7 +135,7 @@ class HarnessAdapterTests(unittest.TestCase):
                 return replace(config,data_directory=root/'harness',
                     llm=replace(config.llm,backend='codex',role_file=role,introduction=False,
                                 batch_seconds=0,reply_interval_seconds=0),
-                    meeting_context=replace(config.meeting_context,calendar_id='harness',event_id='harness'))
+                    meeting_context=replace(config.meeting_context,calendar_id='harness'))
             records = []
             def display(value,flush=False):
                 records.append(json.loads(value))

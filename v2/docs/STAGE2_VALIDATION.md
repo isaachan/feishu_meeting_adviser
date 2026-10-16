@@ -43,7 +43,7 @@ python3 -m unittest discover -s tests -v
 
 ## 操作与待验证项
 
-日常运行见 [README](../README.md)，资料与异常核对见 [DATA_OPERATIONS](DATA_OPERATIONS.md)。用户旧配置可直接运行 `consume --backend codex --watch`；建议后续添加 llm.backend: codex，使 join 自动介绍。
+日常运行见 [README](../README.md)，资料与异常核对见 [DATA_OPERATIONS](DATA_OPERATIONS.md)。可运行 `consume --backend codex --watch` 单次覆盖后端；建议配置 llm.backend: codex，使 join 自动介绍。
 
 2.3 使用用户准备的对话脚本验证实际该发言/该沉默、上下文修正、不同参会者控制、介绍、恢复及远端看到完整回复。记录提问结束、字幕到达、模型完成、API 确认与实际可见时间；20 秒 P95 当前只作为后续优化目标。当前没有端到端延迟样本或质量通过结论。
 

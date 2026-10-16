@@ -69,7 +69,7 @@ class MaterialBootstrapper:
                     {
                         'state': 'unavailable',
                         'context_version': digest([
-                            'unavailable', settings.calendar_id, settings.event_id]),
+                            'unavailable', settings.calendar_id]),
                         'reason': reason,
                         'documents': [],
                     },

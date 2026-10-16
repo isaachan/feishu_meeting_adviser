@@ -1,4 +1,4 @@
-"""Local-only configuration. Legacy credential fields are readable, never rewritten."""
+"""Local-only configuration with one strict, unreleased-product schema."""
 from dataclasses import dataclass, field
 import hashlib
 import math
@@ -51,6 +51,10 @@ class ConfigDocument:
             raise ConfigError(f'{name} must be a mapping')
         return ConfigSection(name, value)
 
+    def reject_unknown(self, sections):
+        if set(self.raw) - set(sections):
+            raise ConfigError('unknown top-level configuration sections')
+
 
 @dataclass(frozen=True)
 class StorageSettings:
@@ -63,6 +67,7 @@ class StorageSettings:
 
     @classmethod
     def parse(cls, section: ConfigSection, base_directory: Path):
+        section.reject_unknown(cls.__dataclass_fields__)
         directory = Path(section.string('directory', 'data'))
         if not directory.is_absolute():
             directory = base_directory / directory
@@ -85,10 +90,10 @@ class HTTPSettings:
     request_seconds: float
 
     @classmethod
-    def parse(cls, section: ConfigSection, legacy: ConfigSection):
-        legacy_timeout = legacy.number('timeout_seconds', 10, 1, 60)
+    def parse(cls, section: ConfigSection):
+        section.reject_unknown(cls.__dataclass_fields__)
         return cls(
-            section.number('timeout_seconds', legacy_timeout, 1, 60),
+            section.number('timeout_seconds', 10, 1, 60),
             section.number('request_seconds', 0.7, 0.7, 30),
         )
 
@@ -100,6 +105,7 @@ class RuntimeSettings:
 
     @classmethod
     def parse(cls, section: ConfigSection):
+        section.reject_unknown(cls.__dataclass_fields__)
         return cls(
             section.number('poll_seconds', 0.7, 0.7, 30),
             section.number('cooldown_seconds', 30, 5, 3600),
@@ -109,7 +115,6 @@ class RuntimeSettings:
 @dataclass(frozen=True)
 class MeetingContextSettings:
     calendar_id: str = ''
-    event_id: str = ''
     identity: str = 'user'
     context_characters: int = 10000
     max_documents: int = 10
@@ -120,26 +125,21 @@ class MeetingContextSettings:
 
     @property
     def enabled(self):
-        return bool(self.calendar_id and self.event_id)
+        return bool(self.calendar_id)
 
     @classmethod
     def parse(cls, section: ConfigSection):
         section.reject_unknown(cls.__dataclass_fields__)
         calendar_id = section.string('calendar_id')
-        event_id = section.string('event_id')
-        if bool(calendar_id) != bool(event_id):
-            raise ConfigError('meeting_context requires both calendar_id and event_id')
-        if any(value and (not re.fullmatch(r'[A-Za-z0-9_.@-]{1,256}', value)
-                          or value in ('.', '..'))
-               for value in (calendar_id, event_id)):
+        if calendar_id and (not re.fullmatch(r'[A-Za-z0-9_.@-]{1,256}', calendar_id)
+                            or calendar_id in ('.', '..')):
             raise ConfigError('invalid meeting_context resource identifier')
         identity = section.string('identity', 'user')
         if identity not in ('user', 'application'):
             raise ConfigError('meeting_context.identity must be user or application')
         return cls(
-            calendar_id,
-            event_id,
-            identity,
+            calendar_id=calendar_id,
+            identity=identity,
             context_characters=section.number(
                 'context_characters', 10000, 1000, 50000, integer=True),
             max_documents=section.number('max_documents', 10, 1, 10, integer=True),
@@ -225,18 +225,20 @@ def load_config(path: Path = DEFAULT_CONFIG) -> Configuration:
     if not isinstance(raw, dict):
         raise ConfigError('configuration must be a mapping')
     document = ConfigDocument(raw)
+    document.reject_unknown({
+        'app', 'meeting', 'http', 'collector', 'storage', 'runtime', 'llm',
+        'meeting_context',
+    })
     app = document.section('app')
+    app.reject_unknown({'id', 'secret'})
     credentials = Credentials(
         app.string('id', required=True), app.string('secret', required=True))
     meeting = document.section('meeting')
-    legacy_lookup = document.section('lookup')
-    meeting_no = meeting.string(
-        'meeting_no', meeting.values.get(
-            'no', meeting.values.get(False, legacy_lookup.string('meeting_no'))))
+    meeting.reject_unknown({'meeting_no', 'password'})
+    meeting_no = meeting.string('meeting_no')
     if len(meeting_no) != 9 or not meeting_no.isascii() or not meeting_no.isdecimal():
-        raise ConfigError('meeting.meeting_no (or legacy lookup.meeting_no) must be a quoted nine-digit string')
-    password = meeting.string(
-        'password', document.section('join').string('password'))
+        raise ConfigError('meeting.meeting_no must be a quoted nine-digit string')
+    password = meeting.string('password')
     collector = document.section('collector')
     collector.reject_unknown(ScanSettings.__dataclass_fields__)
     try:
@@ -244,7 +246,7 @@ def load_config(path: Path = DEFAULT_CONFIG) -> Configuration:
     except (ValueError, TypeError):
         raise ConfigError('invalid collector configuration') from None
     storage = StorageSettings.parse(document.section('storage'), path.parent)
-    http = HTTPSettings.parse(document.section('http'), document.section('probe'))
+    http = HTTPSettings.parse(document.section('http'))
     runtime = RuntimeSettings.parse(document.section('runtime'))
     llm = _parse_llm(document.section('llm'), path.parent)
     context = MeetingContextSettings.parse(document.section('meeting_context'))

@@ -163,7 +163,7 @@ class ContextProbeClient(FeishuClient):
             for item in items[:50]], 'has_more': data.get('has_more'),
             'page_token': data.get('page_token') if isinstance(data.get('page_token'), str) else None}
 
-    def find_event(self, calendar_id, start, end, meeting_no):
+    def find_event(self, calendar_id, start, end, meeting_no, *, timeout=None):
         resource_id(calendar_id)
         if not isinstance(meeting_no, str) or not re.fullmatch(r'[0-9]{9}', meeting_no):
             raise ProbeInputError('provide a nine-digit meeting number')
@@ -178,7 +178,7 @@ class ContextProbeClient(FeishuClient):
             raise ProbeInputError('provide timezone-aware start/end times within one day') from None
         path = f'/open-apis/calendar/v4/calendars/{quote(calendar_id, safe="")}/events'
         data = _data(self.authenticated(path, query={'start_time': int(start_seconds),
-            'end_time': int(end_seconds), 'page_size': 1000}))
+            'end_time': int(end_seconds), 'page_size': 1000}, timeout=timeout))
         items = data.get('items')
         if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
             raise ApiError(ErrorKind.RESPONSE)

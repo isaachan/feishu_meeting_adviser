@@ -42,7 +42,6 @@ class MaterialBootstrapperTests(unittest.TestCase):
             preview_bytes=1000,
             preview_backups=1,
             calendar_id='calendar',
-            event_id='event',
         )
         return SimpleNamespace(
             meeting_context=context,

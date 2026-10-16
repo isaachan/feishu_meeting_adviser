@@ -42,7 +42,7 @@ class LifecycleTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.path = Path(self.tmp.name) / 'config.yaml'
-        self.path.write_text('app:\n  id: synthetic\n  secret: private-secret\nlookup:\n  meeting_no: "012345678"\nprobe:\n  timeout_seconds: 1\n')
+        self.path.write_text('app:\n  id: synthetic\n  secret: private-secret\nmeeting:\n  meeting_no: "012345678"\nhttp:\n  timeout_seconds: 1\n')
         self.path.chmod(0o600)
         self.config = replace(load_config(self.path), poll_seconds=0.01)
         self.store = Store(self.config.data_directory / 'source.sqlite3')
@@ -50,7 +50,7 @@ class LifecycleTests(unittest.TestCase):
         self.api = BotAPI()
         self.manager = SessionManager(self.store, self.config, self.api, clock=lambda:1_800_000_000)
 
-    def test_legacy_credentials_read_without_mutation_and_bad_config_hidden(self):
+    def test_credentials_read_without_mutation_and_bad_config_hidden(self):
         original = self.path.read_bytes()
         config = load_config(self.path)
         self.assertEqual(config.meeting_no, '012345678')
@@ -59,6 +59,28 @@ class LifecycleTests(unittest.TestCase):
         with self.assertRaises(ConfigError) as caught:
             load_config(self.path)
         self.assertNotIn('private-secret', str(caught.exception))
+
+    def test_legacy_lookup_meeting_number_is_rejected(self):
+        self.path.write_text(self.path.read_text() +
+            'lookup:\n  meeting_no: "012345678"\n')
+        with self.assertRaisesRegex(ConfigError, 'unknown top-level'):
+            load_config(self.path)
+
+    def test_other_legacy_top_level_sections_are_rejected(self):
+        for section in ('join', 'probe', 'stream'):
+            with self.subTest(section=section):
+                self.path.write_text(
+                    'app:\n  id: synthetic\n  secret: private-secret\n'
+                    'meeting:\n  meeting_no: "012345678"\n'
+                    f'{section}: {{}}\n')
+                with self.assertRaisesRegex(ConfigError, 'unknown top-level'):
+                    load_config(self.path)
+
+    def test_meeting_no_alias_is_rejected(self):
+        self.path.write_text(
+            'app:\n  id: synthetic\n  secret: private-secret\nmeeting:\n  no: "012345678"\n')
+        with self.assertRaises(ConfigError):
+            load_config(self.path)
 
     def test_join_and_leave_repeat_without_duplicate_api_operations(self):
         one = self.manager.join()

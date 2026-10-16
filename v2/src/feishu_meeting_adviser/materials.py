@@ -129,9 +129,9 @@ class MaterialDeadline:
             raise
 
 
-def _validate_event_binding(config, session, event):
+def _validate_event_binding(config, session, event, event_id):
     settings = config.meeting_context
-    if event.get('event_id') != settings.event_id or event.get('status') == 'cancelled':
+    if event.get('event_id') != event_id or event.get('status') == 'cancelled':
         raise MaterialError('material_event_identity_or_status_mismatch')
     try:
         vchat = event.get('vchat', {})
@@ -143,12 +143,43 @@ def _validate_event_binding(config, session, event):
         tolerance = settings.binding_tolerance_seconds
         if not start <= end or not start - tolerance <= session['joined_at'] <= end + tolerance:
             raise ValueError()
-        if event.get('recurrence') and (not settings.event_id.rsplit('_', 1)[-1].isdigit()
-                or int(settings.event_id.rsplit('_', 1)[-1]) == 0):
+        if event.get('recurrence') and (not event_id.rsplit('_', 1)[-1].isdigit()
+                or int(event_id.rsplit('_', 1)[-1]) == 0):
             raise ValueError()
     except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
         raise MaterialError(
             'material_binding_unverified; check meeting link, event instance and join time') from None
+
+
+def _discover_event_id(config, session, client, deadline, emit):
+    settings = config.meeting_context
+    tolerance = max(1, settings.binding_tolerance_seconds)
+    cursor = session['joined_at'] - tolerance
+    stop = session['joined_at'] + tolerance
+    matches = {}
+    while cursor < stop:
+        window_end = min(stop, cursor + 86400)
+        result = deadline.logged_read(
+            client.find_event, 'event_discovery', 'bound_calendar', settings.calendar_id,
+            datetime.fromtimestamp(cursor, timezone.utc).isoformat(),
+            datetime.fromtimestamp(window_end, timezone.utc).isoformat(),
+            config.meeting_no)
+        if result.get('truncated_possible'):
+            emit({'kind':'event_discovery','status':'failed',
+                  'reason':'material_event_search_truncated'})
+            raise MaterialError('material_event_search_truncated')
+        for item in result.get('matches', []):
+            event_id = item.get('event_id')
+            if isinstance(event_id, str):
+                matches[event_id] = item
+        cursor = window_end
+    if len(matches) != 1:
+        reason = 'material_event_not_found' if not matches else 'material_event_ambiguous'
+        emit({'kind':'event_discovery','status':'failed','reason':reason,'count':len(matches)})
+        raise MaterialError(reason)
+    event_id = next(iter(matches))
+    emit({'kind':'event_discovery','status':'ok','count':1})
+    return event_id
 
 
 def _discover_event_sources(event, emit):
@@ -260,13 +291,14 @@ def load_materials(config, session, *, client=None, emit=None, stop_event=None,
     elif settings.identity == 'user':
         oauth = getattr(client, 'oauth_manager', None)
     subject_hash = oauth.subject_hash() if oauth else None
+    event_id = _discover_event_id(config, session, client, deadline, emit)
     event = deadline.logged_read(
-        client.event, 'event', 'bound_calendar_event', settings.calendar_id, settings.event_id)
-    _validate_event_binding(config, session, event)
+        client.event, 'event', 'bound_calendar_event', settings.calendar_id, event_id)
+    _validate_event_binding(config, session, event, event_id)
     contents, references, attachments, attachment_items = _discover_event_sources(event, emit)
     snapshot = {'state':'ready','binding':{'meeting_id':session['meeting_id'],
         'join_instance':session.get('join_instance') or digest([session.get('at'),session['joined_at'],session.get('bot_user_id')]),
-        'calendar_id':settings.calendar_id,'event_id':settings.event_id},
+        'calendar_id':settings.calendar_id,'event_id':event_id},
         'identity':settings.identity,'subject_hash':subject_hash, 'title':event.get('summary','')[:200],
         'description':contents['description_rich'] or contents['description'],
         'description_source':'description_rich' if contents['description_rich'] else 'description',

@@ -15,13 +15,12 @@ class ConfigSectionTests(unittest.TestCase):
     def test_storage_http_and_runtime_sections_parse_independently(self):
         document = ConfigDocument({
             'storage': {'directory': 'state', 'retention_days': 9},
-            'http': {'request_seconds': 1.5},
-            'probe': {'timeout_seconds': 12},
+            'http': {'request_seconds': 1.5, 'timeout_seconds': 12},
             'runtime': {'poll_seconds': 2, 'cooldown_seconds': 40},
         })
 
         storage = StorageSettings.parse(document.section('storage'), Path('/tmp/config'))
-        http = HTTPSettings.parse(document.section('http'), document.section('probe'))
+        http = HTTPSettings.parse(document.section('http'))
         runtime = RuntimeSettings.parse(document.section('runtime'))
 
         self.assertEqual(storage.directory, Path('/tmp/config/state'))
@@ -33,16 +32,20 @@ class ConfigSectionTests(unittest.TestCase):
     def test_meeting_context_owns_binding_validation(self):
         valid = ConfigDocument({'meeting_context': {
             'calendar_id': 'calendar',
-            'event_id': 'event_0',
             'identity': 'application',
         }})
         settings = MeetingContextSettings.parse(valid.section('meeting_context'))
         self.assertTrue(settings.enabled)
         self.assertEqual(settings.identity, 'application')
+        discovered = MeetingContextSettings.parse(ConfigDocument({
+            'meeting_context': {'calendar_id': 'calendar'}
+        }).section('meeting_context'))
+        self.assertTrue(discovered.enabled)
 
         for values in (
-            {'calendar_id': 'calendar'},
-            {'calendar_id': 'calendar', 'event_id': '../event'},
+            {'event_id': 'event_0'},
+            {'calendar_id': 'calendar', 'event_id': 'event_0'},
+            {'calendar_id': '../calendar'},
             {'identity': 'other'},
             {'unknown': True},
         ):

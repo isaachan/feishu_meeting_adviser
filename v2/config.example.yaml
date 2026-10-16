@@ -1,5 +1,5 @@
 # 产品配置示例：仅在没有 config.yaml 时复制，已有本机配置不要覆盖。
-# 旧 app/lookup.meeting_no/join.password/probe.timeout_seconds 可直接读取；旧 stream 设置不用于产品。
+# 使用当前配置结构；未发布版本不保留旧字段兼容路径。
 app:
   id: ""
   secret: ""
@@ -41,15 +41,14 @@ llm:
   reply_interval_seconds: 10
   introduction: true
 
-# 2.5：显式绑定日程实例；两个 ID 都留空时关闭材料读取。
-# 先按 docs/USER_OAUTH.md 授权并按 docs/CONTEXT_PROBE.md 核对 ID。
+# 2.5：绑定一次日历；consume 按当前会议号自动定位唯一日程实例。
+# calendar_id 留空时关闭材料读取；日程实例由 consume 自动发现。
 meeting_context:
   calendar_id: ""
-  event_id: ""                    # 重复日程须填本次实例 ID
   identity: user                  # user 或 application；失败不会切换身份
   context_characters: 10000       # 材料文本预算，仍受上方模型总上下文预算约束
   max_documents: 10
   timeout_seconds: 60
-  binding_tolerance_seconds: 3600 # 入会时间须在日程开始前/结束后此范围内
+  binding_tolerance_seconds: 3600 # 自动搜索及入会时间校验的前后容差
   preview_bytes: 1000000          # 每会议内容预览当前文件上限
   preview_backups: 3

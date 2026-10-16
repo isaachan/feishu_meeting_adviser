@@ -46,6 +46,12 @@ class MaterialsAPI:
             raise self.failure
         return self.event_value
 
+    def find_event(self, calendar_id, start, end, meeting_no, *, timeout=None):
+        self.request_timeouts.append(timeout)
+        self.calls.append(('find_event', calendar_id, meeting_no))
+        return {'matches':[{'event_id':'event_0'}],
+                'truncated_possible':False}
+
     def node(self, token, *, timeout=None):
         self.request_timeouts.append(timeout)
         self.calls.append(('node',token))
@@ -74,7 +80,8 @@ class MaterialsTests(unittest.TestCase):
         role_path.write_text('合成测试角色：只根据当前有效字幕及背景资料决定是否回答。')
         self.config = replace(self.config,
             llm=replace(self.config.llm,backend='codex',batch_seconds=0,introduction=False,role_file=role_path),
-            meeting_context=MeetingContextSettings('calendar','event_0','application'))
+            meeting_context=MeetingContextSettings(
+                calendar_id='calendar', identity='application'))
         self.source = Store(self.config.data_directory/'source.sqlite3')
         self.addCleanup(self.source.close)
         self.api, self.materials = BotAPI(), MaterialsAPI()
@@ -128,7 +135,23 @@ class MaterialsTests(unittest.TestCase):
         self.assertTrue(all(0 < timeout <= self.config.timeout_seconds
                             for timeout in self.materials.request_timeouts))
 
-    def test_explicit_binding_rejects_other_meeting_old_instance_and_recurring_series(self):
+    def test_consume_discovers_unique_event_when_only_calendar_is_configured(self):
+        result = load_materials(self.config, self.session, client=self.materials,
+                                emit=self.previews.append)
+        self.assertEqual(result['binding']['event_id'], 'event_0')
+        self.assertIn(('find_event', 'calendar', '012345678'), self.materials.calls)
+        self.assertTrue(any(item['kind'] == 'event_discovery'
+                            and item['status'] == 'ok' for item in self.previews))
+
+    def test_automatic_event_discovery_rejects_missing_or_ambiguous_match(self):
+        for matches, reason in (([], 'material_event_not_found'),
+                ([{'event_id':'one_0'},{'event_id':'two_0'}], 'material_event_ambiguous')):
+            self.materials.find_event = lambda *_args, **_kwargs: {
+                'matches':matches, 'truncated_possible':False}
+            with self.subTest(reason=reason), self.assertRaisesRegex(MaterialError, reason):
+                load_materials(self.config, self.session, client=self.materials)
+
+    def test_discovered_binding_rejects_other_meeting_old_instance_and_recurring_series(self):
         for change in ({'vchat':{'meeting_url':'https://vc.feishu.cn/j/999999999'}},
                        {'end_time':{'timestamp':str(NOW-100000)},'start_time':{'timestamp':str(NOW-200000)}},
                        {'recurrence':'FREQ=WEEKLY'}, {'event_id':'other_0'}):
@@ -342,10 +365,12 @@ class MaterialsTests(unittest.TestCase):
         self.assertEqual(list(logger.directory.glob('materials.jsonl*')),[])
         self.assertTrue(other.path.exists())
 
-    def test_config_rejects_partial_or_invalid_bindings_and_legacy_is_disabled(self):
+    def test_config_accepts_calendar_only_discovery_and_rejects_invalid_bindings(self):
         self.assertFalse(load_config(self.path).meeting_context.enabled)
         original = self.path.read_text()
-        for suffix in ('meeting_context:\n  calendar_id: calendar\n',
+        self.path.write_text(original+'meeting_context:\n  calendar_id: calendar\n')
+        self.assertTrue(load_config(self.path).meeting_context.enabled)
+        for suffix in ('meeting_context:\n  event_id: event_0\n',
                        'meeting_context:\n  calendar_id: calendar\n  event_id: event_0\n  identity: unknown\n',
                        'meeting_context:\n  calendar_id: ../outside\n  event_id: event_0\n'):
             self.path.write_text(original+suffix)

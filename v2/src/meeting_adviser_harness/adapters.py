@@ -43,6 +43,12 @@ class MaterialAdapter:
             'end_time': {'timestamp': str(joined + 86400)},
         }
 
+    def find_event(self, calendar_id, start, end, meeting_no, *, timeout=None):
+        return {
+            'matches': [{'event_id': 'harness'}],
+            'truncated_possible': False,
+        }
+
     def _read(self, name, token, *, timeout=None):
         if self.delegate is None:
             raise MaterialError(

@@ -361,7 +361,7 @@ def main(argv=None):
                 backend=args.backend or current.llm.backend)
             if llm.backend not in ('codex','opencode'):
                 raise ConfigError('harness requires --backend codex or opencode')
-            context = replace(current.meeting_context,calendar_id='harness',event_id='harness',identity='user')
+            context = replace(current.meeting_context,calendar_id='harness',identity='user')
             return replace(current,data_directory=data,llm=llm,meeting_context=context)
         output = _HarnessOutput(data)
         harness = Harness(config_factory,description_file,base.data_directory,display=output)

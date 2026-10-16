@@ -2,7 +2,7 @@
 
 产品使用飞书官方会议字幕，持续采集并保存带说话人的输入，通过 **Codex + ChatGPT 订阅，或 OpenCode + GLM-5.3** 自主判断发言、沉默和自然语言控制意图，回答一次完整发送到会议内。产品代码在 `src/feishu_meeting_adviser/`，旧实验在 [reference/spike](reference/spike/README.md)，运行时互不依赖。
 
-TODO 2.5 已实现：显式绑定日程实例，consume 启动时读取一次日程描述和关联 Docx / Wiki 中的 Docx，作为带来源、版本和省略标记的会议背景。材料不会自行触发回答，更新后重启 consume 才重新读取。用户 OAuth 只用于材料读取，VC 入会、字幕和会中发送继续使用应用身份。操作见 [USER_OAUTH](docs/USER_OAUTH.md)、[只读探测](docs/CONTEXT_PROBE.md) 和 [2.5 验证记录](docs/STAGE2_CALENDAR_VALIDATION.md)。
+TODO 2.5 已实现：绑定日历后，consume 按当前会议号与入会时间自动定位唯一日程实例，读取日程描述和关联 Docx / Wiki 中的 Docx，作为带来源、版本和省略标记的会议背景。材料不会自行触发回答，更新后重启 consume 才重新读取。用户 OAuth 只用于材料读取，VC 入会、字幕和会中发送继续使用应用身份。操作见 [USER_OAUTH](docs/USER_OAUTH.md)、[只读探测](docs/CONTEXT_PROBE.md) 和 [2.5 验证记录](docs/STAGE2_CALENDAR_VALIDATION.md)。
 
 按用户决定，测试随各 TODO 项进行，不单列 2.3，2.4 已确认完成。Word / PDF 为后续 2.6，参会者控制及权限暂移至 2.7；输入源的跨会议回归 1.9 / G1 及 20 秒 P95 仍待验证。见 [TODO](docs/TODO.md) 和 [阶段 2 验证](docs/STAGE2_VALIDATION.md)。
 
@@ -24,7 +24,7 @@ llm:
   backend: codex
 ```
 
-这样 `join` 成功后发送介绍，`consume` 默认采用真实模型。旧配置没有 `llm` 时仍默认固定测试规则；用 `consume --backend codex` 可单次覆盖，首次模型消费补发介绍。
+这样 `join` 成功后发送介绍，`consume` 默认采用真实模型。省略 `llm` 时默认使用固定测试规则；用 `consume --backend codex` 可单次覆盖，首次模型消费补发介绍。
 
 默认沿用 Codex 当前模型；本机合成调用使用 `gpt-6-astra`。可设置 `llm.model`；`llm.role_file` 为空时加载包内 [meeting_adviser.md](src/feishu_meeting_adviser/meeting_adviser.md)，也可指定本机 Markdown 路径。配置或角色文件更改后需重启消费者，新角色会重新检查待发候选。
 
@@ -51,16 +51,15 @@ llm:
 
 ## 绑定日程材料
 
-先按 [USER_OAUTH](docs/USER_OAUTH.md) 完成本机授权，再用 [context_probe](docs/CONTEXT_PROBE.md) 核对目标日历和完整日程实例 ID。在已有本机配置中追加以下块，使用核对后的 ID：
+先按 [USER_OAUTH](docs/USER_OAUTH.md) 完成本机授权，再用 [context_probe](docs/CONTEXT_PROBE.md) 核对目标日历 ID。这是一次性配置；每场会议的日程实例由 consume 自动定位：
 
 ```yaml
 meeting_context:
   calendar_id: "目标 calendar_id"
-  event_id: "本次日程实例 event_id"
   identity: user
 ```
 
-两个 ID 都留空或省略整个块时关闭材料读取；仅填一个会报配置错误。应用可读目标资料时也可选择 application，失败不会自动换身份。会话的会议链接须与日程一致，入会时间默认须在日程开始前一小时到结束后一小时内；重复日程必须绑定本次实例。下一场会议同时修改会议号和日程绑定，不能沿用旧日期的日程实例。
+`calendar_id` 留空或省略整个块时关闭材料读取。应用可读目标资料时也可选择 application，失败不会自动换身份。consume 只接受会议链接和入会时间均通过校验的唯一日程；找不到或多个候选时停止模型消费，不猜测绑定。`meeting_context.event_id` 不属于配置契约，不能手工指定。
 
 启动 consume 后，终端显示描述、引用/附件清单、Wiki 类型及正文预览，同时保存至私有 `data/content_previews/<会议标识hash>/materials.jsonl`。每段最多 2000 字符，保留原长度和截断标记；模型文本另受材料预算（默认 10000 字符）和总上下文预算约束，优先保留近期字幕。实际测试的在线文档链接来自 `description_rich`，程序同时核对普通 description。只读取日程明确引用，不递归打开文档中的链接。
 

@@ -45,7 +45,7 @@ flowchart LR
 
 首版使用一个 LLM 完成参与判断和回答生成。采集、上下文、决策和发送职责明确，模型调用慢或失败不会阻止采集落盘。
 
-运行入口沿用本机两个终端：终端 A 运行 `collect`，终端 B 运行 `consume --backend codex --watch`。新配置示例默认 codex，旧配置未设置 llm 时保留 rule；两个后端不同时发言。
+运行入口沿用本机两个终端：终端 A 运行 `collect`，终端 B 运行 `consume --backend codex --watch`。配置未设置 llm 时使用 rule；两个后端不同时发言。
 
 ## 4. 模型后端与订阅接入
 
