@@ -2,18 +2,28 @@
 
 日期：2026-10-15。评审范围：`v2/src/feishu_meeting_adviser/`、`v2/src/meeting_adviser_harness/`、相关测试与项目配置。本文先记录评审时的架构判断和重构建议；下方“实施状态”记录随后完成的落地结果。
 
-### 实施状态（2026-10-15）
+### 实施状态（2026-10-16 修订）
 
-阶段 A–F 已按独立切片完成，核心提交范围为 `4ea166c..753368f`；其中 `9512174` 完成了 persistence 外无原始 SQL 的边界收口。主要结果如下：
+阶段 A–F 的主体拆分已按独立切片完成，核心提交范围为 `4ea166c..753368f`；其中 `9512174` 完成了 persistence 外无原始 SQL 的边界收口。复核时确认了一个此前未写入评审前提的重要事实：产品尚未正式发布，不需要兼容任何开发期数据库。自本次修订起，数据库策略以本段为准，替代下文所有关于历史 fixture、逐版本升级和运行中迁移锁的原建议。
+
+首个正式版本之前采用以下策略：
+
+- 新数据目录只初始化当前 schema，不提供旧 schema 升级。
+- 已存在的数据库只允许打开当前 schema；旧版、未知版或损坏 schema 一律失败闭合，开发者删除本地开发数据后重新初始化。
+- schema 初始化由入口 bootstrap 显式执行；Store、worker、maintenance 和应用服务只能打开并验证当前 schema，不得隐式建库或运行升级逻辑。
+- 首个正式发布的 schema 才成为后续兼容基线；届时如需演进，另行设计迁移、锁和发布测试，不能把当前开发期 fixture 当作已发布兼容承诺。
+- `status`、`replies`、`conflicts` 等只读命令不得修改数据库，也不得创建目录、锁文件或其他持久化文件。
+
+因此，阶段 B 的“历史迁移兼容”部分撤销，改为“显式当前 schema 初始化与严格打开边界”；A–F 完成状态需在该边界和严格只读探测落地后重新确认。主要结果如下：
 
 - 阶段 A：固定 Ruff、Pyright、coverage、unittest 和 Python 3.11/3.14 CI；加入 SQL、显式 INSERT 和输出边界架构测试。
-- 阶段 B：建立公共 SQLite 基础层、读写分离、统一 factory、迁移锁策略，以及 source/adviser 显式版本迁移和历史 fixture。
+- 阶段 B：建立公共 SQLite 基础层、读写分离和统一 factory；当前修订要求移除开发期历史迁移，补齐显式初始化与 current-only 打开边界。
 - 阶段 C：引入状态枚举、repository 与共享 `AdviserUnitOfWork`，集中 job/reply 状态转换，并将 SQL 实现收进 `adapters/persistence/`。
 - 阶段 D：提取 `SnapshotBuilder`、`DecisionApplier`、`ModelJobExecutor`、`ReplyDispatcher`、`MaterialBootstrapper`，将原 Runner 收窄为 `AdviserService`。
 - 阶段 E：补全模型后端协议、统一诊断映射、使用单请求 deadline、拆分材料流水线，并按 section 类型解析配置。
 - 阶段 F：拆分独立 CLI handlers，复用 command-aware bootstrap/factory，提取信号上下文管理器和 harness 三类适配器，并由入口统一负责展示。
 
-最终本地验收为 262 项测试通过、1 项既有范围跳过，Ruff 与 Pyright 零错误，branch coverage 总计 83%。后续章节保留评审时的问题描述和实施计划，作为设计依据与回归检查清单。
+2026-10-15 的本地验收为 262 项测试通过、1 项既有范围跳过，Ruff 与 Pyright 零错误，branch coverage 总计 83%。该结果证明功能回归，但不替代本次修订后的初始化与严格只读验收。
 
 ## 1. 结论摘要
 
@@ -29,7 +39,7 @@
 
 本次建议的核心不是大规模重写，而是保留现有可靠性语义和测试资产，按照以下顺序逐步收紧边界：
 
-1. 建立正式的数据库迁移和公共 SQLite 基础层。
+1. 建立公共 SQLite 基础层、显式当前 schema 初始化和严格打开边界。
 2. 将模型任务、回复发送等隐式状态机显式化。
 3. 禁止业务层直接访问 `.db`，以 repository 接口封装 SQL。
 4. 从 `AdviserStore` 提取上下文构造、任务和 outbox 职责。
@@ -120,7 +130,7 @@ flowchart LR
 
 ## 5. 主要架构问题
 
-### 5.1 两套数据库的迁移策略不一致
+### 5.1 数据库初始化、打开和 schema 验证混在构造器中
 
 `storage.Store` 使用 `PRAGMA user_version` 管理 schema 版本；`AdviserStore` 则在构造函数中执行 `CREATE TABLE IF NOT EXISTS`、读取列信息和条件式 `ALTER TABLE`。
 
@@ -135,7 +145,7 @@ flowchart LR
 
 #### 建议
 
-建立公共 SQLite 基础层和显式迁移：
+建立公共 SQLite 基础层和显式初始化：
 
 ```text
 feishu_meeting_adviser/
@@ -155,13 +165,12 @@ feishu_meeting_adviser/
 - 事务上下文和 SQLite 异常归类。
 - 只读连接与读写连接的区别。
 
-迁移层负责：
+初始化与打开层负责：
 
-- 明确记录当前 schema version。
-- 按版本顺序执行小步迁移。
-- 每一步具有确定的前置版本和目标版本。
-- 在支持范围内使用单事务迁移。
-- 对无法自动处理的旧版本给出安全、无正文的错误。
+- 明确记录当前 schema identity/version，但首个正式版本前不将开发期版本作为兼容承诺。
+- 仅在数据库不存在时，以单事务创建完整的当前 schema。
+- 运行时读写连接只打开既有数据库并验证当前 schema，不创建、不升级。
+- 对旧版、未知版或损坏 schema 给出安全、无正文的错误；不自动修复、不修改原库。
 
 所有 INSERT 应显式写出列名，避免依赖列顺序。
 
@@ -468,18 +477,19 @@ infrastructure/file_lock.py
 ```python
 command = parse_command(argv)
 
-if command.requires_migration:
-    context = factory.open_and_migrate(command)
+if command.requires_initialization:
+    context = factory.initialize_current(command)
 else:
-    context = factory.open_readonly(command)
+    context = factory.open_current(command)
 ```
 
 要求：
 
 - 每个命令声明需要的资源、读写权限和锁，不构造无关依赖。
 - `open_readonly()` 使用 SQLite read-only URI 或等价机制，不能建表、升级 schema 或创建数据库文件。
-- `open_and_migrate()` 在明确的迁移锁保护下打开并升级数据库。
-- schema 过旧且只读命令无法安全解释时，返回固定的“需要先运行迁移型命令”错误，不尝试升级，也不输出底层路径或 schema 内容。
+- `initialize_current()` 只负责创建缺失的当前 schema；已存在的任何非当前 schema 都失败闭合，不升级。
+- `open_current()` 分为只读和读写连接，但都不得创建文件或改变 schema。
+- schema 非当前版本时返回固定的“开发期数据库不受支持，请删除本地开发数据后重新初始化”错误，不输出底层路径或 schema 内容。
 - database/repository factory 统一传入 data directory、数据库容量和内容容量，所有入口禁止自行拼装构造参数。
 - status、replies、conflicts 等命令是否真正只读应逐项定义；需要人工状态变更的命令继续走读写路径。
 
@@ -491,11 +501,11 @@ else:
 
 建议由应用层将实际 backend 合并到状态结果，存储层只返回持久化业务状态；或者将 backend 作为显式参数传入，但不建议由 repository 猜测运行配置。
 
-### 6.2 只读 status 可能触发 schema 写入
+### 6.2 只读 status 不得触发任何持久化写入
 
 CLI 的 `status` 命令为了读取 adviser 状态而构造 `AdviserStore`；`AdviserStore.__init__()` 同时包含建表和列迁移。因此 status 并非严格只读。
 
-正式迁移层建立后，应在进程启动的明确阶段执行迁移，状态查询使用只读 repository 或只读连接。
+入口 bootstrap 应在写命令的明确阶段初始化缺失数据库，状态查询使用只读 repository 或只读连接。判断 consumer 是否活跃时必须使用不带 `O_CREAT` 的既有锁探测；锁目录或锁文件不存在表示未运行，不能为了探测而创建它们。
 
 ### 6.3 模型工作线程吞掉了编程错误类型
 
@@ -523,7 +533,7 @@ CLI 的 `status` 命令为了读取 adviser 状态而构造 `AdviserStore`；`Ad
 
 例如 adviser inbox、context 和材料表的写入依赖当前列顺序。迁移增加列后，即使测试数据库从零创建正常，升级数据库也可能暴露顺序或默认值问题。
 
-建议所有 INSERT 明确列名，并在迁移测试中覆盖从每一个受支持旧版本升级。
+建议所有 INSERT 明确列名，并由当前 schema 初始化测试和 repository 契约测试覆盖。
 
 ## 7. 建议的目标架构
 
@@ -622,35 +632,26 @@ flowchart TD
 
 验收：`.[dev]` 可在干净环境安装；四条标准命令可重复执行；Python 3.11/3.14 CI 通过；架构 allowlist 与当前现状一致且新违规会使 CI 失败；不改变产品行为。
 
-### 阶段 B：统一 SQLite 和迁移
+### 阶段 B：统一 SQLite、显式初始化和打开边界
 
-目标：数据库打开、迁移、锁、bootstrap、容量和异常处理只有一套实现；只读命令在构造依赖阶段就保持只读。
+目标：数据库初始化、当前版本打开、bootstrap、容量和异常处理只有一套实现；只读命令在构造依赖阶段就保持文件系统与数据库严格只读。
 
-开始编码前先形成迁移兼容清单：
-
-| 数据库 | 当前状态 | 必须盘点和保留的 fixture |
-| --- | --- | --- |
-| source | 当前 `PRAGMA user_version=5`；现有代码识别 0–5 | `source_v1` 至 `source_v5`；version 0 需区分新空库与可能存在的未版本化历史库 |
-| adviser | 当前没有正式 user version，以列探测执行条件式升级 | `adviser_legacy_base`、加入 join/role/source status 列后的历史形态、加入 material/context version 列后的当前未版本化形态 |
-
-fixture 必须由对应历史提交/发布代码真实创建后脱敏保存，不能仅根据当前代码手写一个“看起来相同”的 DDL。盘点仓库历史后，应把每个受支持版本对应的提交、schema 摘要、fixture 文件和目标版本写入迁移测试清单。如果无法证明某个历史形态曾发布或被用户使用，可以明确排除，但不能默认为兼容。
-
-不支持的未来版本、损坏 schema 或无法识别的未版本化形态必须失败闭合：不写数据库、不自动降级、不删除资料，返回固定的“数据库版本不受支持，需要人工检查”错误。
+产品尚未正式发布，因此不形成开发期数据库兼容清单，不保留逐版本升级 fixture。source 与 adviser 各自只定义一个当前 schema。已存在的旧版、未来版、未版本化或损坏 schema 必须失败闭合：不写数据库、不自动升级、不自动删除，返回固定的“开发期数据库不受支持，请删除本地开发数据后重新初始化”错误。
 
 工作项：
 
 1. 将 `FileLock` 提取到 `infrastructure/file_lock.py`，消除 lifecycle/maintenance 的反向依赖；保持现有锁文件、进程释放和可中断等待语义。
-2. 明确定义迁移锁策略：source 与 adviser 分别需要哪个文件锁、锁顺序如何、运行中的 collect/consume 如何阻止迁移，以及异常退出后如何恢复。所有多锁路径使用同一全局顺序，避免死锁。
+2. 将 schema 初始化限制在 command-aware bootstrap；初始化并发由 SQLite 原子事务或单一初始化锁保护，不复用运行期多锁策略，也不允许应用服务隐式初始化。
 3. 提取 `SQLiteDatabase` 或等价基础层，统一权限、连接参数、事务、容量异常和安全错误。
-4. 实现 `open_readonly()` 与 `open_and_migrate()` 两条路径；只读路径不得创建文件或执行 PRAGMA/schema 写入。
+4. 实现 `initialize_current()`、`open_current()` 与 `open_readonly()`：初始化只接受缺失/空数据库，另外两条路径不得创建文件或执行 schema 写入。
 5. 引入最小化 command-aware bootstrap。参数解析后先判定命令需要的数据库、读写模式和锁，再构造依赖；尚不要求拆分全部 CLI handlers。
 6. 实现统一 database/repository factory，集中传入路径、`database_capacity_bytes`、`content_capacity_bytes` 和其他存储参数。status、maintenance、replies、harness 等入口不再自行构造 `Store`/`AdviserStore`。
-7. 为 source/adviser 定义独立 schema version 和迁移 runner，将 `AdviserStore` 的条件式 ALTER 转为显式迁移。
+7. 为 source/adviser 定义完整的当前 schema 初始化器；Store 构造器、worker、maintenance 和 AdviserService 仅验证当前 schema。
 8. 所有 INSERT 改为显式列名。
-9. 为兼容清单中的每个历史版本增加真实 fixture 和逐版本升级测试。
-10. 增加迁移中途故障、重复执行、两个进程并发启动、运行时锁冲突、未知新版本、损坏 schema 和只读旧 schema 测试。
+9. 删除开发期历史 fixture 和逐版本升级测试，避免形成并不存在的兼容承诺。
+10. 增加初始化中断、重复初始化、两个进程并发首次初始化、runtime current-only 打开、未知版本、损坏 schema 和严格只读文件清单测试。
 
-验收：受支持历史数据库均可升级；迁移重复执行无额外副作用；任一步失败保持原数据且可诊断；并发启动只有一个迁移者；锁顺序没有死锁；status 等只读命令不创建或修改数据库；schema 过旧时只读命令安全报错；所有入口使用统一 factory；容量、权限和进程锁测试保持通过。
+验收：缺失数据库可被显式初始化为当前 schema；初始化重复执行无额外副作用；任一步失败不留下可被误认为当前版本的部分 schema；并发首次初始化结果唯一；worker 和应用服务不会调用初始化器；status 等只读命令前后文件清单、mtime 和数据库摘要不变；非当前 schema 安全报错且不被修改；所有入口使用统一 factory；容量、权限和进程锁测试保持通过。
 
 ### 阶段 C：显式化状态机和 repository
 
@@ -743,17 +744,17 @@ fixture 必须由对应历史提交/发布代码真实创建后脱敏保存，�
 - 发送 POST 后、结果持久化前退出。
 - 模型在途收到新字幕。
 - SIGTERM/SIGKILL 清理和恢复。
-- 每个受支持旧数据库版本逐级升级。
-- 迁移中断、重复执行和两个进程并发启动。
+- 当前 schema 初始化中断、重复初始化和两个进程并发首次初始化。
+- 非当前或损坏 schema 失败闭合且保持原样。
 - `finish_job()` 跨 repository 写入点逐点失败时整体回滚。
 
 单元测试提高反馈速度，端到端测试负责证明可靠性语义，两者不能互相替代。
 
-## 10. 兼容性和迁移风险
+## 10. 持久化兼容性和初始化风险
 
 ### 10.1 不改变持久化身份算法
 
-字幕 delivery ID、reply UUID、join instance 和材料 context version 都参与恢复与幂等。重构时不能顺手修改其序列化或哈希输入，除非提供明确的数据迁移与兼容策略。
+字幕 delivery ID、reply UUID、join instance 和材料 context version 都参与同一当前版本内的恢复与幂等，不能在普通重构中顺手修改。首个正式版本发布后，对这些身份算法和 schema 的变更必须另行提供迁移与兼容策略。
 
 ### 10.2 不改变确认时机
 
@@ -763,9 +764,9 @@ fixture 必须由对应历史提交/发布代码真实创建后脱敏保存，�
 
 材料不可用、工具隔离无法验证、会议状态变化或配置变化时，当前行为是阻止新模型回答。重构后不能降级成继续使用旧缓存或静默跳过检查。
 
-### 10.4 谨慎处理运行中迁移
+### 10.4 运行时禁止初始化或升级 schema
 
-同一数据目录当前依赖文件锁限制 collector 和 adviser 并发。数据库迁移应在持有适当独占锁时完成，不能由运行中的只读状态查询隐式触发。
+Store、collector worker、maintenance、AdviserService 和只读命令只能打开当前 schema。只有写入口 bootstrap 可以在数据库缺失时显式初始化；运行中的业务服务不得触发初始化，更不存在开发期旧库的在线升级路径。
 
 ### 10.5 避免一次性目录重排
 
@@ -775,7 +776,7 @@ fixture 必须由对应历史提交/发布代码真实创建后脱敏保存，�
 
 - 不建议立即切换到 `asyncio`。
 - 不建议为了减少文件数重新合并 Codex 和 OpenCode transport。
-- 不建议在迁移完成前替换 SQLite。
+- 不建议在当前 schema 初始化和打开边界完成前替换 SQLite。
 - 不建议把所有配置迁移到第三方框架作为首要任务。
 - 不建议用 ORM 隐藏当前重要的事务和锁语义；如未来采用 ORM，也应先完成状态机和 repository 边界。
 - 不建议为了追求单元测试比例删除现有进程级恢复测试。
@@ -784,15 +785,15 @@ fixture 必须由对应历史提交/发布代码真实创建后脱敏保存，�
 
 当以下条件满足时，可以认为本轮架构重构完成：
 
-- 两个 SQLite 数据库都具有显式 schema version、兼容范围、真实历史 fixture 和升级测试。
-- 数据库迁移具有明确文件锁、并发启动、重复执行和中断恢复测试。
-- command-aware bootstrap 在构造依赖前区分只读和迁移路径，所有入口使用统一 database/repository factory。
+- 两个 SQLite 数据库都具有唯一的当前 schema 定义、显式初始化器和 current-only 打开验证；开发期旧库不兼容。
+- 当前 schema 初始化具有并发首次启动、重复执行和中断恢复测试；runtime 不包含 migration runner。
+- command-aware bootstrap 在构造依赖前区分只读、当前读写和缺失数据库初始化路径，所有入口使用统一 database/repository factory。
 - persistence 之外没有直接 SQL 或 `.db` 访问。
 - 模型任务和回复发送状态转换由集中式 repository/API 执行，跨 repository 决策落盘共享一个 Unit of Work。
 - 决策落盘任一写入失败时，job、meeting、旧回复取消和新 outbox 写入全部回滚。
 - `AdviserStore` 不再负责 snapshot 策略和发送状态机。
 - Adviser 主循环只负责编排，不包含业务 SQL。
-- CLI 各命令具有独立 handler，status 是明确的只读操作。
+- CLI 各命令具有独立 handler；status 是文件系统与数据库严格只读操作，探测活动锁不会创建目录或文件。
 - Codex/OpenCode 实现同一个完整的模型后端契约。
 - 材料读取采用单次 deadline，不修改共享客户端超时状态。
 - Python 3.11 与 3.14 CI 通过；以后变更最高支持版本时同步更新本文和 CI matrix。
@@ -801,7 +802,7 @@ fixture 必须由对应历史提交/发布代码真实创建后脱敏保存，�
 
 ## 13. 建议的首批实施切片
 
-首批工作拆为五个可独立评审和回滚的切片，不能把工具链、迁移、状态机和行为修复混在同一个提交中。
+首批工作拆为可独立评审和回滚的切片，不能把工具链、schema 初始化、状态机和行为修复混在同一个提交中。
 
 ### A1：工具链与重构护栏
 
@@ -813,26 +814,24 @@ fixture 必须由对应历史提交/发布代码真实创建后脱敏保存，�
 
 验收：工具链可从干净环境安装；两版本 CI 通过；当前 208 项通过、1 项跳过的基线不退化；人为新增一处业务层 SQL 时架构测试会失败。
 
-### B1：锁、SQLite 基础层和依赖构造
+### B1：SQLite 基础层、显式初始化和依赖构造
 
 - 将 `FileLock` 移至独立 infrastructure 模块，并保持原有锁行为。
-- 确定迁移锁和多锁获取顺序。
 - 提取 SQLite 公共连接/事务基础层。
-- 实现 `open_readonly()`、`open_and_migrate()` 和最小化迁移 runner 接口。
+- 实现 `initialize_current()`、`open_current()` 和 `open_readonly()`；非当前 schema 失败闭合。
 - 实现 command-aware bootstrap 与统一 database/repository factory，消除各入口容量参数不一致。
-- 此切片只建立能力，不迁移 adviser schema。
+- Store、worker、maintenance 和应用服务只走 current-only 打开，不隐式初始化。
 
-验收：现有数据库行为不变；只读路径不会创建或写数据库；锁释放、容量、权限和现有进程测试通过。
+验收：缺失数据库只由 bootstrap 初始化；current-only 和只读路径不会创建或改变 schema；锁释放、容量、权限和现有进程测试通过。
 
-### B2：Adviser schema 版本化和兼容验证
+### B2：Source/Adviser 当前 schema 与失败闭合验证
 
-- 完成 source/adviser 历史版本与提交盘点。
-- 从历史代码生成并脱敏保存每个受支持版本的真实 fixture。
-- 为 adviser 引入正式 schema version，将条件式列升级迁移到 runner。
-- 测试逐版本升级、迁移中断、重复执行、并发启动、未知版本和损坏 schema。
-- 定义只读命令面对旧 schema 的固定安全错误。
+- 为 source/adviser 各定义一个完整的当前 schema 初始化器。
+- 删除开发期历史 fixture、逐版本迁移 runner 和在线升级路径。
+- 测试初始化中断、重复初始化、并发首次启动、未知版本和损坏 schema。
+- 定义所有入口面对非当前 schema 的固定安全错误。
 
-验收：兼容清单中的所有 fixture 可升级到当前版本；失败时不产生部分迁移；两个并发进程不会同时迁移；只读命令不隐式升级。
+验收：初始化结果唯一且完整；失败时不产生可误开的部分 schema；两个并发进程得到同一当前 schema；非当前 schema 不被修改；只读命令不创建任何持久化文件。
 
 ### C1：状态类型、查询 API 和 status 修复
 
