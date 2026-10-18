@@ -1,0 +1,15 @@
+feishu:
+  app_id: ""
+  app_secret: ""
+
+opencode:
+  executable: opencode
+  model: zai-coding-plan/glm-5.3
+  api_key: ""
+  timeout_seconds: 120
+
+chat:
+  max_context_bytes: 100000
+  history_turns: 10
+  max_reply_characters: 4000
+  queue_size: 100
