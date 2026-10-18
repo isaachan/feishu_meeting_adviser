@@ -57,9 +57,26 @@ class SnapshotBuilderTests(unittest.TestCase):
             'm1', LLMSettings(context_characters=10_000),
             now=NOW, joined_at=NOW - 10, bot_id='bot')
         self.assertEqual(result['fresh_input_keys'], ['s:participant'])
+        self.assertEqual(result['reply_allowed_keys'], ['s:participant'])
         self.assertEqual(set(result['evidence']), {'s:participant', 's:bot'})
         self.assertEqual([row['sentence_key'] for row in result['captions']],
                          ['s:bot', 's:participant'])
+
+    def test_reply_evidence_keeps_ten_minutes_without_extending_new_input(self):
+        current = Caption('m1', 's:current', 'current question', AT,
+                          event_time=AT, speaker_id='participant')
+        recent = replace(current, sentence_key='s:recent',
+                         end_time='2026-10-12T23:55:01Z',
+                         event_time='2026-10-12T23:55:01Z')
+        expired = replace(current, sentence_key='s:expired',
+                          end_time='2026-10-12T23:50:00Z',
+                          event_time='2026-10-12T23:50:00Z')
+        data = FakeSnapshotData([expired, recent, current])
+        data._meeting['decided_generation'] = 2
+        result = SnapshotBuilder(data).build(
+            'm1', LLMSettings(), now=NOW, joined_at=NOW-700)
+        self.assertEqual(result['fresh_input_keys'], ['s:current'])
+        self.assertEqual(set(result['reply_allowed_keys']), {'s:recent', 's:current'})
 
     def test_budget_drops_old_replies_and_truncates_material_before_captions(self):
         caption = Caption(

@@ -61,7 +61,8 @@ class ReplyDispatcherTests(unittest.TestCase):
             client,
             meeting_id='m1',
             consumer_id='adviser',
-            settings=SimpleNamespace(freshness_seconds=120, reply_interval_seconds=10),
+            settings=SimpleNamespace(freshness_seconds=120, reply_evidence_seconds=600,
+                                     reply_interval_seconds=10),
             session={'joined_at': 1, 'bot_user_id': 'bot'},
             clock=lambda: 2,
         )

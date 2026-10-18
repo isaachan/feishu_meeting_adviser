@@ -2,8 +2,8 @@ from dataclasses import asdict
 import unittest
 
 from feishu_meeting_adviser.decision import DecisionApplier
-from feishu_meeting_adviser.llm import Decision, ModelError
-from feishu_meeting_adviser.models import Caption, JobState
+from feishu_meeting_adviser.llm import Decision, LLMSettings, ModelError
+from feishu_meeting_adviser.models import Caption, JobState, epoch_ns
 from feishu_meeting_adviser.storage import encode
 
 
@@ -121,6 +121,27 @@ class DecisionApplierTests(unittest.TestCase):
                 self.job, Decision('pause', ('not-in-snapshot',), None, ()), now=1)
         self.assertEqual(data.uow.jobs.state, JobState.RUNNING)
         self.assertEqual(data.uow.outbox.cancelled, [])
+
+    def test_reply_can_use_older_evidence_but_control_cannot(self):
+        at = epoch_ns('2026-10-13T00:00:01Z') / 1_000_000_000
+        job = self.job | {'snapshot': encode(self.snapshot | {
+            'fresh_input_keys': [], 'reply_allowed_keys': ['s:1']})}
+        data = FakeDecisionData(self.caption)
+        DecisionApplier(data).apply(
+            job, Decision('none', (), 'synthetic answer', ('s:1',)),
+            now=at+300, joined_at=at-1, settings=LLMSettings())
+        self.assertEqual(len(data.uow.outbox.saved), 1)
+
+        with self.assertRaisesRegex(ModelError, 'model_invalid_evidence'):
+            DecisionApplier(FakeDecisionData(self.caption)).apply(
+                job, Decision('pause', ('s:1',), None, ()),
+                now=at+300, joined_at=at-1, settings=LLMSettings())
+
+        expired = FakeDecisionData(self.caption)
+        DecisionApplier(expired).apply(
+            job, Decision('none', (), 'expired answer', ('s:1',)),
+            now=at+601, joined_at=at-1, settings=LLMSettings())
+        self.assertEqual(expired.uow.outbox.saved, [])
 
     def test_revised_evidence_completes_without_saving_stale_reply(self):
         revised = Caption(

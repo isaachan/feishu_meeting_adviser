@@ -37,7 +37,8 @@ llm:
   timeout_seconds: 90
   batch_seconds: 2
   context_characters: 30000
-  freshness_seconds: 120         # 原始发言结束/事件时间的新鲜度范围；未知时间不当作新鲜
+  freshness_seconds: 120         # 新字幕触发模型与控制的时间窗口
+  reply_evidence_seconds: 600    # 回复可引用字幕的时间窗口；未知时间不当作有效证据
   reply_interval_seconds: 10
   introduction: true
 

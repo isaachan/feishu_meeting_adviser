@@ -12,7 +12,7 @@ from .source_store import CapacityError, StorageError, caption_from_json, decode
 from .sqlite import SQLiteDatabase
 from .adviser_schema import initialize_adviser_schema, require_current_adviser_schema
 from .adviser_repositories import AdviserUnitOfWork
-from ...snapshot import SnapshotBuilder, is_fresh_caption
+from ...snapshot import SnapshotBuilder, is_reply_evidence_caption
 from ...decision import DecisionApplier
 
 
@@ -194,7 +194,7 @@ class AdviserStore:
                 fault('before_commit')
         return inserted
 
-    fresh = staticmethod(is_fresh_caption)
+    reply_fresh = staticmethod(is_reply_evidence_caption)
 
     def context_rows(self, mid, *, limit):
         return [dict(row) for row in self.db.execute(
@@ -313,7 +313,7 @@ class AdviserStore:
                         valid = False
                         break
                     caption = caption_from_json(current['body'])
-                    if caption.fingerprint != fingerprint or not self.fresh(caption,now=now,joined_at=joined_at,settings=settings,bot_id=bot_id):
+                    if caption.fingerprint != fingerprint or not self.reply_fresh(caption,now=now,joined_at=joined_at,settings=settings,bot_id=bot_id):
                         valid = False
                         break
                 if not valid:

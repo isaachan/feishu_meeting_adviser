@@ -8,10 +8,22 @@ from feishu_meeting_adviser.config import (
     MeetingContextSettings,
     RuntimeSettings,
     StorageSettings,
+    _parse_llm,
 )
 
 
 class ConfigSectionTests(unittest.TestCase):
+    def test_reply_evidence_window_has_independent_default_and_override(self):
+        default = _parse_llm(ConfigDocument({}).section('llm'), Path('/tmp'))
+        self.assertEqual((default.freshness_seconds, default.reply_evidence_seconds), (120, 600))
+        custom = _parse_llm(ConfigDocument({'llm': {
+            'freshness_seconds': 90, 'reply_evidence_seconds': 900,
+        }}).section('llm'), Path('/tmp'))
+        self.assertEqual((custom.freshness_seconds, custom.reply_evidence_seconds), (90, 900))
+        with self.assertRaisesRegex(ConfigError, 'reply_evidence_seconds'):
+            _parse_llm(ConfigDocument({'llm': {'freshness_seconds': 900}}).section('llm'),
+                       Path('/tmp'))
+
     def test_storage_http_and_runtime_sections_parse_independently(self):
         document = ConfigDocument({
             'storage': {'directory': 'state', 'retention_days': 9},

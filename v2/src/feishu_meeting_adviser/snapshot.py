@@ -17,12 +17,20 @@ class SnapshotData(Protocol):
 
 
 def is_fresh_caption(caption: Caption, *, now: float, joined_at: float, settings,
-                     bot_id: str | None = None) -> bool:
+                     bot_id: str | None = None, window_seconds: int | None = None) -> bool:
     timestamp = caption.end_ns if caption.end_ns is not None else caption.event_ns
     if timestamp is None or caption.speaker_id == bot_id and bot_id is not None:
         return False
     seconds = timestamp / 1_000_000_000
-    return joined_at <= seconds <= now + 5 and seconds >= now - settings.freshness_seconds
+    window = settings.freshness_seconds if window_seconds is None else window_seconds
+    return joined_at <= seconds <= now + 5 and seconds >= now - window
+
+
+def is_reply_evidence_caption(caption: Caption, *, now: float, joined_at: float,
+                              settings, bot_id: str | None = None) -> bool:
+    return is_fresh_caption(caption, now=now, joined_at=joined_at,
+                            settings=settings, bot_id=bot_id,
+                            window_seconds=settings.reply_evidence_seconds)
 
 
 class SnapshotBuilder:
@@ -35,7 +43,7 @@ class SnapshotBuilder:
         if not meeting:
             raise StorageError('unknown adviser meeting')
         rows = self.data.context_rows(meeting_id, limit=1000)
-        captions, fresh_keys, fingerprints = [], [], {}
+        captions, fresh_keys, reply_keys, fingerprints = [], [], [], {}
         used = 0
         for row in rows:
             caption = caption_from_json(row['body'])
@@ -47,6 +55,9 @@ class SnapshotBuilder:
             captions.append(item)
             if not row['suppressed']:
                 fingerprints[caption.sentence_key] = caption.fingerprint
+                if is_reply_evidence_caption(
+                        caption, now=now, joined_at=joined_at, settings=settings, bot_id=bot_id):
+                    reply_keys.append(caption.sentence_key)
                 if (row['generation'] > meeting['decided_generation'] and is_fresh_caption(
                         caption, now=now, joined_at=joined_at, settings=settings, bot_id=bot_id)):
                     fresh_keys.append(caption.sentence_key)
@@ -58,7 +69,6 @@ class SnapshotBuilder:
         captions.sort(key=order)
         pending = self.data.pending_reply_row(meeting_id)
         pending_reply = None
-        reply_keys = list(fresh_keys)
         if pending:
             basis = decode_mapping(pending['evidence'])
             pending_reply = {
@@ -66,13 +76,6 @@ class SnapshotBuilder:
                 'text': pending['content'],
                 'reply_sentence_keys': list(basis),
             }
-            for key, fingerprint in basis.items():
-                row = next((item for item in captions if item['sentence_key'] == key), None)
-                if row and fingerprints.get(key) == fingerprint:
-                    caption = caption_from_json(encode({k: v for k, v in row.items() if k != 'conflicted'}))
-                    if is_fresh_caption(
-                            caption, now=now, joined_at=joined_at, settings=settings, bot_id=bot_id):
-                        reply_keys.append(key)
         sent = [
             {'text': row['content'], 'state': row['state']}
             for row in self.data.recent_reply_rows(meeting_id, limit=20)
@@ -88,7 +91,7 @@ class SnapshotBuilder:
             'context_omitted': len(captions) < self.data.context_count(meeting_id),
             'pending_reply': pending_reply,
             'sent_replies': sent,
-            'reply_allowed_keys': list(set(reply_keys)),
+            'reply_allowed_keys': reply_keys,
         }
         material = self.data.materials(meeting_id)
         if material and material['state'] != 'disabled':

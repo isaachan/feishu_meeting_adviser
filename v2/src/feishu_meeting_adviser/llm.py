@@ -38,6 +38,7 @@ class LLMSettings:
     batch_seconds: float = 2
     context_characters: int = 30000
     freshness_seconds: int = 120
+    reply_evidence_seconds: int = 600
     reply_interval_seconds: float = 10
     introduction: bool = True
     opencode_executable: str = 'opencode'

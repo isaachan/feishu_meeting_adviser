@@ -168,6 +168,10 @@ def _parse_llm(section: ConfigSection, base_directory: Path):
     introduction = section.values.get('introduction', True)
     if type(introduction) is not bool:
         raise ConfigError('llm.introduction must be boolean')
+    freshness_seconds = section.number('freshness_seconds', 120, 5, 3600, integer=True)
+    reply_evidence_seconds = section.number('reply_evidence_seconds', 600, 5, 3600, integer=True)
+    if reply_evidence_seconds < freshness_seconds:
+        raise ConfigError('llm.reply_evidence_seconds must be at least llm.freshness_seconds')
     return LLMSettings(
         backend=backend,
         executable=section.string('executable', 'codex', required=True),
@@ -177,8 +181,8 @@ def _parse_llm(section: ConfigSection, base_directory: Path):
         batch_seconds=section.number('batch_seconds', 2, 0, 30),
         context_characters=section.number(
             'context_characters', 30000, 2000, 100000, integer=True),
-        freshness_seconds=section.number(
-            'freshness_seconds', 120, 5, 3600, integer=True),
+        freshness_seconds=freshness_seconds,
+        reply_evidence_seconds=reply_evidence_seconds,
         reply_interval_seconds=section.number('reply_interval_seconds', 10, 0, 300),
         introduction=introduction,
         opencode_executable=section.string(

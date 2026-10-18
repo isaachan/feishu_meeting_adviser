@@ -335,6 +335,9 @@ class AdviserTests(unittest.TestCase):
         self.assertEqual(self.runner.data.reply_statistics(MID)['pending_replies'],1)
         self.runner.clock=lambda:NOW+121
         self.runner.step()
+        self.assertEqual(self.runner.data.reply_statistics(MID)['pending_replies'],1)
+        self.runner.clock=lambda:NOW+601
+        self.runner.step()
         self.assertEqual(self.runner.data.reply_statistics(MID)['pending_replies'],0)
         self.assertEqual(self.sent,[])
         self.assertEqual(len(self.backend.calls),1)

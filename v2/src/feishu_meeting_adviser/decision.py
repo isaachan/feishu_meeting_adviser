@@ -5,7 +5,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 from .llm import ModelError
 from .models import JobState, ParticipationState, digest
-from .snapshot import is_fresh_caption
+from .snapshot import is_fresh_caption, is_reply_evidence_caption
 from .storage import caption_from_json, decode_mapping, encode
 
 
@@ -28,19 +28,23 @@ class DecisionApplier:
                 or not set(decision.reply_sentence_keys) <= reply_keys):
             raise ModelError('model_invalid_evidence')
 
-        valid = {}
+        valid_control, valid_reply = {}, {}
         for key in set(decision.control_sentence_keys) | set(decision.reply_sentence_keys):
             row = self.data.context_row(job['meeting_id'], key)
             if row and not row['suppressed']:
                 caption = caption_from_json(row['body'])
-                if caption.fingerprint == snapshot['evidence'].get(key) and (
-                        settings is None or is_fresh_caption(
+                if caption.fingerprint == snapshot['evidence'].get(key):
+                    if settings is None or is_fresh_caption(
                             caption, now=now, joined_at=joined_at,
-                            settings=settings, bot_id=bot_id)):
-                    valid[key] = caption.fingerprint
-        control_valid = all(key in valid for key in decision.control_sentence_keys)
+                            settings=settings, bot_id=bot_id):
+                        valid_control[key] = caption.fingerprint
+                    if settings is None or is_reply_evidence_caption(
+                            caption, now=now, joined_at=joined_at,
+                            settings=settings, bot_id=bot_id):
+                        valid_reply[key] = caption.fingerprint
+        control_valid = all(key in valid_control for key in decision.control_sentence_keys)
         reply_valid = decision.reply is not None and all(
-            key in valid for key in decision.reply_sentence_keys)
+            key in valid_reply for key in decision.reply_sentence_keys)
 
         with self.data.unit_of_work(fault=fault) as tx:
             state = tx.jobs.decision_state(job['job_id'])
@@ -60,7 +64,7 @@ class DecisionApplier:
             tx.outbox.cancel_pending(job['meeting_id'])
             if (reply_valid and participation == ParticipationState.ACTIVE
                     and not (control_valid and decision.control in ('pause', 'cancel'))):
-                basis = {key: valid[key] for key in decision.reply_sentence_keys}
+                basis = {key: valid_reply[key] for key in decision.reply_sentence_keys}
                 message_uuid = str(uuid5(NAMESPACE_URL, digest([
                     'adviser-reply-v1', job['meeting_id'], job['role_version'], basis, decision.reply])))
                 tx.outbox.save_reply(
