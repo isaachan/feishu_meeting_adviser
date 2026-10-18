@@ -12,14 +12,32 @@ class OpenCodeBackend:
     def __init__(self, settings: Settings):
         self.settings = settings
 
+    def _credential(self, provider: str) -> dict:
+        if self.settings.api_key is not None:
+            return {"type": "api", "key": self.settings.api_key}
+        path = self.settings.auth_file
+        if path is None or path.is_symlink() or not path.is_file() or path.stat().st_size > 1_000_000:
+            raise RuntimeError("OpenCode 凭据文件不存在或不可用")
+        try:
+            auth = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise RuntimeError("无法读取 OpenCode 凭据文件") from exc
+        credential = auth.get(provider) if isinstance(auth, dict) else None
+        if (not isinstance(credential, dict) or credential.get("type") != "api"
+                or not isinstance(credential.get("key"), str) or not credential["key"]):
+            raise RuntimeError(f"OpenCode 凭据文件中没有 {provider} 的 API 登录")
+        return {"type": "api", "key": credential["key"]}
+
     def reply(self, prompt: str) -> str:
         provider, _ = self.settings.model.split("/", 1)
+        credential = self._credential(provider)
         with tempfile.TemporaryDirectory(prefix="feishu-chatbot-") as temporary:
             root = Path(temporary)
             for name in ("config", "data", "cache", "state"):
                 (root / name).mkdir(mode=0o700)
-            # These variables are a private transport into OpenCode. Their values
-            # are built exclusively from config.yaml, never inherited as settings.
+            # This environment is a private transport into the child process.
+            # App settings come from YAML; only the configured provider's login
+            # is selected from the explicitly configured OpenCode auth file.
             env = {
                 "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
                 "HOME": temporary,
@@ -28,9 +46,7 @@ class OpenCodeBackend:
                 "XDG_DATA_HOME": str(root / "data"),
                 "XDG_CACHE_HOME": str(root / "cache"),
                 "XDG_STATE_HOME": str(root / "state"),
-                "OPENCODE_AUTH_CONTENT": json.dumps({provider: {
-                    "type": "api", "key": self.settings.api_key,
-                }}),
+                "OPENCODE_AUTH_CONTENT": json.dumps({provider: credential}),
                 "OPENCODE_CONFIG_CONTENT": json.dumps({
                     "model": self.settings.model,
                     "enabled_providers": [provider],

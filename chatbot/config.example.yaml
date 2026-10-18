@@ -5,7 +5,8 @@ feishu:
 opencode:
   executable: opencode
   model: zai-coding-plan/glm-5.3
-  api_key: ""
+  api_key: ""           # 可填独立 API 凭据；与 auth_file 二选一
+  auth_file: ""         # 可填 OpenCode 登录文件的绝对路径，例如 /Users/you/.local/share/opencode/auth.json
   timeout_seconds: 120
 
 chat:

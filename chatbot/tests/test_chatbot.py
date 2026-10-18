@@ -13,7 +13,7 @@ from chatbot.context import read_context
 
 def settings(executable="opencode"):
     return Settings("cli_test", "secret", executable, "provider/model", "test-key",
-                    5, 1000, 2, 100, 10)
+                    None, 5, 1000, 2, 100, 10)
 
 
 class ConfigAndContextTests(unittest.TestCase):
@@ -37,6 +37,19 @@ class ConfigAndContextTests(unittest.TestCase):
 
 
 class BackendTests(unittest.TestCase):
+    def test_auth_file_selects_only_configured_provider(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "auth.json"
+            path.write_text(json.dumps({"provider": {"type": "api", "key": "selected"},
+                                        "other": {"type": "api", "key": "excluded"}}), encoding="utf-8")
+            original = settings()
+            configured = Settings(original.app_id, original.app_secret, original.executable,
+                                  original.model, None, path, original.timeout_seconds,
+                                  original.max_context_bytes, original.history_turns,
+                                  original.max_reply_characters, original.queue_size)
+            self.assertEqual(OpenCodeBackend(configured)._credential("provider"),
+                             {"type": "api", "key": "selected"})
+
     def test_opencode_json_output_and_no_inherited_configuration(self):
         with tempfile.TemporaryDirectory() as temp:
             executable = Path(temp) / "fake-opencode"
