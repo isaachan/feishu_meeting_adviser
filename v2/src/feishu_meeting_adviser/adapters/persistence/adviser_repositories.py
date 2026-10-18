@@ -1,6 +1,7 @@
 """Adviser repositories sharing one caller-owned SQLite unit of work."""
 from collections.abc import Callable
 import sqlite3
+from uuid import NAMESPACE_URL, uuid5
 
 from ...models import JobState, ParticipationState, ReplyState
 from .sqlite import StorageError
@@ -129,18 +130,27 @@ class ReplyOutboxRepository:
 
     def save_reply(self, *, message_uuid: str, meeting_id: str, content: str,
                    evidence: str, generation: int, created_ns: int,
-                   context_version: str | None) -> None:
-        self.connection.execute(
-            '''INSERT INTO outbox(
-                   uuid,meeting_id,kind,content,evidence,generation,created_ns,context_version)
-               VALUES (?,?,'reply',?,?,?,?,?)
-               ON CONFLICT(uuid) DO UPDATE SET
-                   generation=excluded.generation,
-                   context_version=excluded.context_version,
-                   state=CASE WHEN outbox.state=? THEN ? ELSE outbox.state END''',
-            (message_uuid, meeting_id, content, evidence, generation, created_ns, context_version,
-             ReplyState.CANCELLED, ReplyState.PENDING),
-        )
+                   context_version: str | None,
+                   meeting_comment: bool = True,
+                   recipients: tuple[str, ...] = ()) -> None:
+        targets = ([('meeting', None, message_uuid)] if meeting_comment else []) + [
+            ('im', recipient, str(uuid5(NAMESPACE_URL, f'{message_uuid}:im:{recipient}')))
+            for recipient in recipients
+        ]
+        for channel, recipient, delivery_uuid in targets:
+            self.connection.execute(
+                '''INSERT INTO outbox(
+                       uuid,meeting_id,kind,content,evidence,generation,created_ns,
+                       context_version,answer_uuid,channel,recipient_id)
+                   VALUES (?,?,'reply',?,?,?,?,?,?,?,?)
+                   ON CONFLICT(uuid) DO UPDATE SET
+                       generation=excluded.generation,
+                       context_version=excluded.context_version,
+                       state=CASE WHEN outbox.state=? THEN ? ELSE outbox.state END''',
+                (delivery_uuid, meeting_id, content, evidence, generation, created_ns,
+                 context_version, message_uuid, channel, recipient,
+                 ReplyState.CANCELLED, ReplyState.PENDING),
+            )
         self.checkpoint('after_reply_saved')
 
     def recover_sending(self) -> None:

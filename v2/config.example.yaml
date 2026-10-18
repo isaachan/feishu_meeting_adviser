@@ -42,6 +42,12 @@ llm:
   reply_interval_seconds: 10
   introduction: true
 
+# 3.1：模型生成的完整回答可同时发到会议内和指定用户的飞书单聊。
+# 省略本节时只发送会中消息；接收人只能填写本应用对应的 open_id。
+notifications:
+  meeting_comment: true
+  recipients: []                 # 例如 ["ou_xxxxxxxx"]；最多 20 人，勿填姓名/邮箱
+
 # 2.5：绑定一次日历；consume 按当前会议号自动定位唯一日程实例。
 # calendar_id 留空时关闭材料读取；日程实例由 consume 自动发现。
 meeting_context:

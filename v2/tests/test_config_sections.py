@@ -6,6 +6,7 @@ from feishu_meeting_adviser.config import (
     ConfigError,
     HTTPSettings,
     MeetingContextSettings,
+    NotificationSettings,
     RuntimeSettings,
     StorageSettings,
     _parse_llm,
@@ -13,6 +14,22 @@ from feishu_meeting_adviser.config import (
 
 
 class ConfigSectionTests(unittest.TestCase):
+    def test_notification_destinations_are_explicit_and_unique(self):
+        settings = NotificationSettings.parse(ConfigDocument({'notifications': {
+            'meeting_comment': False, 'recipients': ['ou_synthetic1', 'ou_synthetic2'],
+        }}).section('notifications'))
+        self.assertEqual(settings.recipients, ('ou_synthetic1', 'ou_synthetic2'))
+        self.assertFalse(settings.meeting_comment)
+        for values in (
+            {'meeting_comment': False},
+            {'recipients': ['ou_synthetic1', 'ou_synthetic1']},
+            {'recipients': ['someone@example.com']},
+            {'recipients': 'ou_synthetic1'},
+            {'unknown': True},
+        ):
+            with self.subTest(values=values), self.assertRaises(ConfigError):
+                NotificationSettings.parse(ConfigDocument({'notifications': values}).section('notifications'))
+
     def test_reply_evidence_window_has_independent_default_and_override(self):
         default = _parse_llm(ConfigDocument({}).section('llm'), Path('/tmp'))
         self.assertEqual((default.freshness_seconds, default.reply_evidence_seconds), (120, 600))

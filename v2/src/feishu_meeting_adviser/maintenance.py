@@ -58,6 +58,8 @@ class Maintenance:
 
     def prune(self):
         with self.lock():
+            if (self.config.data_directory / 'adviser.sqlite3').exists():
+                self.storage_factory.initialize_adviser()
             cutoff = int((self.clock() - self.config.retention_days * 86400) * 1_000_000_000)
             result = self.store.prune(cutoff, at=utc_now(self.clock),protected_meetings=self._protected_model_meetings())
             self._clean_consumer_copies()
@@ -82,5 +84,7 @@ class Maintenance:
 
     def delete_meeting(self, meeting_id):
         with FileLock(self.config.data_directory / 'locks' / 'adviser.lock'), self.lock():
+            if (self.config.data_directory / 'adviser.sqlite3').exists():
+                self.storage_factory.initialize_adviser()
             self.store.forget_meeting(meeting_id, at=utc_now(self.clock))
             self._clean_consumer_copies(strict_runtime=True)

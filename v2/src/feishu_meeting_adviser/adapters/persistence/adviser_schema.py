@@ -4,7 +4,7 @@ import sqlite3
 from .sqlite import SQLiteDatabase, StorageError
 
 
-ADVISER_SCHEMA_VERSION = 2
+ADVISER_SCHEMA_VERSION = 3
 CURRENT_COLUMNS = {
     'meetings': {
         'meeting_id', 'generation', 'decided_generation', 'participation',
@@ -20,6 +20,7 @@ CURRENT_COLUMNS = {
     'outbox': {
         'uuid', 'meeting_id', 'kind', 'content', 'evidence', 'generation', 'state',
         'error', 'created_ns', 'sent_at', 'context_version',
+        'answer_uuid', 'channel', 'recipient_id',
     },
     'meeting_materials': {'meeting_id', 'body', 'loaded_ns'},
 }
@@ -50,7 +51,10 @@ CURRENT_SCHEMA = (
         uuid TEXT PRIMARY KEY, meeting_id TEXT NOT NULL, kind TEXT NOT NULL,
         content TEXT NOT NULL, evidence TEXT NOT NULL, generation INTEGER NOT NULL,
         state TEXT NOT NULL DEFAULT 'pending', error TEXT,
-        created_ns INTEGER NOT NULL, sent_at REAL, context_version TEXT)''',
+        created_ns INTEGER NOT NULL, sent_at REAL, context_version TEXT,
+        answer_uuid TEXT NOT NULL, channel TEXT NOT NULL DEFAULT 'meeting',
+        recipient_id TEXT)''',
+    'CREATE INDEX outbox_answer ON outbox(answer_uuid)',
     '''CREATE TABLE meeting_materials (
         meeting_id TEXT PRIMARY KEY, body TEXT NOT NULL, loaded_ns INTEGER NOT NULL)''',
 )
@@ -67,6 +71,12 @@ def _columns(db: sqlite3.Connection, table: str) -> set[str]:
 
 def require_current_adviser_schema(connection: sqlite3.Connection) -> None:
     version = connection.execute('PRAGMA user_version').fetchone()[0]
+    if version == 2 and _tables(connection) == set(CURRENT_COLUMNS):
+        old_outbox = CURRENT_COLUMNS['outbox'] - {'answer_uuid', 'channel', 'recipient_id'}
+        if (_columns(connection, 'outbox') == old_outbox
+                and all(_columns(connection, table) == columns
+                        for table, columns in CURRENT_COLUMNS.items() if table != 'outbox')):
+            raise StorageError('adviser database requires v3 initialization; run consume to upgrade')
     if (version != ADVISER_SCHEMA_VERSION or _tables(connection) != set(CURRENT_COLUMNS)
             or any(_columns(connection, table) != columns
                    for table, columns in CURRENT_COLUMNS.items())):
@@ -76,9 +86,22 @@ def require_current_adviser_schema(connection: sqlite3.Connection) -> None:
 
 
 def initialize_adviser_schema(database: SQLiteDatabase) -> None:
-    """Create the current schema only; never upgrade an existing non-current schema."""
+    """Create the current schema or upgrade a verified v2 database in one transaction."""
     with database.transaction():
         version = database.connection.execute('PRAGMA user_version').fetchone()[0]
+        if version == 2 and _tables(database.connection) == set(CURRENT_COLUMNS):
+            expected = CURRENT_COLUMNS['outbox'] - {'answer_uuid', 'channel', 'recipient_id'}
+            if (_columns(database.connection, 'outbox') == expected
+                    and all(_columns(database.connection, table) == columns
+                            for table, columns in CURRENT_COLUMNS.items() if table != 'outbox')):
+                database.connection.execute('ALTER TABLE outbox ADD COLUMN answer_uuid TEXT')
+                database.connection.execute('ALTER TABLE outbox ADD COLUMN channel TEXT NOT NULL DEFAULT \'meeting\'')
+                database.connection.execute('ALTER TABLE outbox ADD COLUMN recipient_id TEXT')
+                database.connection.execute('UPDATE outbox SET answer_uuid=uuid')
+                database.connection.execute('CREATE INDEX outbox_answer ON outbox(answer_uuid)')
+                database.connection.execute(f'PRAGMA user_version={ADVISER_SCHEMA_VERSION}')
+                require_current_adviser_schema(database.connection)
+                return
         if version or _tables(database.connection):
             require_current_adviser_schema(database.connection)
             return

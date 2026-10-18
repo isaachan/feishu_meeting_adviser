@@ -19,6 +19,7 @@ EVENTS = '/open-apis/vc/v1/bots/events'
 JOIN = '/open-apis/vc/v1/bots/join'
 LEAVE = '/open-apis/vc/v1/bots/leave'
 MESSAGE = '/open-apis/vc/v1/bots/message'
+IM_MESSAGE = '/open-apis/im/v1/messages'
 
 
 class ErrorKind(StrEnum):
@@ -74,7 +75,7 @@ def classify(http_status, code) -> ErrorKind:
         return ErrorKind.TOKEN
     if code in (99991400, 121012) or http_status == 429:
         return ErrorKind.RATE_LIMIT
-    if code in (99991401, 99991662, 99991672, 99991673, 99991676, 99991679, 120002, 120003,
+    if code in (230013, 99991401, 99991662, 99991672, 99991673, 99991676, 99991679, 120002, 120003,
                 121003, 121013, 121015, 121016, 121103, 121108, 121109) or http_status == 403:
         return ErrorKind.DENIED
     if code == 120001 or http_status == 400:
@@ -114,7 +115,7 @@ class FeishuClient:
         self._last_request = self.monotonic()
 
     def _validate_request(self, path, *, payload=None):
-        if path not in (TOKEN, EVENTS, JOIN, LEAVE, MESSAGE):
+        if path not in (TOKEN, EVENTS, JOIN, LEAVE, MESSAGE, IM_MESSAGE):
             raise ValueError('unsupported API endpoint')
 
     def _request(self, path, *, payload=None, query=None, token=None, timeout=None):
@@ -228,4 +229,19 @@ class FeishuClient:
                                                      'content': content, 'uuid': message_uuid})
         data = result.get('data')
         if not isinstance(data, dict) or data.get('uuid') != message_uuid:
+            raise ApiError(ErrorKind.RESPONSE)
+
+    def send_direct_message(self, open_id: str, content: str, message_uuid: str) -> None:
+        if not re.fullmatch(r'ou_[A-Za-z0-9_-]{1,128}', open_id):
+            raise ValueError('invalid direct message recipient')
+        if not isinstance(content, str) or not content.strip() or len(content.encode('utf-8')) > 4000:
+            raise ValueError('message must be nonempty UTF-8 text of at most 4000 bytes')
+        if str(uuidlib.UUID(message_uuid)) != message_uuid:
+            raise ValueError('message UUID must be canonical')
+        result = self.authenticated(IM_MESSAGE, query={'receive_id_type': 'open_id'}, payload={
+            'receive_id': open_id, 'msg_type': 'text',
+            'content': json.dumps({'text': content}, ensure_ascii=False), 'uuid': message_uuid,
+        })
+        data = result.get('data')
+        if not isinstance(data, dict) or not isinstance(data.get('message_id'), str) or not data['message_id']:
             raise ApiError(ErrorKind.RESPONSE)

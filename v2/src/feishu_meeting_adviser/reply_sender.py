@@ -13,7 +13,12 @@ INTRODUCTION = ('大家好，我是会参谋，会结合讨论内容判断是否
 def send_saved_reply(data, client, row, *, clock, interval=0, diagnose=None):
     data.mark_sending(row['uuid'])
     try:
-        client.send_message(row['meeting_id'],row['content'],row['uuid'])
+        if row.get('channel', 'meeting') == 'im':
+            client.send_direct_message(row['recipient_id'], row['content'], row['uuid'])
+        elif row.get('channel', 'meeting') == 'meeting':
+            client.send_message(row['meeting_id'],row['content'],row['uuid'])
+        else:
+            raise ValueError('invalid saved reply channel')
     except ApiError as exc:
         uncertain = exc.kind not in (ErrorKind.DENIED,ErrorKind.PARAMETER,ErrorKind.TOKEN,ErrorKind.BOT_ABSENT,ErrorKind.RATE_LIMIT)
         data.mark_send_error(row['uuid'],exc.kind.value,uncertain=uncertain)

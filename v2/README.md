@@ -88,6 +88,8 @@ python3 -m feishu_meeting_adviser consume --backend codex --watch
 
 `consume` 持续保存输入、调用模型并发送完整回答；模型慢或失败时 `collect` 仍继续入库。省略 `--watch` 则处理当前一批可决策输入后退出。不需要固定唤醒词或特殊指令，参与规则由角色文档描述。
 
+模型生成的完整回答可通过 `notifications.meeting_comment` 和 `notifications.recipients` 同时发送到会议内与指定用户的飞书单聊，默认仍只发会中消息。接收人使用当前应用的 `open_id`；所需 IM 权限、逐目标发送状态、失败处理和资料披露边界见 [模型回答发送渠道](docs/NOTIFICATIONS.md)。
+
 参会者自然语言控制及权限规则已移至 TODO 2.7，当前不作为默认角色的功能承诺。底层控制状态实现保留；完整停止使用下方终端操作。模型只返回结构化决定，发送和状态校验由产品执行。
 
 完整停止：先在终端 B 按 Ctrl-C 停止模型消费，再在终端 A 按 Ctrl-C 停止采集；机器人仍在会中。如需离会再执行：

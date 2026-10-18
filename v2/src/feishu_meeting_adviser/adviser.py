@@ -141,7 +141,8 @@ class AdviserService:
     def _finish_job(self, job, decision, elapsed):
         self.decision_observer(decision)
         self.data.finish_job(job, decision, now=self.clock(), settings=self.settings,
-                             joined_at=self.session['joined_at'], bot_id=self.session.get('bot_user_id'))
+                             joined_at=self.session['joined_at'], bot_id=self.session.get('bot_user_id'),
+                             notifications=getattr(self.config, 'notifications', None))
         self.decisions += 1
         self.diagnose(self._model_metadata() | {'kind':'model','backend':self.settings.backend,'model_ms':elapsed,'decision_saved':True,
                        'participation':self.data.require_meeting(self.mid)['participation']})
@@ -214,9 +215,11 @@ class AdviserService:
             try:
                 self.data.recover_sends()
                 self.data.ensure_session(self.session)
+                if getattr(self.config, 'notifications', None):
+                    self.data.reconcile_destinations(self.mid, self.config.notifications)
                 self.data.ensure_role(self.mid,self.role_version)
                 self._ensure_materials()
-                if self.settings.introduction:
+                if self.settings.introduction and getattr(getattr(self.config, 'notifications', None), 'meeting_comment', True):
                     with self._maintenance_lock():
                         if not introduce(self.data,self.manager,clock=self.clock,diagnose=self.diagnose):
                             raise LifecycleError('introduction send not confirmed; check meeting UI and replies, then resolve-reply before model processing')
@@ -227,7 +230,8 @@ class AdviserService:
                         previous = status
                     if not watch and self.worker is None:
                         meeting = self.data.require_meeting(self.mid)
-                        if self.model_failure or meeting['generation'] == meeting['decided_generation']:
+                        if (self.model_failure or meeting['generation'] == meeting['decided_generation']
+                                and self.data.next_reply(self.mid, now=self.clock()) is None):
                             return status
                     self.stop_event.wait(0.1)
             except StopRequested:

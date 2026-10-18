@@ -51,6 +51,25 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(json.loads(req.data), {'meeting_id': 'synthetic-meeting', 'msg_type': 'text',
                                               'content': '合成说话人，项目截止日期是今天。', 'uuid': message_uuid})
 
+    def test_direct_message_uses_open_id_and_json_text(self):
+        message_uuid = '7f3b7fd2-1b64-4f5d-9e8b-2f2d8d3b0c11'
+        client = self.client([self.token(), Response({'code': 0, 'data': {'message_id': 'om_synthetic'}})])
+        client.send_direct_message('ou_synthetic1', '合成回答', message_uuid)
+        req = self.requests[-1]
+        self.assertTrue(req.full_url.endswith('/im/v1/messages?receive_id_type=open_id'))
+        body = json.loads(req.data)
+        self.assertEqual(body['receive_id'], 'ou_synthetic1')
+        self.assertEqual(body['uuid'], message_uuid)
+        self.assertEqual(json.loads(body['content']), {'text': '合成回答'})
+        self.assertEqual(body['msg_type'], 'text')
+
+    def test_direct_message_timeout_is_not_replayed(self):
+        message_uuid = '7f3b7fd2-1b64-4f5d-9e8b-2f2d8d3b0c11'
+        client = self.client([self.token(), URLError('synthetic network failure')])
+        with self.assertRaises(ApiError):
+            client.send_direct_message('ou_synthetic1', '合成回答', message_uuid)
+        self.assertEqual(len(self.requests), 2)
+
     def test_message_timeout_and_wrong_uuid_are_not_replayed(self):
         message_uuid = '7f3b7fd2-1b64-4f5d-9e8b-2f2d8d3b0c11'
         for response in (URLError('private response'), Response({'code': 0, 'data': {'uuid': 'wrong'}})):

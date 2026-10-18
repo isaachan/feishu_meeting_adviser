@@ -44,6 +44,31 @@ class AdviserSchemaTests(unittest.TestCase):
         AdviserStore.initialize(self.path)
         self.assertEqual(self.schema_state(), before)
 
+    def test_v2_upgrade_preserves_existing_reply(self):
+        old_outbox = next(statement for statement in adviser_schema.CURRENT_SCHEMA
+                          if statement.startswith('CREATE TABLE outbox'))
+        old_outbox = old_outbox.replace(
+            ",\n        answer_uuid TEXT NOT NULL, channel TEXT NOT NULL DEFAULT 'meeting',\n        recipient_id TEXT", '')
+        db = sqlite3.connect(self.path)
+        for statement in adviser_schema.CURRENT_SCHEMA:
+            if statement.startswith('CREATE INDEX outbox_answer'):
+                continue
+            db.execute(old_outbox if statement.startswith('CREATE TABLE outbox') else statement)
+        db.execute('PRAGMA user_version=2')
+        db.execute('''INSERT INTO outbox(uuid,meeting_id,kind,content,evidence,generation,created_ns)
+                      VALUES ('synthetic-uuid','m1','reply','synthetic answer','{}',1,1)''')
+        db.commit()
+        db.close()
+        self.path.chmod(0o600)
+        AdviserStore.initialize(self.path)
+        store = AdviserStore(self.path)
+        try:
+            row = store.db.execute('SELECT * FROM outbox WHERE uuid=?', ('synthetic-uuid',)).fetchone()
+            self.assertEqual((row['answer_uuid'], row['channel'], row['recipient_id'], row['content']),
+                             ('synthetic-uuid', 'meeting', None, 'synthetic answer'))
+        finally:
+            store.close()
+
     def test_runtime_reopen_never_calls_initializer(self):
         AdviserStore.initialize(self.path)
         with patch.object(adviser_schema, 'initialize_adviser_schema',

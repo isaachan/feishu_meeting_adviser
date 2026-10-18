@@ -69,7 +69,8 @@ class CommandContext:
 def handle_join(context, args):
     context.manager.join()
     config = context.config
-    if config.llm.backend in ('codex', 'opencode') and config.llm.introduction:
+    if (config.llm.backend in ('codex', 'opencode') and config.llm.introduction
+            and config.notifications.meeting_comment):
         with (FileLock(config.data_directory / 'locks' / 'adviser.lock'),
               context.maintenance.lock()):
             context.storage_factory.initialize_adviser()

@@ -35,10 +35,6 @@ class StorageFactory:
         )
 
     def initialize_adviser(self):
-        if self.adviser_path.exists():
-            store = self.adviser()
-            store.close()
-            return
         AdviserStore.initialize(
             self.adviser_path,
             max_database_bytes=self.config.database_capacity_bytes,

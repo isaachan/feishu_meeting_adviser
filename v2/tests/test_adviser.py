@@ -13,7 +13,7 @@ from feishu_meeting_adviser.adviser import AdviserRunner, AdviserService
 from feishu_meeting_adviser.__main__ import main
 from feishu_meeting_adviser.client import ApiError, ErrorKind
 from feishu_meeting_adviser.collector import utc_now
-from feishu_meeting_adviser.config import load_config
+from feishu_meeting_adviser.config import NotificationSettings, load_config
 from feishu_meeting_adviser.adapters.persistence.factory import StorageFactory
 from feishu_meeting_adviser.lifecycle import LifecycleError, SessionManager
 from feishu_meeting_adviser.llm import Decision, ModelError
@@ -174,6 +174,21 @@ class AdviserTests(unittest.TestCase):
         self.commit(replace(self.caption,sentence_key='s:2',text='普通讨论'))
         self.runner.run()
         self.assertEqual(len(self.sent),1)
+
+    def test_single_consume_drains_public_and_private_reply_targets(self):
+        self.runner.config = replace(self.runner.config, notifications=NotificationSettings(
+            True, ('ou_synthetic1', 'ou_synthetic2')))
+        private = []
+        self.api.send_direct_message = lambda open_id, text, message_uuid: private.append(
+            (open_id, text, message_uuid))
+        self.backend.reply = Decision('none', (), '合成完整回答', ('s:1',))
+        self.commit(self.caption)
+        result = self.runner.run()
+        self.assertEqual(result['replied'], 3)
+        self.assertEqual(len(self.sent), 1)
+        self.assertEqual([item[0] for item in private], ['ou_synthetic1', 'ou_synthetic2'])
+        self.runner.run()
+        self.assertEqual((len(self.sent), len(private)), (1, 2))
 
     def test_unrelated_evidence_is_rejected_without_sending(self):
         records=[]

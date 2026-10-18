@@ -1,6 +1,6 @@
 # SQLite schema compatibility
 
-The versioned migration accepts only the following verified, unversioned historical shapes:
+The current adviser schema is v3. Initialization upgrades a verified v2 schema to v3 in one transaction, preserving existing replies as meeting-channel deliveries. The earlier compatibility record for unversioned historical shapes is retained below:
 
 | Fixture | Source commit | Result |
 | --- | --- | --- |
@@ -8,7 +8,7 @@ The versioned migration accepts only the following verified, unversioned histori
 | `adviser_join_outbox.sql` | `26dc3f43cc66a69a8f5c142e83b8d8edf0243672` | v2 |
 | `adviser_materials_unversioned.sql` | `dedb86baff901b237dbd9abdfd377b12d20ef206` | v2 |
 
-The fixtures reproduce the DDL from those commits and contain synthetic records only. New empty databases also migrate from version 0. Adviser versions 1 and 2 are supported; versions greater than 2, unknown tables, missing core columns, and unrecognized unversioned shapes fail without schema changes.
+The fixtures reproduce the DDL from those commits and contain synthetic records only. The current initializer accepts a new empty database, the exact v2 table shape, or the current v3 schema. Other versions, unknown tables, missing core columns, and unrecognized shapes fail without schema changes. The v2 to v3 upgrade is covered by a synthetic preservation test.
 
 The source database remains at version 5. Its migration chain accepts a new empty database and these verified historical versions:
 

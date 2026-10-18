@@ -111,8 +111,8 @@ class AdviserStore:
         instance = self.ensure_session(session)
         message_uuid = str(uuid5(NAMESPACE_URL,digest(['adviser-introduction-v1',session['meeting_id'],instance])))
         with self.transaction():
-            self.db.execute('INSERT OR IGNORE INTO outbox(uuid,meeting_id,kind,content,evidence,generation,created_ns) VALUES (?,?,\'introduction\',?,\'{}\',0,?)',
-                            (message_uuid,session['meeting_id'],text,int(now*1_000_000_000)))
+            self.db.execute('INSERT OR IGNORE INTO outbox(uuid,meeting_id,kind,content,evidence,generation,created_ns,answer_uuid) VALUES (?,?,\'introduction\',?,\'{}\',0,?,?)',
+                            (message_uuid,session['meeting_id'],text,int(now*1_000_000_000),message_uuid))
         return dict(self.db.execute('SELECT * FROM outbox WHERE uuid=?',(message_uuid,)).fetchone())
 
     def ensure_role(self, mid, role_version):
@@ -203,14 +203,15 @@ class AdviserStore:
     def pending_reply_row(self, mid):
         row = self.db.execute(
             '''SELECT * FROM outbox WHERE meeting_id=? AND kind='reply' AND state='pending'
-               ORDER BY created_ns DESC LIMIT 1''',
+               ORDER BY created_ns DESC, channel='meeting' DESC LIMIT 1''',
             (mid,),
         ).fetchone()
         return dict(row) if row else None
 
     def recent_reply_rows(self, mid, *, limit):
         return [dict(row) for row in self.db.execute(
-            '''SELECT content,state FROM outbox WHERE meeting_id=? AND state IN ('sent','uncertain')
+            '''SELECT content,state FROM outbox WHERE meeting_id=?
+               AND state IN ('sent','uncertain') GROUP BY answer_uuid
                ORDER BY created_ns DESC LIMIT ?''',
             (mid, limit),
         )]
@@ -265,7 +266,8 @@ class AdviserStore:
                             (encode(snapshot), job_id))
         return dict(self.db.execute('SELECT * FROM jobs WHERE job_id=?', (job_id,)).fetchone())
 
-    def finish_job(self, job, decision, *, now=None, settings=None, joined_at=0, bot_id=None, fault=None):
+    def finish_job(self, job, decision, *, now=None, settings=None, joined_at=0, bot_id=None,
+                   notifications=None, fault=None):
         return DecisionApplier(self).apply(
             job,
             decision,
@@ -273,6 +275,7 @@ class AdviserStore:
             settings=settings,
             joined_at=joined_at,
             bot_id=bot_id,
+            notifications=notifications,
             fault=fault,
         )
 
@@ -294,12 +297,31 @@ class AdviserStore:
             tx.outbox.recover_sending()
             tx.jobs.recover_running()
 
+    def reconcile_destinations(self, mid, notifications):
+        """A removed destination must never receive an old pending answer."""
+        with self.transaction():
+            if not notifications.meeting_comment:
+                self.db.execute('''UPDATE outbox SET state='cancelled',error='destination_disabled'
+                    WHERE meeting_id=? AND kind='reply' AND channel='meeting' AND state='pending' ''', (mid,))
+            placeholders = ','.join('?' for _ in notifications.recipients)
+            sql = '''UPDATE outbox SET state='cancelled',error='destination_disabled'
+                WHERE meeting_id=? AND kind='reply' AND channel='im' AND state='pending' '''
+            if placeholders:
+                sql += f'AND recipient_id NOT IN ({placeholders})'
+            self.db.execute(sql, (mid, *notifications.recipients))
+
     def next_reply(self, mid, *, now):
         meeting = self.require_meeting(mid)
         if (meeting['participation'] != 'active' or meeting['generation'] != meeting['decided_generation']
-                or meeting['cooldown_until'] > now or meeting['material_state'] in ('unavailable','loading')):
+                or meeting['material_state'] in ('unavailable','loading')):
             return None
-        row = self.db.execute('SELECT * FROM outbox WHERE meeting_id=? AND kind=\'reply\' AND state=\'pending\' AND generation=? ORDER BY created_ns LIMIT 1', (mid,meeting['generation'])).fetchone()
+        row = self.db.execute('''SELECT * FROM outbox AS candidate
+            WHERE meeting_id=? AND kind='reply' AND state='pending' AND generation=?
+              AND (? >= ? OR EXISTS(
+                  SELECT 1 FROM outbox AS prior WHERE prior.answer_uuid=candidate.answer_uuid
+                  AND prior.state IN ('sent','uncertain','rejected')))
+            ORDER BY created_ns,channel='meeting' DESC LIMIT 1''',
+            (mid,meeting['generation'],now,meeting['cooldown_until'])).fetchone()
         return dict(row) if row and row['context_version']==meeting['material_version'] else None
 
     def discard_expired_replies(self, mid, settings, *, now, joined_at, bot_id=None):
@@ -323,8 +345,10 @@ class AdviserStore:
 
     def list_replies(self, mid, *, show_text=False):
         result = []
-        for row in self.db.execute('SELECT uuid,kind,state,error,content FROM outbox WHERE meeting_id=? ORDER BY created_ns DESC LIMIT 100',(mid,)):
-            item = {key:row[key] for key in ('uuid','kind','state','error')}
+        for row in self.db.execute('SELECT uuid,kind,state,error,content,channel,recipient_id FROM outbox WHERE meeting_id=? ORDER BY created_ns DESC LIMIT 100',(mid,)):
+            item = {key:row[key] for key in ('uuid','kind','state','error','channel')}
+            if row['recipient_id']:
+                item['recipient'] = '…' + row['recipient_id'][-6:] if len(row['recipient_id']) > 6 else '…'
             if show_text:
                 item['text'] = row['content']
             result.append(item)

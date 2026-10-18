@@ -19,7 +19,8 @@ class DecisionApplier:
         self.data = data
 
     def apply(self, job: dict, decision, *, now: float | None = None, settings=None,
-              joined_at: float = 0, bot_id: str | None = None, fault=None) -> bool:
+              joined_at: float = 0, bot_id: str | None = None,
+              notifications=None, fault=None) -> bool:
         now = time.time() if now is None else now
         snapshot = decode_mapping(job['snapshot'])
         fresh_keys = set(snapshot['fresh_input_keys'])
@@ -75,6 +76,8 @@ class DecisionApplier:
                     generation=job['generation'],
                     created_ns=int(now * 1_000_000_000),
                     context_version=meeting['material_version'],
+                    meeting_comment=notifications.meeting_comment if notifications else True,
+                    recipients=notifications.recipients if notifications else (),
                 )
             brief = {
                 'generation': job['generation'],

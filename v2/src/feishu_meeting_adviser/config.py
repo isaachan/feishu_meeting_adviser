@@ -152,6 +152,28 @@ class MeetingContextSettings:
         )
 
 
+@dataclass(frozen=True)
+class NotificationSettings:
+    meeting_comment: bool = True
+    recipients: tuple[str, ...] = ()
+
+    @classmethod
+    def parse(cls, section: ConfigSection):
+        section.reject_unknown({'meeting_comment', 'recipients'})
+        meeting_comment = section.values.get('meeting_comment', True)
+        recipients = section.values.get('recipients', [])
+        if type(meeting_comment) is not bool:
+            raise ConfigError('notifications.meeting_comment must be boolean')
+        if (not isinstance(recipients, list) or len(recipients) > 20
+                or any(not isinstance(value, str) or not re.fullmatch(r'ou_[A-Za-z0-9_-]{1,128}', value)
+                       for value in recipients)
+                or len(set(recipients)) != len(recipients)):
+            raise ConfigError('notifications.recipients must contain up to 20 unique open_id values')
+        if not meeting_comment and not recipients:
+            raise ConfigError('notifications must enable at least one destination')
+        return cls(meeting_comment, tuple(recipients))
+
+
 def _parse_llm(section: ConfigSection, base_directory: Path):
     section.reject_unknown(LLMSettings.__dataclass_fields__)
     backend = section.string('backend', 'rule')
@@ -211,6 +233,7 @@ class Configuration:
     database_capacity_bytes: int = 150_000_000
     llm: LLMSettings = field(default_factory=LLMSettings)
     meeting_context: MeetingContextSettings = field(default_factory=MeetingContextSettings)
+    notifications: NotificationSettings = field(default_factory=NotificationSettings)
 
 
 def file_fingerprint(path: Path) -> str:
@@ -232,6 +255,7 @@ def load_config(path: Path = DEFAULT_CONFIG) -> Configuration:
     document.reject_unknown({
         'app', 'meeting', 'http', 'collector', 'storage', 'runtime', 'llm',
         'meeting_context',
+        'notifications',
     })
     app = document.section('app')
     app.reject_unknown({'id', 'secret'})
@@ -254,6 +278,9 @@ def load_config(path: Path = DEFAULT_CONFIG) -> Configuration:
     runtime = RuntimeSettings.parse(document.section('runtime'))
     llm = _parse_llm(document.section('llm'), path.parent)
     context = MeetingContextSettings.parse(document.section('meeting_context'))
+    notifications = NotificationSettings.parse(document.section('notifications'))
+    if llm.backend == 'rule' and notifications.recipients:
+        raise ConfigError('notifications.recipients requires a model backend')
     return Configuration(
         path, fingerprint, credentials, meeting_no, password, storage.directory, scan,
         timeout_seconds=http.timeout_seconds,
@@ -267,4 +294,5 @@ def load_config(path: Path = DEFAULT_CONFIG) -> Configuration:
         database_capacity_bytes=storage.database_capacity_bytes,
         llm=llm,
         meeting_context=context,
+        notifications=notifications,
     )
