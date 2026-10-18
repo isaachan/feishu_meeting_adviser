@@ -1,4 +1,5 @@
 from dataclasses import replace
+import json
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -106,6 +107,19 @@ class AdviserStoreTests(unittest.TestCase):
         self.assertTrue(self.store.finish_job(job, decision))
         self.assertFalse(self.store.finish_job(job, decision))
         self.assertIsNone(self.store.prepare_job('m1', self.settings, 'role-v1', now=NOW, joined_at=NOW-10))
+
+    def test_retry_refreshes_pending_snapshot_as_evidence_expires(self):
+        older=delivery()
+        older=replace(older,caption=replace(older.caption,
+            end_time='2026-10-12T23:58:02Z',event_time='2026-10-12T23:58:02Z'))
+        self.store.ingest('m1',[older,delivery(2,'s:2')])
+        job=self.store.prepare_job('m1',self.settings,'role-v1',now=NOW,joined_at=NOW-150)
+        self.assertEqual(set(json.loads(job['snapshot'])['fresh_input_keys']),{'s:1','s:2'})
+        self.store.mark_job_running(job['job_id'])
+        self.store.fail_job(job,'model_disconnected',retry_at=NOW+1)
+        retried=self.store.prepare_job('m1',self.settings,'role-v1',now=NOW+2,joined_at=NOW-150)
+        self.assertEqual(retried['job_id'],job['job_id'])
+        self.assertEqual(json.loads(retried['snapshot'])['fresh_input_keys'],['s:2'])
 
     def test_reliability_contract_finish_job_updates_are_atomic(self):
         self.store.ingest('m1', [delivery()])

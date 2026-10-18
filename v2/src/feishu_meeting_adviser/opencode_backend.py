@@ -300,9 +300,7 @@ class OpenCodeBackend:
             raise ModelError('model_invalid_decision') from None
         return Decision.parse(value)
 
-    def decide(self, snapshot, role):
-        self.metadata = {'opencode_polls':0}
-        self.deadline = time.monotonic()+self.settings.timeout_seconds
+    def _decide_once(self, snapshot, role):
         try:
             self._start()
             self._verify()
@@ -356,9 +354,23 @@ class OpenCodeBackend:
                 self.stop_event.wait(min(0.2,max(0,self.deadline-time.monotonic())))
         except (TypeError,KeyError,AttributeError,ValueError):
             raise ModelError('model_protocol') from None
+
+    def decide(self, snapshot, role):
+        self.metadata = {'opencode_polls':0,'opencode_transport_restarts':0}
+        self.deadline = time.monotonic()+self.settings.timeout_seconds
+        try:
+            for attempt in range(2):
+                try:
+                    return self._decide_once(snapshot, role)
+                except ModelError as exc:
+                    if (exc.reason != 'model_disconnected' or attempt
+                            or self.stop_event.is_set() or time.monotonic() >= self.deadline):
+                        raise
+                    self.metadata['opencode_transport_restarts'] += 1
+                finally:
+                    self.close()
         finally:
             self.stage_finished = time.monotonic()
-            self.close()
             self.deadline = None
 
     def close(self):

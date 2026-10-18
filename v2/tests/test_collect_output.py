@@ -50,11 +50,20 @@ class CollectOutputTests(unittest.TestCase):
         self.assertEqual(result, 0)
         return [json.loads(line) for line in output.getvalue().splitlines()]
 
-    def test_default_output_hides_caption_content(self):
+    def test_default_output_shows_caption_content(self):
         self.api.events = lambda query: page([self.caption_event])
         rows = self.command()
-        self.assertTrue(rows)
-        self.assertTrue(all('text' not in row and 'speaker' not in row for row in rows))
+        captions = [row for row in rows if 'text' in row]
+        self.assertEqual(len(captions), 1)
+        self.assertEqual(captions[0]['text'], '合成测试字幕')
+        self.assertEqual(captions[0]['speaker'], '合成说话人')
+        self.assertEqual(self.store.caption(MID, 's:s1').text, '合成测试字幕')
+
+    def test_no_text_hides_caption_content(self):
+        self.api.events = lambda query: page([self.caption_event])
+        hidden = self.command('--no-text')
+        self.assertTrue(hidden)
+        self.assertTrue(all('text' not in row and 'speaker' not in row for row in hidden))
         self.assertEqual(self.store.caption(MID, 's:s1').text, '合成测试字幕')
 
     def test_stream_flushes_before_next_page_and_restart_deduplicates_without_ack(self):
@@ -75,7 +84,7 @@ class CollectOutputTests(unittest.TestCase):
             return page([self.caption_event, event('s2', text='另一句')])
 
         self.api.events = events
-        captions = [row for row in self.command('--show-text', output=output) if 'text' in row]
+        captions = [row for row in self.command(output=output) if 'text' in row]
         self.assertEqual(checks, [True, True])
         self.assertEqual(len(captions), 2)
         first = captions[0]
@@ -89,13 +98,13 @@ class CollectOutputTests(unittest.TestCase):
         for hidden in (MID, 'synthetic-speaker', 'synthetic-secret'):
             self.assertNotIn(hidden, output.getvalue())
         self.api.events = lambda query: page([self.caption_event, event('s2', text='另一句')])
-        self.assertFalse(any('text' in row for row in self.command('--show-text')))
+        self.assertFalse(any('text' in row for row in self.command()))
         self.assertEqual(self.store.db.execute('SELECT count(*) FROM consumers').fetchone()[0], 0)
         self.assertEqual(self.store.db.execute('SELECT count(*) FROM attempts').fetchone()[0], 0)
 
     def test_conflict_candidate_is_labeled_and_not_accepted_as_revision(self):
         self.api.events = lambda query: page([self.caption_event, event(text='变更候选')])
-        captions = [row for row in self.command('--show-text') if 'text' in row]
+        captions = [row for row in self.command() if 'text' in row]
         self.assertEqual([row['kind'] for row in captions], ['added', 'conflict'])
         self.assertEqual(captions[1]['text'], '变更候选')
         self.assertEqual(self.store.caption(MID, 's:s1').text, '合成测试字幕')

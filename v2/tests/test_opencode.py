@@ -94,6 +94,25 @@ class OpenCodeTests(unittest.TestCase):
                 self.assertLess(time.monotonic()-started,4)
                 self.assertFalse(list(backend.workdir.glob('run-*')))
 
+    def test_short_disconnect_restarts_once_with_same_deadline(self):
+        for mode in ('disconnect-once-verify','disconnect-once-generation'):
+            with self.subTest(mode=mode):
+                backend,capture=self.backend(mode)
+                result=backend.decide({},'Synthetic role')
+                self.assertIsNone(result.reply)
+                self.assertEqual(backend.diagnostic_metadata()['opencode_transport_restarts'],1)
+                self.assertFalse(list(backend.workdir.glob('run-*')))
+                prompts=[r for r in self.records(capture) if r['path'].endswith('prompt_async')]
+                self.assertEqual(len(prompts),1 if mode.endswith('verify') else 2)
+
+    def test_repeated_disconnect_still_fails_bounded(self):
+        backend,_=self.backend('disconnect-always')
+        with self.assertRaises(ModelError) as caught:
+            backend.decide({},'Synthetic role')
+        self.assertEqual(caught.exception.reason,'model_disconnected')
+        self.assertEqual(backend.diagnostic_metadata()['opencode_transport_restarts'],1)
+        self.assertFalse(list(backend.workdir.glob('run-*')))
+
     def test_user_stop_interrupts_generation_and_removes_owned_server_and_data(self):
         stopping=threading.Event();backend,capture=self.backend('timeout',stop_event=stopping)
         def stop_after_submit():

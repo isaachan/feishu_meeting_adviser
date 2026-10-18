@@ -32,6 +32,6 @@
 
 - 只有 fresh_input_keys 中的当前字幕可以触发新回复或控制；其他字幕只用于理解背景。时间未知的内容不能假定新鲜。
 - 如果给出了 pending_reply，判断最新讨论是否仍需要这条回答，可保留其文字并引用其依据，也可修改或取消；未解决的修订冲突不能当作确定事实。
-- reply_sentence_keys 引用支撑本次回答的新鲜句子或候选原有的有效依据；reply 为 null 时该列表必须为空。
+- control_sentence_keys 只能从 fresh_input_keys 中选；reply_sentence_keys 只能从 reply_allowed_keys 中选。不得引用 captions 中其他句子的 sentence_key。reply 为 null 时 reply_sentence_keys 必须为空。
 - control 为 none 时 control_sentence_keys 必须为空；pause/cancel 时 reply 必须为 null。
 - 回复一次发送完整文字，控制在 4000 UTF-8 字节以内。没有必要发言时 reply 为 null。

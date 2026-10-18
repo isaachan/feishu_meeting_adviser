@@ -20,7 +20,7 @@
 
 产品代码位于 `v2/src/feishu_meeting_adviser/`，不导入 `reference/spike/`。
 
-- `collect` 持续读取字幕，完成规范化、持久化去重、分页与恢复。`collect --show-text` 可用于本机观察。
+- `collect` 持续读取字幕，完成规范化、持久化去重、分页与恢复，并默认在本机显示正文；`collect --no-text` 可关闭正文输出。
 - SQLite 保存字幕、检查点、状态与独立的消费者进度；下游采用至少一次投递与幂等消费。
 - `consume --backend codex --watch` 持续运行真实 LLM；省略 --watch 单次处理，--backend rule 独立保留固定测试规则。
 - 会中消息客户端已经支持固定 UUID 和响应 UUID 核对；测试消费者已有持久化待发送回复与发送确认记录。

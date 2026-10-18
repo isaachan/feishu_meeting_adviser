@@ -26,7 +26,8 @@ def parser():
     leave.add_argument('--retry-uncertain', action='store_true', help='retry only after checking meeting UI')
     collect = commands.add_parser('collect', help='collect continuously; Ctrl-C stops polling only')
     collect.add_argument('--once', action='store_true', help='one successful page-budget cycle (may leave pending pages)')
-    collect.add_argument('--show-text', action='store_true', help='print new captions with speaker and timestamps locally after commit')
+    collect.add_argument('--no-text', dest='show_text', action='store_false', default=True,
+                         help='do not print caption text, speakers or timestamps')
     status = commands.add_parser('status', help='show safe session and backlog statistics')
     status.add_argument('--consumer')
     consume = commands.add_parser('consume', help='consume with the configured model backend or the fixed test rule')

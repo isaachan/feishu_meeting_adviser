@@ -75,3 +75,9 @@ model_state=waiting 时，model_stage 保留上一次调用的阶段；model_err
 ## OpenCode 后端诊断
 
 新增 backend=opencode 以及 server_start / server_verify / session_start / session_cleanup 阶段；turn_start / generation 含义沿用。opencode_polls 为本次消息查询次数，model_input_tokens / model_output_tokens / model_reasoning_tokens 为供应商返回的计数；mcp_servers=0 表示独立服务核对时无 MCP。不能把工具目录大小当作可调用工具数，实际由 agent deny 规则和本次 tools=false 禁用。错误仍用安全分类，包括缺少 provider 登录的 model_authentication_required。已完成真实 GLM 及假发送链路验证，证据和性能边界见 [OPENCODE_GLM](OPENCODE_GLM.md)。
+
+## 2026-10-18 断连与证据错误
+
+10 月 16 日的本机脱敏诊断记录到三次 OpenCode `model_disconnected`：两次在 generation 阶段，一次在 server_verify 阶段，均在约 3–4 秒内失败。其后仍有成功调用，说明这些记录是短时中断，不能据此认定模型始终不可用。`model_invalid_evidence` 发生在模型返回之后、决定写入之前：输出引用了不在本轮允许集合中的字幕键。旧实现只把这类错误写进会议状态，没有对应的 kind=model 诊断，无法从旧诊断回溯其次数和阶段。
+
+现在 OpenCode 短时断连会在原整次超时内重新启动一次独立服务及会话；仍失败则保留错误。`opencode_transport_restarts` 记录本轮重连次数。失败任务再次运行前刷新快照，不沿用已经过期的可引用字幕。证据校验失败写入脱敏模型诊断，并强化角色规则中的允许键范围。安全校验和发送前新鲜度校验仍然执行；若会议持续产生新字幕，候选回复仍可能在复核时被取消，不能以此修复保证会中一定发言。

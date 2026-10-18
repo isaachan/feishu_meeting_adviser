@@ -43,6 +43,11 @@ class Handler(BaseHTTPRequestHandler):
         if self.path=='/global/health':
             return self.send({'healthy':True,'version':'synthetic'})
         if self.path=='/config':
+            if mode in ('disconnect-once-verify','disconnect-always'):
+                marker=capture.with_suffix('.disconnected') if capture else None
+                if mode=='disconnect-always' or marker and not marker.exists():
+                    if marker:marker.touch()
+                    os._exit(1)
             value=config.copy()
             if mode=='plugin':value['plugin']=['synthetic-plugin']
             return self.send(value)
@@ -59,6 +64,11 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(['bash','read','edit','task','skill','webfetch'])
         if self.path.endswith('/message'):
             polls+=1
+            if mode=='disconnect-once-generation':
+                marker=capture.with_suffix('.disconnected') if capture else None
+                if marker and not marker.exists():
+                    marker.touch()
+                    os._exit(1)
             if mode=='drip':
                 self.send_response(200);self.end_headers()
                 for _ in range(100):

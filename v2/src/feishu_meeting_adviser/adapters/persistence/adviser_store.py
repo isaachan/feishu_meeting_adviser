@@ -258,6 +258,11 @@ class AdviserStore:
                     (encode({'snapshot_hash':digest(decode_mapping(old['snapshot']))}),old['job_id']))
             self.db.execute('INSERT OR IGNORE INTO jobs(job_id,meeting_id,generation,snapshot,role_version,created_ns,context_version) VALUES (?,?,?,?,?,?,?)',
                             (job_id, mid, snapshot['generation'], encode(snapshot), role_version, int(now*1_000_000_000),meeting['material_version']))
+            # A failed call may be retried after captions or reply evidence have
+            # expired. Keep the pending job's input aligned with the current
+            # freshness window instead of replaying its original snapshot.
+            self.db.execute('UPDATE jobs SET snapshot=? WHERE job_id=? AND state=\'pending\'',
+                            (encode(snapshot), job_id))
         return dict(self.db.execute('SELECT * FROM jobs WHERE job_id=?', (job_id,)).fetchone())
 
     def finish_job(self, job, decision, *, now=None, settings=None, joined_at=0, bot_id=None, fault=None):

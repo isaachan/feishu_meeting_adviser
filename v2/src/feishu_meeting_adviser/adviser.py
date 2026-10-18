@@ -180,6 +180,8 @@ class AdviserService:
                     except ModelError as exc:
                         self.data.fail_job(job,exc.reason,retry_at=self.clock()+self.config.cooldown_seconds)
                         self.model_failure = exc.reason
+                        self.diagnose(self._model_metadata() | {'kind':'model','backend':self.settings.backend,
+                            'error_kind':exc.reason,'model_ms':elapsed,'decision_saved':False})
         if self.worker is None and (self.batch_due is None or self.clock() >= self.batch_due):
             with self._maintenance_lock():
                 self.guard()

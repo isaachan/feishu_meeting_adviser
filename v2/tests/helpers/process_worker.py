@@ -60,7 +60,7 @@ if action in ('source','source-once'):
     store.close()
     with patch('feishu_meeting_adviser.__main__.FeishuClient',return_value=api), \
          patch('feishu_meeting_adviser.lifecycle.FeishuClient',return_value=api):
-        args = ['--config',str(path),'collect']
+        args = ['--config',str(path),'collect','--no-text']
         if action == 'source-once':
             args.append('--once')
         raise SystemExit(main(args))

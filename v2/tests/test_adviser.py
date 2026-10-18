@@ -176,11 +176,15 @@ class AdviserTests(unittest.TestCase):
         self.assertEqual(len(self.sent),1)
 
     def test_unrelated_evidence_is_rejected_without_sending(self):
+        records=[]
+        self.runner.diagnose=records.append
         self.backend.reply=Decision('none',(),'合成回复',('another-meeting-sentence',))
         self.commit(self.caption)
         result=self.runner.run()
         self.assertEqual(result['model_error'],'model_invalid_evidence')
         self.assertEqual(self.sent,[])
+        self.assertEqual(records[-1]['error_kind'],'model_invalid_evidence')
+        self.assertIs(records[-1]['decision_saved'],False)
 
     def test_unknown_send_result_does_not_retry_or_block_new_input(self):
         self.send_failure=ApiError(ErrorKind.NETWORK)

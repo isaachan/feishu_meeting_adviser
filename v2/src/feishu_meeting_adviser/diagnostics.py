@@ -38,7 +38,8 @@ NUMBER_FIELDS = {'event_count','unknown_times','identity_degraded','request_ms',
 NUMBER_FIELDS |= {'model_ms','pending_model_inputs','pending_replies','uncertain_replies','rejected_replies'}
 NUMBER_FIELDS |= {'model_stage_ms','mcp_inherited_servers','mcp_servers','mcp_catalog_tools',
                   'mcp_disabled_servers','mcp_unverified_servers','mcp_new_servers','mcp_isolation_restarts',
-                  'opencode_catalog_tools','opencode_polls','model_input_tokens','model_output_tokens','model_reasoning_tokens'}
+                  'opencode_catalog_tools','opencode_polls','opencode_transport_restarts',
+                  'model_input_tokens','model_output_tokens','model_reasoning_tokens'}
 BOOL_FIELDS = {'has_more','checkpoint_advanced','decision_saved','reply_confirmed'}
 ENUM_COUNTERS = {'kinds': {'transcript_received','participant_joined','participant_left','chat_received','other'},
                  'counts': {'added','updated','conflict','duplicates','older'}}

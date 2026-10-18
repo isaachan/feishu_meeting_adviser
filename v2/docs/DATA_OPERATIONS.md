@@ -17,7 +17,7 @@
 ```bash
 .venv/bin/python -m feishu_meeting_adviser status
 # 采集时显式显示新入库字幕、说话人和时间；不确认消费。
-.venv/bin/python -m feishu_meeting_adviser collect --show-text
+.venv/bin/python -m feishu_meeting_adviser collect
 # 手动维护前先停止 collect 与 consume；正常采集会自动维护。
 .venv/bin/python -m feishu_meeting_adviser prune
 # 默认只列未解决候选的交付哈希；下条命令明确在本机显示候选正文。
