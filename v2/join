@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")"
+python=.venv/bin/python
+
+if output=$("$python" -m feishu_meeting_adviser reset-session --confirmed-bot-left 2>&1); then
+    printf '%s\n' "$output"
+else
+    result=$?
+    if [[ "$output" != 'Operation stopped: no active or uncertain session to reset' ]]; then
+        printf '%s\n' "$output" >&2
+        exit "$result"
+    fi
+fi
+
+exec "$python" -m feishu_meeting_adviser join "$@"
