@@ -325,7 +325,7 @@ class AdviserTests(unittest.TestCase):
         self.assertEqual(self.api.leaves,0)
         self.assertIn(MID,self.runner.data.protected_meetings())
 
-    def test_caption_arriving_after_model_completion_blocks_send_until_rechecked(self):
+    def test_demo_caption_arriving_after_model_completion_does_not_block_send(self):
         self.backend.reply=Decision('none',(),'原有待发回答',('s:1',))
         self.commit(self.caption)
         self.runner.step()
@@ -336,13 +336,13 @@ class AdviserTests(unittest.TestCase):
             self.commit(replace(self.caption,sentence_key='s:2',text='刚才的问题取消了'))
         with patch.object(self.runner,'_finish_job',side_effect=finish_then_new_input):
             self.runner.step()
-        self.assertEqual(self.sent,[])
+        self.assertEqual([item[1] for item in self.sent],['原有待发回答'])
         self.backend.reply=Decision('cancel',('s:2',),None,())
         self.runner.run()
-        self.assertEqual(self.sent,[])
+        self.assertEqual(len(self.sent),1)
         self.assertEqual(self.runner.data.reply_statistics(MID)['pending_replies'],0)
 
-    def test_expired_candidate_is_discarded_without_new_model_call(self):
+    def test_demo_expired_candidate_remains_sendable_without_new_model_call(self):
         self.runner.data.db.execute('UPDATE meetings SET cooldown_until=? WHERE meeting_id=?',(NOW+1000,MID))
         self.backend.reply=Decision('none',(),'将过时的回答',('s:1',))
         self.commit(self.caption)
@@ -353,9 +353,43 @@ class AdviserTests(unittest.TestCase):
         self.assertEqual(self.runner.data.reply_statistics(MID)['pending_replies'],1)
         self.runner.clock=lambda:NOW+601
         self.runner.step()
+        self.assertEqual(self.runner.data.reply_statistics(MID)['pending_replies'],1)
+        self.runner.clock=lambda:NOW+1001
+        self.runner.step()
         self.assertEqual(self.runner.data.reply_statistics(MID)['pending_replies'],0)
-        self.assertEqual(self.sent,[])
+        self.assertEqual([item[1] for item in self.sent],['将过时的回答'])
         self.assertEqual(len(self.backend.calls),1)
+
+    def test_demo_dispatches_saved_reply_while_model_runs_with_newer_context_and_backlog(self):
+        self.commit(self.caption)
+        self.runner.ingest()
+        job = self.runner.data.prepare_job(
+            MID, self.runner.settings, self.runner.role_version, now=NOW, joined_at=NOW-10)
+        self.runner._finish_job(job, Decision('none', (), '已生成的回答', ('s:1',)), 1)
+        message_uuid = self.runner.data.next_reply(MID, now=NOW)['uuid']
+
+        self.backend.release.clear()
+        self.commit(replace(self.caption, text='修订后的内容'))
+        self.runner.ingest()
+        newer_job = self.runner.data.prepare_job(
+            MID, self.runner.settings, self.runner.role_version, now=NOW, joined_at=NOW-10)
+        self.runner._start_job(newer_job)
+        self.assertTrue(self.backend.entered.wait(1))
+        self.commit(replace(self.caption, sentence_key='s:2', text='尚未消费的新字幕'))
+        self.runner.clock = lambda: NOW+601
+        self.runner.data.db.execute(
+            'UPDATE meetings SET material_version=? WHERE meeting_id=?', ('new-version', MID))
+
+        self.runner.dispatch()
+        self.assertTrue(self.runner.worker.is_alive())
+        self.assertGreater(self.source.backlog(MID, 'adviser'), 0)
+        self.assertEqual(self.sent, [(MID, '已生成的回答', message_uuid)])
+        row = self.runner.data.db.execute(
+            'SELECT state,sent_at FROM outbox WHERE uuid=?', (message_uuid,)).fetchone()
+        self.assertEqual((row['state'], row['sent_at']), ('sent', NOW+601))
+        self.runner.dispatch()
+        self.assertEqual(len(self.sent), 1)
+        self.backend.release.set()
 
     def test_unavailable_source_stops_consumer_before_sending(self):
         self.runner.data.db.execute('UPDATE meetings SET cooldown_until=? WHERE meeting_id=?',(NOW+100,MID))

@@ -152,18 +152,17 @@ class AdviserService:
         return sanitize(metadata | {'kind': 'model'}) if isinstance(metadata, dict) else {}
 
     def dispatch(self):
-        if self.worker is not None or self.stop_event.is_set():
+        # DEMO: a running model must not delay an already generated reply.
+        if self.stop_event.is_set():
             return
         with self._maintenance_lock():
             self.guard()
-            # Source may have committed captions after this step's ingest or model completion.
             self.replied += int(self.dispatcher.dispatch())
 
     def step(self):
         self._ensure_materials()
         self.ingest()
-        with self._maintenance_lock():
-            self.dispatcher.discard_expired()
+        # DEMO: do not invalidate pending replies while processing newer input.
         completed = self.executor.take_finished()
         if completed is not None:
             with self._maintenance_lock():

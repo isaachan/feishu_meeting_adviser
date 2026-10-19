@@ -1,4 +1,4 @@
-"""Dispatch persisted replies only after current context and source backlog checks."""
+"""Dispatch persisted replies directly during the demo phase."""
 from .reply_sender import send_saved_reply
 
 
@@ -25,9 +25,7 @@ class ReplyDispatcher:
         )
 
     def dispatch(self) -> bool:
-        if self.source.backlog(self.meeting_id, self.consumer_id):
-            return False
-        self.discard_expired()
+        # DEMO: bypass source backlog and reply evidence validity checks.
         row = self.data.next_reply(self.meeting_id, now=self.clock())
         if row is None:
             return False

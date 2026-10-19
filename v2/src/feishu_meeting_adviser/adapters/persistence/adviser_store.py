@@ -312,17 +312,18 @@ class AdviserStore:
 
     def next_reply(self, mid, *, now):
         meeting = self.require_meeting(mid)
-        if (meeting['participation'] != 'active' or meeting['generation'] != meeting['decided_generation']
+        if (meeting['participation'] != 'active'
                 or meeting['material_state'] in ('unavailable','loading')):
             return None
+        # DEMO: send saved replies without generation catch-up or context-version validation.
         row = self.db.execute('''SELECT * FROM outbox AS candidate
-            WHERE meeting_id=? AND kind='reply' AND state='pending' AND generation=?
+            WHERE meeting_id=? AND kind='reply' AND state='pending'
               AND (? >= ? OR EXISTS(
                   SELECT 1 FROM outbox AS prior WHERE prior.answer_uuid=candidate.answer_uuid
                   AND prior.state IN ('sent','uncertain','rejected')))
             ORDER BY created_ns,channel='meeting' DESC LIMIT 1''',
-            (mid,meeting['generation'],now,meeting['cooldown_until'])).fetchone()
-        return dict(row) if row and row['context_version']==meeting['material_version'] else None
+            (mid,now,meeting['cooldown_until'])).fetchone()
+        return dict(row) if row else None
 
     def discard_expired_replies(self, mid, settings, *, now, joined_at, bot_id=None):
         cancelled = 0

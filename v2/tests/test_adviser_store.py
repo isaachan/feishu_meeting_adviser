@@ -289,13 +289,13 @@ class AdviserStoreTests(unittest.TestCase):
         self.assertNotIn('private synthetic prompt', row['snapshot'])
         self.assertNotIn('m1', self.store.protected_meetings())
 
-    def test_changed_role_rechecks_pending_reply_before_it_can_send(self):
+    def test_demo_changed_role_does_not_block_pending_reply(self):
         self.store.ingest('m1', [delivery()])
         self.store.ensure_role('m1', 'role-v1')
         job = self.store.prepare_job('m1', self.settings, 'role-v1', now=NOW, joined_at=NOW-10)
         self.store.finish_job(job, Decision('none', (), '旧角色生成的候选', ('s:1',)), now=NOW)
         self.store.ensure_role('m1', 'role-v2')
-        self.assertIsNone(self.store.next_reply('m1', now=NOW))
+        self.assertEqual(self.store.next_reply('m1', now=NOW)['content'], '旧角色生成的候选')
         checked = self.store.prepare_job('m1', self.settings, 'role-v2', now=NOW, joined_at=NOW-10)
         self.assertEqual(checked['role_version'], 'role-v2')
         self.store.finish_job(checked, Decision('none', (), None, ()), now=NOW)

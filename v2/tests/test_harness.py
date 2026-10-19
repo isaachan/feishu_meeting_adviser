@@ -106,7 +106,7 @@ class HarnessAdapterTests(unittest.TestCase):
             with self.assertRaisesRegex(Exception,'description file'):
                 _read_text(link,'description file')
 
-    def test_real_runner_accepts_new_input_while_model_is_busy_and_rechecks_reply(self):
+    def test_demo_real_runner_sends_generated_reply_before_new_input_is_decided(self):
         class Backend:
             context_overhead_characters = 0
             def __init__(self):
@@ -147,10 +147,10 @@ class HarnessAdapterTests(unittest.TestCase):
                     harness.submit('李四','模型运行期间的新发言')
                     backend.release.set()
                     deadline = time.monotonic()+4
-                    while time.monotonic()<deadline and not any(r.get('kind')=='reply' and r.get('status')=='allowed' for r in records):
+                    while time.monotonic()<deadline and sum(r.get('kind')=='reply' and r.get('status')=='allowed' for r in records)<2:
                         time.sleep(.05)
                     replies = [r for r in records if r.get('kind')=='reply' and r.get('status')=='allowed']
-                    self.assertEqual([r['text'] for r in replies],['reply:模型运行期间的新发言'])
+                    self.assertEqual([r['text'] for r in replies],['reply:第一句','reply:模型运行期间的新发言'])
                     self.assertGreaterEqual(len(backend.calls),2)
                 finally:
                     harness.close()

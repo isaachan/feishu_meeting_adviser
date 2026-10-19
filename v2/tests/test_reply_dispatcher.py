@@ -68,23 +68,23 @@ class ReplyDispatcherTests(unittest.TestCase):
         )
         return dispatcher, data, client
 
-    def test_backlog_blocks_context_check_and_send(self):
+    def test_demo_sends_despite_backlog_without_checking_reply_validity(self):
         dispatcher, data, client = self.dispatcher(backlog=1)
-        self.assertFalse(dispatcher.dispatch())
-        self.assertEqual(data.calls, [])
-        self.assertEqual(client.sent, [])
+        self.assertTrue(dispatcher.dispatch())
+        self.assertEqual([call[0] for call in data.calls], ['next', 'sending', 'sent'])
+        self.assertEqual(client.sent, [('m1', 'synthetic reply', 'synthetic-uuid')])
 
     def test_confirmed_send_preserves_state_side_effect_order(self):
         dispatcher, data, client = self.dispatcher()
         self.assertTrue(dispatcher.dispatch())
-        self.assertEqual([call[0] for call in data.calls], ['discard', 'next', 'sending', 'sent'])
+        self.assertEqual([call[0] for call in data.calls], ['next', 'sending', 'sent'])
         self.assertEqual(client.sent, [('m1', 'synthetic reply', 'synthetic-uuid')])
 
     def test_network_failure_becomes_uncertain_without_confirming_sent(self):
         dispatcher, data, client = self.dispatcher(
             error=ApiError(ErrorKind.NETWORK))
         self.assertFalse(dispatcher.dispatch())
-        self.assertEqual([call[0] for call in data.calls], ['discard', 'next', 'sending', 'error'])
+        self.assertEqual([call[0] for call in data.calls], ['next', 'sending', 'error'])
         self.assertEqual(data.calls[-1], ('error', 'synthetic-uuid', 'network', True))
         self.assertEqual(len(client.sent), 1)
 
