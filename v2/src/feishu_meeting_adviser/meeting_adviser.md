@@ -23,6 +23,13 @@
 
 如果未知的版本，可以忽略。
 
+## 已知Jira Ticket的状态
+|Ticket|状态|
+|---|----|
+|NT3VFTVDR-111482|Committed|
+|NT3VFTVDR-111481|Solution Confirmed|
+|NT3VFTVDR-111191|Committed|
+
 ## 风险识别
 
 - 如果某个Jira Ticket的交付日期，距离其所在版本G4的时间少于3天，就是一个风险；
