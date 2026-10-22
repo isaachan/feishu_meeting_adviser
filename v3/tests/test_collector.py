@@ -62,6 +62,8 @@ class ParsePageTests(unittest.TestCase):
         self.assertEqual(item.speaker_name, '张三')
         self.assertEqual(item.end_ms, 1716699014000)
         self.assertEqual(parsed.kinds['transcript'], 1)
+        self.assertIn('events', parsed.data_keys)
+        self.assertEqual(parsed.activity_types, ('transcript_received',))
 
     def test_nested_meeting_activity_with_string_payload(self):
         payload = json.dumps({'meeting': {'id': MEETING},
@@ -256,6 +258,32 @@ class SpectatorTests(unittest.TestCase):
         spectator.poll_once()
         self.assertEqual(len(seen), 1)
         self.assertEqual(seen[0].text, '今天讨论方案')
+
+    def test_latency_samples_recorded_for_new_captions(self):
+        clock = FastClock()
+        clock.now = 1_800_000_000.0  # later than the item's 2024 end_time
+        spectator = self.spectator([page([transcript_event('1')], has_more=False)], clock=clock)
+        spectator.poll_once()
+        samples = self.store.checkpoint(MEETING)['latency_samples']
+        self.assertEqual(len(samples), 1)
+        # The fake clock is far past the 2024 end_time; the sample is the gap in seconds.
+        from feishu_spectator.collector import latency_summary
+        summary = latency_summary(samples)
+        self.assertEqual(summary['count'], 1)
+        self.assertGreater(summary['median'], 0)
+        # Duplicates must not add samples.
+        again = self.spectator([page([transcript_event('1')], has_more=False)])
+        again.poll_once()
+        self.assertEqual(len(self.store.checkpoint(MEETING)['latency_samples']), 1)
+
+    def test_latency_summary_bounds(self):
+        from feishu_spectator.collector import latency_summary
+        self.assertEqual(latency_summary([]), {'count': 0})
+        self.assertEqual(latency_summary([None, 'x', -1]), {'count': 0})
+        summary = latency_summary([1, 2, 3, 4, 5, 6, 7, 8, 9, 100])
+        self.assertEqual(summary['count'], 10)
+        self.assertEqual(summary['median'], 5.5)
+        self.assertEqual(summary['max'], 100)
 
 
 if __name__ == '__main__':

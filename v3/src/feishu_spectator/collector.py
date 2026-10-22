@@ -4,6 +4,7 @@ Spectator mode has no push; this loop polls ListMeetingEvents with the saved
 page_token, commits each parsed page atomically, and prints stored items as
 best-effort JSONL after the durable commit.
 """
+import statistics
 from dataclasses import dataclass, field
 import json
 import random
@@ -24,6 +25,7 @@ _TRANSIENT_ITEMS = {
     'participant_left': ('participant_left_items', EventKind.PARTICIPANT_LEFT),
 }
 _SAFE_REASON = re.compile(r'[a-z_]{1,64}\Z')
+_SAFE_LABEL = re.compile(r'[A-Za-z0-9_.:-]{1,64}\Z')
 
 
 class PageFormatError(Exception):
@@ -146,6 +148,9 @@ class ParsedPage:
     page_token: str | None = None
     event_count: int = 0
     kinds: dict[str, int] = field(default_factory=dict)
+    # Safe shape metadata for diagnostics: field names and short enum labels only.
+    data_keys: tuple[str, ...] = ()
+    activity_types: tuple[str, ...] = ()
 
 
 def parse_page(response: dict, meeting_id: str, *, received_at: str) -> ParsedPage:
@@ -160,11 +165,15 @@ def parse_page(response: dict, meeting_id: str, *, received_at: str) -> ParsedPa
     # The returned cursor is the resume point for the next incremental pull even
     # when has_more is false (manual: "首次全量，后续用 page_token 增量").
     page = ParsedPage(has_more=has_more, page_token=page_token,
-                      event_count=len(data['events']))
+                      event_count=len(data['events']),
+                      data_keys=tuple(sorted(k for k in data if isinstance(k, str))))
+    activity_types: set[str] = set()
     for event in data['events']:
         if not isinstance(event, dict):
             raise PageFormatError('event must be an object; page not committed')
         subtype, payload = _activity_subtype(event)
+        if _SAFE_LABEL.fullmatch(subtype):
+            activity_types.add(subtype)
         if subtype not in _TRANSIENT_ITEMS:
             page.kinds['other'] = page.kinds.get('other', 0) + 1
             continue
@@ -191,6 +200,7 @@ def parse_page(response: dict, meeting_id: str, *, received_at: str) -> ParsedPa
                 direction = 'joined' if kind is EventKind.PARTICIPANT_JOINED else 'left'
                 page.items.append(_participant(meeting_id, item, direction, received_at))
         page.kinds[label] = page.kinds.get(label, 0) + 1
+    page.activity_types = tuple(sorted(activity_types))
     return page
 
 
@@ -218,6 +228,18 @@ class ListenerStopped(Exception):
         super().__init__(f'{state}: {self.reason}')
 
 
+def latency_summary(samples) -> dict:
+    """median/p95/max of speech-end-to-receipt seconds over the last 200 captions."""
+    known = sorted(value for value in samples or []
+                   if isinstance(value, (int, float)) and value >= 0)
+    if not known:
+        return {'count': 0}
+    middle = statistics.median(known)
+    return {'count': len(known), 'median': round(middle, 1),
+            'p95': round(known[max(0, (len(known) * 95 + 99) // 100 - 1)], 1),
+            'max': round(known[-1], 1)}
+
+
 class Spectator:
     """One meeting's polling session; the user stays in the meeting."""
 
@@ -236,7 +258,7 @@ class Spectator:
         self.failures = 0
         checkpoint = {'schema': 1, 'page_token': None, 'page_size': settings.page_size,
                       'cursor_reset_count': 0, 'last_success': None, 'pages': 0,
-                      'started_at': utc_now(clock)}
+                      'started_at': utc_now(clock), 'latency_samples': []}
         self.checkpoint = store.ensure_meeting(meeting_id, checkpoint)
 
     def poll_once(self) -> dict:
@@ -260,7 +282,27 @@ class Spectator:
             next_checkpoint['page_token'] = page.page_token
             next_checkpoint['last_success'] = received_at
             next_checkpoint['pages'] = checkpoint['pages'] + 1
+            next_checkpoint['last_event_count'] = page.event_count
+            next_checkpoint['last_kinds'] = page.kinds
+            next_checkpoint['last_activity_types'] = list(page.activity_types)
+            if page.event_count == 0:
+                next_checkpoint['last_data_keys'] = list(page.data_keys)
             commit = self.store.commit_page(self.meeting_id, page.items, next_checkpoint)
+            if commit.new_item_list:
+                # Exposure latency for new captions: speech end -> this machine.
+                # A high median documents the server-side pull delay (v2 finding
+                # across 25 meetings), not a local polling artifact.
+                received_ms = epoch_ms(received_at)
+                fresh = [received_ms - item.end_ms
+                         for item in commit.new_item_list
+                         if item.kind is EventKind.TRANSCRIPT
+                         and item.end_ms is not None and received_ms is not None]
+                if fresh:
+                    with_samples = dict(next_checkpoint)
+                    with_samples['latency_samples'] = (
+                        list(next_checkpoint.get('latency_samples') or [])
+                        + [round(value / 1000, 1) for value in fresh])[-200:]
+                    self.store.commit_page(self.meeting_id, [], with_samples)
             pages += 1
             new_items += commit.new_items
             duplicates += commit.duplicates
@@ -269,9 +311,13 @@ class Spectator:
             # Output is best effort after the durable commit, never an acknowledgement.
             for item in commit.new_item_list:
                 self.on_item(item)
-            self.diagnose({'kind': 'page', 'event_count': page.event_count, 'kinds': page.kinds,
-                           'has_more': page.has_more, 'new_items': commit.new_items,
-                           'duplicates': commit.duplicates})
+            record = {'kind': 'page', 'event_count': page.event_count, 'kinds': page.kinds,
+                      'has_more': page.has_more, 'new_items': commit.new_items,
+                      'duplicates': commit.duplicates,
+                      'activity_types': list(page.activity_types)}
+            if page.event_count == 0:
+                record['data_keys'] = list(page.data_keys)
+            self.diagnose(record)
             if not page.has_more:
                 break
         self.failures = 0

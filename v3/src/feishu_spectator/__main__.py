@@ -7,11 +7,12 @@ import sqlite3
 import sys
 
 from .client import ApiError, SpectatorClient, StopRequested
-from .collector import ListenerStopped, PageFormatError, Spectator
+from .collector import ListenerStopped, PageFormatError, Spectator, latency_summary
 from .config import ConfigError, DEFAULT_CONFIG, load_config
 from .infrastructure import LifecycleError
 from .models import digest
-from .oauth import OAuthError, OAuthManager, OAuthTransport
+from .oauth import DEFAULT_PORT as OAUTH_PORT
+from .oauth import OAuthError, OAuthManager, OAuthTransport, login as oauth_login
 from .storage import CapacityError, StorageError, Store
 
 VERSION = '0.1.0'
@@ -56,6 +57,23 @@ def _resolve_meeting(config, args) -> str:
     return chosen.meeting_id
 
 
+def handle_login(context, args):
+    result = oauth_login(_oauth_manager(context['config']), port=args.port,
+                         timeout=args.timeout, notify=lambda value: print(value, flush=True))
+    print(json.dumps(result))
+    return 0
+
+
+def handle_oauth_status(context, args):
+    print(json.dumps(_oauth_manager(context['config']).status()))
+    return 0
+
+
+def handle_logout(context, args):
+    print(json.dumps(_oauth_manager(context['config']).logout()))
+    return 0
+
+
 def handle_meetings(context, args):
     meetings = _client(context['config'], _oauth_manager(context['config'])).active_meetings()
     print(json.dumps([m.to_dict() for m in meetings], ensure_ascii=False))
@@ -69,10 +87,24 @@ def handle_listen(context, args):
     Store.initialize(_database_path(config), max_database_bytes=config.max_database_bytes)
     store = Store(_database_path(config), max_database_bytes=config.max_database_bytes)
     stop = context['stop']
+    base_diagnose = context['diagnose']
+    empty_hint = {'shown': False}
+
+    def diagnose(record):
+        base_diagnose(record)
+        if (not empty_hint['shown'] and record.get('kind') == 'page'
+                and record.get('event_count') == 0):
+            empty_hint['shown'] = True
+            print(json.dumps({
+                'hint': 'server returned an empty events page; if this keeps happening, check '
+                        'in-meeting captions/AI summary, the "allow agents to join" switch, '
+                        'and that you are in the meeting',
+                'data_keys': record.get('data_keys')}, ensure_ascii=False), file=sys.stderr, flush=True)
+
     try:
         spectator = Spectator(store, meeting_id, _client(config, manager),
                               settings=config.listen, should_stop=stop,
-                              diagnose=context['diagnose'],
+                              diagnose=diagnose,
                               on_item=_print_item if args.show_text else None)
         print(json.dumps({'listening': True, 'meeting_hash': digest(meeting_id)[:12],
                           'stop': 'Ctrl-C stops polling only; you stay in the meeting'}),
@@ -83,7 +115,8 @@ def handle_listen(context, args):
             spectator.run()
         checkpoint = store.checkpoint(meeting_id)
         print(json.dumps({'state': 'stopped', 'pages': checkpoint['pages'],
-                          'cursor_reset_count': checkpoint['cursor_reset_count']}))
+                          'cursor_reset_count': checkpoint['cursor_reset_count'],
+                          'caption_latency_seconds': latency_summary(checkpoint.get('latency_samples'))}))
         return 0
     finally:
         store.close()
@@ -107,6 +140,11 @@ def handle_status(context, args):
                 'has_cursor': bool(checkpoint.get('page_token')),
                 'cursor_reset_count': checkpoint.get('cursor_reset_count'),
                 'last_success': checkpoint.get('last_success'),
+                'last_event_count': checkpoint.get('last_event_count'),
+                'last_kinds': checkpoint.get('last_kinds'),
+                'last_activity_types': checkpoint.get('last_activity_types'),
+                'last_data_keys': checkpoint.get('last_data_keys'),
+                'caption_latency_seconds': latency_summary(checkpoint.get('latency_samples')),
                 **store.statistics(meeting_id)['stored_items'],
             }
         print(json.dumps({'meetings': result}))
@@ -135,6 +173,9 @@ def handle_recent(context, args):
 
 
 COMMAND_HANDLERS = {
+    'login': handle_login,
+    'oauth-status': handle_oauth_status,
+    'logout': handle_logout,
     'meetings': handle_meetings,
     'listen': handle_listen,
     'status': handle_status,
@@ -149,6 +190,11 @@ def parser():
     root.add_argument('--config', type=Path, default=DEFAULT_CONFIG,
                       help='private local YAML configuration')
     commands = root.add_subparsers(dest='command')
+    login = commands.add_parser('login', help='one-time user authorization via the browser')
+    login.add_argument('--port', type=int, default=OAUTH_PORT)
+    login.add_argument('--timeout', type=int, choices=range(30, 1801), default=600, metavar='30..1800')
+    commands.add_parser('oauth-status', help='show local authorization state and scopes')
+    commands.add_parser('logout', help='forget local credentials; remote grants are managed in Feishu')
     commands.add_parser('meetings', help='list meetings you are currently in')
     listen = commands.add_parser('listen', help='poll captions/chat/participants continuously; Ctrl-C stops polling only')
     listen.add_argument('--meeting-id', help='long meeting ID from `meetings`; defaults to the first active meeting')
@@ -180,7 +226,7 @@ def main(argv=None):
             pass
     diagnostics = []
     try:
-        if args.command == 'listen':
+        if args.command in ('listen', 'login'):
             import os
             os.umask(0o077)
         config = load_config(args.config)
