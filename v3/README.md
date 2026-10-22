@@ -1,5 +1,7 @@
 # v3 飞书旁听模式（用户身份，无机器人入会）
 
+> **已冻结（2026-10-22），仅存档。** 真机验证链路可用，但实测字幕延迟 ~25 秒，与 v2 在同一拉取通道（`bots/events`）测得的服务端暴露延迟一致，20 秒预算不可达；旁听模式无推送，低延迟需走 v2 的独立入会事件推送。结论见 [docs/SPECTATOR_MODE_CONCLUSION.md](docs/SPECTATOR_MODE_CONCLUSION.md)。会中输入源继续用 [v2](../v2/README.md)。
+
 依据《飞书智能体入会 · 接入手册》「二、旁听模式」实现：Agent 以**你的身份**（用户 OAuth 授权）实时获取会议字幕、会中聊天和参会人进出；**会议里不出现任何机器人**，其他参会者无感知。与 v2（应用身份入会）互补，实现计划见 [docs/SPECTATOR_PLAN.md](docs/SPECTATOR_PLAN.md)。
 
 ## 前置条件（一次性）
@@ -36,7 +38,7 @@ app:
 ```bash
 # 1) 一次性用户授权（浏览器完成，凭据只存本机 data/oauth/，0600）
 python3 -m feishu_spectator login
-python3 -m feishu_spectator.oauth status   # 核对授权状态
+python3 -m feishu_spectator oauth-status   # 核对授权状态
 
 # 2) 列出你当前所在会议（返回长 meeting_id，供 --meeting-id 选择）
 python3 -m feishu_spectator meetings
@@ -58,6 +60,7 @@ python3 -m feishu_spectator recent --limit 20 --show-text
 - 网络抖动/限流/服务端错误 → 指数退避 + 抖动自动恢复；游标被拒时执行一次受控全量重拉（幂等去重），再失败进入终态。
 - token 过期自动刷新（refresh token 一次一用轮换）；刷新失败提示重新 `login`。
 - 旁听模式不能在会上发声；字幕等高频事件服务端按 5 秒/100 条聚合下发，本产品逐条处理。
+- **字幕延迟为服务端暴露延迟**：`bots/events` 拉取通道从发言结束到事件可查约 25–40 秒且随场次波动（v2 于 25 场会议实测中位 ~31s、P95 ~40s，见 [v2 调研](../v2/docs/TRANSCRIPT_LATENCY_INVESTIGATION.md)），客户端轮询已接近最优（~1s 间隔）不是瓶颈。`listen` 停止时与 `status` 均输出最近 200 句的 `caption_latency_seconds`（median/p95/max）供量化核对；若需更低延迟需改用手册「三、独立入会」的事件推送通道（`vc.bot.meeting_activity_v1`，预期 ≈ ASR 出句 + 5 秒聚合）。
 - 会议内容仅存本机，终端输出请按会议授权保管，不要重定向到公开日志。
 
 ## 测试
