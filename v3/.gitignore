@@ -1,0 +1,11 @@
+config.yaml
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+data/
+*.egg-info/
+build/
+dist/
+.coverage
+.ruff_cache/

@@ -1,0 +1,18 @@
+# 复制为 config.yaml 并 chmod 600；只填应用凭据，会议在运行时自动发现。
+app:
+  id: "cli_xxxxxxxxxxxxxxxx"
+  secret: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+http:
+  timeout_seconds: 10
+  request_seconds: 0.7   # events 接口频率上限约 100 次/分钟，最小间隔 0.7 秒
+
+listen:
+  poll_seconds: 1.0
+  cooldown_seconds: 30
+  page_size: 100
+  max_pages_per_cycle: 10
+
+storage:
+  directory: data
+  max_database_bytes: 150000000
