@@ -7,7 +7,7 @@ import time
 from ..adviser import AdviserService
 from ..client import ApiError, StopRequested
 from ..collector import utc_now
-from ..config import ConfigError, Configuration
+from ..config import ConfigError, Configuration, parse_meeting_reference
 from ..diagnostics import Diagnostics
 from ..infrastructure.errors import LifecycleError
 from ..infrastructure.file_lock import FileLock
@@ -67,7 +67,8 @@ class CommandContext:
 
 
 def handle_join(context, args):
-    context.manager.join()
+    meeting_no, link_password = parse_meeting_reference(args.meeting)
+    context.manager.join(meeting_no, args.password or link_password)
     config = context.config
     if (config.llm.backend in ('codex', 'opencode') and config.llm.introduction
             and config.notifications.meeting_comment):

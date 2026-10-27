@@ -50,7 +50,7 @@ class AdviserTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.path = Path(self.tmp.name) / 'config.yaml'
-        self.path.write_text('app:\n  id: synthetic\n  secret: synthetic\nmeeting:\n  meeting_no: "012345678"\n')
+        self.path.write_text('app:\n  id: synthetic\n  secret: synthetic\n')
         self.path.chmod(0o600)
         self.config = load_config(self.path)
         self.config = replace(self.config, llm=replace(self.config.llm, backend='codex', batch_seconds=0, introduction=False))
@@ -60,7 +60,7 @@ class AdviserTests(unittest.TestCase):
         self.addCleanup(self.source.close)
         self.api = BotAPI()
         self.manager = SessionManager(self.source, self.config, self.api, clock=lambda:NOW-10)
-        self.manager.join()
+        self.manager.join('012345678')
         self.source.ensure_meeting(MID,{})
         self.backend = FakeBackend()
         self.model_inputs = []
@@ -424,7 +424,7 @@ class AdviserTests(unittest.TestCase):
         first_uuid=self.sent[0][2]
         self.runner.data.db.execute('UPDATE meetings SET participation=\'paused\' WHERE meeting_id=?',(MID,))
         self.manager.leave()
-        self.manager.join()
+        self.manager.join('012345678')
         self.assertTrue(introduce(self.runner.data,self.manager,clock=lambda:NOW))
         self.assertNotEqual(first_uuid,self.sent[1][2])
         self.assertEqual(self.runner.data.meeting(MID)['participation'],'active')
@@ -447,8 +447,8 @@ class AdviserTests(unittest.TestCase):
         self.path.write_text(self.path.read_text()+'llm:\n  backend: codex\n')
         with patch('feishu_meeting_adviser.__main__.FeishuClient',return_value=self.api), \
              redirect_stdout(io.StringIO()),redirect_stderr(io.StringIO()):
-            self.assertEqual(main(['--config',str(self.path),'join']),0)
-            self.assertEqual(main(['--config',str(self.path),'join']),0)
+            self.assertEqual(main(['--config',str(self.path),'join','012345678']),0)
+            self.assertEqual(main(['--config',str(self.path),'join','012345678']),0)
         self.assertEqual(len(self.sent),1)
         self.assertEqual(self.backend.calls,[])
 
@@ -460,7 +460,7 @@ class AdviserTests(unittest.TestCase):
         self.api.event_failure = ApiError(ErrorKind.BOT_ABSENT, code=120004)
         with patch('feishu_meeting_adviser.__main__.FeishuClient', return_value=self.api), \
              redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-            self.assertEqual(main(['--config', str(self.path), 'join']), 0)
+            self.assertEqual(main(['--config', str(self.path), 'join', '012345678']), 0)
         self.assertEqual(len(self.sent), 2)
         self.assertNotEqual(self.sent[1][2], first_uuid)
         self.assertEqual(self.runner.data.meeting(MID)['participation'], 'active')

@@ -87,8 +87,8 @@ class HarnessAdapterTests(unittest.TestCase):
 
     def test_plain_description_does_not_require_oauth(self):
         config = SimpleNamespace(timeout_seconds=10,request_seconds=.7,
-            credentials=SimpleNamespace(app_id='x',app_secret='y'),meeting_no='012345678')
-        session = {'joined_at':100}
+            credentials=SimpleNamespace(app_id='x',app_secret='y'))
+        session = {'joined_at':100,'meeting_no':'012345678'}
         client = MaterialAdapter(
             config, Path('/unused'), '只有本地文字', session, threading.Event())
         self.assertIsNone(client.oauth_manager)
@@ -124,7 +124,7 @@ class HarnessAdapterTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             config_path = root/'config.yaml'
-            config_path.write_text('app:\n  id: synthetic\n  secret: synthetic\nmeeting:\n  meeting_no: "012345678"\n')
+            config_path.write_text('app:\n  id: synthetic\n  secret: synthetic\n')
             config_path.chmod(0o600)
             description,role = root/'description.md',root/'role.md'
             description.write_text('本地背景')

@@ -1,4 +1,4 @@
-"""Explicit local CLI. Credentials and meeting number are read only from YAML."""
+"""Explicit local CLI. Credentials are read only from YAML; the meeting comes from join arguments."""
 import argparse
 from dataclasses import replace
 from pathlib import Path
@@ -21,7 +21,11 @@ def parser():
     root.add_argument('--version', action='version', version=__version__)
     root.add_argument('--config', type=Path, default=DEFAULT_CONFIG, help='private local YAML configuration')
     commands = root.add_subparsers(dest='command')
-    commands.add_parser('join', help='explicitly join the configured meeting')
+    join = commands.add_parser('join', help='explicitly join a meeting')
+    join.add_argument('meeting',
+                      help='nine-digit meeting number or https://vc.feishu.cn/j/... join link')
+    join.add_argument('--password', default='',
+                      help='meeting password; overrides any pwd carried in the link')
     leave = commands.add_parser('leave', help='explicitly leave the saved bot meeting')
     leave.add_argument('--retry-uncertain', action='store_true', help='retry only after checking meeting UI')
     collect = commands.add_parser('collect', help='collect continuously; Ctrl-C stops polling only')

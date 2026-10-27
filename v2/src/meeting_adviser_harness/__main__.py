@@ -24,6 +24,8 @@ from feishu_meeting_adviser.storage import StorageError, private_directory
 from feishu_meeting_adviser.adapters.persistence.factory import StorageFactory
 from .adapters import MaterialAdapter, SessionAdapter, TranscriptAdapter
 
+HARNESS_MEETING_NO = '012345678'
+
 
 def _read_text(path: Path, label: str, maximum: int = 1_000_000) -> str:
     try:
@@ -156,7 +158,7 @@ class Harness:
 
     def _session(self, mid):
         now = int(time.time())
-        return {'phase':'joined', 'meeting_no':self.config_factory().meeting_no,
+        return {'phase':'joined', 'meeting_no':HARNESS_MEETING_NO,
             'meeting_id':mid, 'bot_user_id':'harness-bot', 'joined_at':now,
             'join_instance':'harness-' + uuid4().hex, 'at':datetime.now(timezone.utc).isoformat()}
 

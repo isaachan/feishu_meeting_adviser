@@ -137,7 +137,7 @@ def _validate_event_binding(config, session, event, event_id):
         vchat = event.get('vchat', {})
         url = urlsplit(vchat.get('meeting_url', ''))
         if (url.scheme != 'https' or url.hostname != 'vc.feishu.cn'
-                or url.path.rstrip('/') != '/j/' + config.meeting_no):
+                or url.path.rstrip('/') != '/j/' + session['meeting_no']):
             raise ValueError()
         start, end = _event_time(event.get('start_time')), _event_time(event.get('end_time'))
         tolerance = settings.binding_tolerance_seconds
@@ -163,7 +163,7 @@ def _discover_event_id(config, session, client, deadline, emit):
             client.find_event, 'event_discovery', 'bound_calendar', settings.calendar_id,
             datetime.fromtimestamp(cursor, timezone.utc).isoformat(),
             datetime.fromtimestamp(window_end, timezone.utc).isoformat(),
-            config.meeting_no)
+            session['meeting_no'])
         if result.get('truncated_possible'):
             emit({'kind':'event_discovery','status':'failed',
                   'reason':'material_event_search_truncated'})

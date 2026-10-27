@@ -181,7 +181,7 @@ class LLMTests(unittest.TestCase):
 
     def test_llm_config_preserves_legacy_defaults_and_validates_settings(self):
         path = self.root / 'config.yaml'
-        base = 'app:\n  id: synthetic\n  secret: synthetic\nmeeting:\n  meeting_no: "012345678"\n'
+        base = 'app:\n  id: synthetic\n  secret: synthetic\n'
         path.write_text(base)
         path.chmod(0o600)
         self.assertEqual(load_config(path).llm.backend, 'rule')

@@ -20,7 +20,7 @@ class DiagnosticsRetentionTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.config_path = self.root / 'config.yaml'
-        self.config_path.write_text('app:\n  id: synthetic\n  secret: private-secret\nmeeting:\n  meeting_no: "012345678"\n')
+        self.config_path.write_text('app:\n  id: synthetic\n  secret: private-secret\n')
         self.config_path.chmod(0o600)
         self.config = load_config(self.config_path)
         Store.initialize(self.config.data_directory / 'source.sqlite3')

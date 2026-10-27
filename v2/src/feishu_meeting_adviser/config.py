@@ -5,6 +5,7 @@ import math
 from pathlib import Path
 import re
 from typing import Any
+from urllib.parse import parse_qsl, urlsplit
 import yaml
 from .client import Credentials
 from .collector import ScanSettings
@@ -12,9 +13,45 @@ from .llm import LLMSettings
 
 DEFAULT_CONFIG = Path('config.yaml')
 
+MEETING_LINK_HOST = 'vc.feishu.cn'
+
 
 class ConfigError(Exception):
     pass
+
+
+def validate_meeting_no(value) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r'[0-9]{9}', value):
+        raise ConfigError('meeting number must be a quoted nine-digit string')
+    return value
+
+
+def parse_meeting_reference(value) -> tuple[str, str]:
+    """Accept a nine-digit meeting number or an https vc.feishu.cn/j/ join link."""
+    if not isinstance(value, str):
+        raise ConfigError('join requires a meeting number or meeting link')
+    text = value.strip()
+    if '://' not in text:
+        return validate_meeting_no(text), ''
+    try:
+        url = urlsplit(text)
+    except ValueError:
+        raise ConfigError('invalid meeting link') from None
+    if (url.scheme != 'https' or url.hostname != MEETING_LINK_HOST
+            or url.username or url.password or url.fragment):
+        raise ConfigError(
+            f'meeting link must be an https://{MEETING_LINK_HOST}/j/ join link')
+    match = re.fullmatch(r'/j/([0-9]{9})', url.path.rstrip('/'))
+    if not match:
+        raise ConfigError('meeting link must reference a nine-digit meeting number')
+    passwords = [item for key, item in parse_qsl(url.query, keep_blank_values=True)
+                 if key == 'pwd' and item]
+    if len(set(passwords)) > 1:
+        raise ConfigError('meeting link carries conflicting passwords')
+    password = passwords[-1] if passwords else ''
+    if len(password) > 64 or not password.isprintable():
+        raise ConfigError('invalid password in meeting link')
+    return match.group(1), password
 
 
 class ConfigSection:
@@ -218,8 +255,6 @@ class Configuration:
     path: Path
     fingerprint: str
     credentials: Credentials
-    meeting_no: str
-    password: str
     data_directory: Path
     scan: ScanSettings = field(default_factory=ScanSettings)
     timeout_seconds: float = 10
@@ -253,7 +288,7 @@ def load_config(path: Path = DEFAULT_CONFIG) -> Configuration:
         raise ConfigError('configuration must be a mapping')
     document = ConfigDocument(raw)
     document.reject_unknown({
-        'app', 'meeting', 'http', 'collector', 'storage', 'runtime', 'llm',
+        'app', 'http', 'collector', 'storage', 'runtime', 'llm',
         'meeting_context',
         'notifications',
     })
@@ -261,12 +296,6 @@ def load_config(path: Path = DEFAULT_CONFIG) -> Configuration:
     app.reject_unknown({'id', 'secret'})
     credentials = Credentials(
         app.string('id', required=True), app.string('secret', required=True))
-    meeting = document.section('meeting')
-    meeting.reject_unknown({'meeting_no', 'password'})
-    meeting_no = meeting.string('meeting_no')
-    if len(meeting_no) != 9 or not meeting_no.isascii() or not meeting_no.isdecimal():
-        raise ConfigError('meeting.meeting_no must be a quoted nine-digit string')
-    password = meeting.string('password')
     collector = document.section('collector')
     collector.reject_unknown(ScanSettings.__dataclass_fields__)
     try:
@@ -282,7 +311,7 @@ def load_config(path: Path = DEFAULT_CONFIG) -> Configuration:
     if llm.backend == 'rule' and notifications.recipients:
         raise ConfigError('notifications.recipients requires a model backend')
     return Configuration(
-        path, fingerprint, credentials, meeting_no, password, storage.directory, scan,
+        path, fingerprint, credentials, storage.directory, scan,
         timeout_seconds=http.timeout_seconds,
         request_seconds=http.request_seconds,
         poll_seconds=runtime.poll_seconds,

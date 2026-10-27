@@ -23,7 +23,7 @@ class SQLiteFoundationTests(unittest.TestCase):
 
     def config(self):
         path = self.root / 'config.yaml'
-        path.write_text('app:\n  id: synthetic\n  secret: synthetic\nmeeting:\n  meeting_no: "012345678"\n')
+        path.write_text('app:\n  id: synthetic\n  secret: synthetic\n')
         path.chmod(0o600)
         return load_config(path)
 
@@ -81,7 +81,7 @@ class SQLiteFoundationTests(unittest.TestCase):
         source = factory.source()
         source.save_session(digest(config.credentials.app_id), {
             'phase': 'joined', 'meeting_id': '987654321012345678',
-            'meeting_no': config.meeting_no,
+            'meeting_no': '012345678',
         })
         source.ensure_meeting('987654321012345678', {})
         source.close()

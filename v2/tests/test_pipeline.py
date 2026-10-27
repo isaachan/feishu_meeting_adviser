@@ -116,12 +116,12 @@ class PipelineTests(unittest.TestCase):
 
     def source(self, diagnose=None):
         path = self.root/'config.yaml'
-        path.write_text('app:\n  id: synthetic\n  secret: synthetic-secret\nmeeting:\n  meeting_no: "012345678"\n')
+        path.write_text('app:\n  id: synthetic\n  secret: synthetic-secret\n')
         path.chmod(0o600)
         config = load_config(path)
         api = BotAPI()
         manager = SessionManager(self.store,config,api)
-        manager.join()
+        manager.join('012345678')
         return MeetingSource(self.store,manager,api,diagnose=diagnose)
 
     def test_diagnostic_failure_preserves_already_committed_page(self):
@@ -188,5 +188,5 @@ class PipelineTests(unittest.TestCase):
         manager.reset_uncertain(confirmed_bot_left=True)
         self.assertEqual(manager.session()['phase'],'left')
         api.failure = None
-        manager.join()
+        manager.join('012345678')
         self.assertEqual(manager.session()['phase'],'joined')

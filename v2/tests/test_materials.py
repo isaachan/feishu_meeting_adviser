@@ -74,7 +74,7 @@ class MaterialsTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.path = Path(self.temp.name)/'config.yaml'
-        self.path.write_text('app:\n  id: synthetic\n  secret: synthetic\nmeeting:\n  meeting_no: "012345678"\n')
+        self.path.write_text('app:\n  id: synthetic\n  secret: synthetic\n')
         self.path.chmod(0o600)
         self.config = load_config(self.path)
         role_path = self.path.parent/'synthetic-role.md'
@@ -91,7 +91,7 @@ class MaterialsTests(unittest.TestCase):
         self.sent, self.previews = [], []
         self.api.send_message = lambda mid,text,message_uuid: self.sent.append((mid,text,message_uuid))
         self.manager = SessionManager(self.source,self.config,self.api,clock=lambda:NOW-10)
-        self.session = self.manager.join()
+        self.session = self.manager.join('012345678')
         self.source.ensure_meeting(MID,{})
         self.runners = []
         self.addCleanup(lambda:[runner.close() for runner in self.runners])

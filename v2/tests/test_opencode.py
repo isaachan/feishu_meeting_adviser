@@ -144,7 +144,7 @@ class OpenCodeTests(unittest.TestCase):
         self.assertFalse(any(p.is_file() for p in backend.runtime.rglob('*')))
 
     def test_model_configuration_defaults_cli_override_and_diagnostics_are_backend_specific(self):
-        path=self.root/'config.yaml';path.write_text('app:\n  id: synthetic\n  secret: synthetic\nmeeting:\n  meeting_no: "012345678"\nllm:\n  backend: opencode\n');path.chmod(0o600)
+        path=self.root/'config.yaml';path.write_text('app:\n  id: synthetic\n  secret: synthetic\nllm:\n  backend: opencode\n');path.chmod(0o600)
         config=load_config(path)
         self.assertEqual(config.llm.opencode_model,'zai-coding-plan/glm-5.3')
         self.assertEqual(config.llm.executable,'codex')

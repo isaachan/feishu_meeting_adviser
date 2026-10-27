@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from .client import ApiError, ErrorKind, FeishuClient, StopRequested
 from .collector import Collector, utc_now
-from .config import ConfigError, Configuration, file_fingerprint
+from .config import ConfigError, Configuration, file_fingerprint, validate_meeting_no
 from .models import SourceState, Status, digest
 from .recovery import RecoveryLoop
 from .storage import StorageError, Store
@@ -33,8 +33,8 @@ class SessionManager:
         session = self.session()
         if not session or not session.get('meeting_id'):
             raise LifecycleError('no verified product meeting session; run join first')
-        if require_joined and (session['phase'] != 'joined' or session['meeting_no'] != self.config.meeting_no):
-            raise LifecycleError('saved bot is not joined to configured meeting; check session before proceeding')
+        if require_joined and session['phase'] != 'joined':
+            raise LifecycleError('saved bot is not joined to a meeting; run join first')
         return session
 
     def _bot_absent(self, session) -> bool:
@@ -53,16 +53,19 @@ class SessionManager:
         self.store.save_session(self.app_key, {**session, 'phase': 'left',
             'left_at': utc_now(self.clock), 'leave_reason': reason})
 
-    def join(self) -> dict:
+    def join(self, meeting_no: str, password: str = '') -> dict:
+        validate_meeting_no(meeting_no)
+        if not isinstance(password, str):
+            raise ConfigError('meeting password must be a string')
         with self.application_lock(), FileLock(self.config.data_directory / 'locks' / 'adviser.lock'):
             current = self.session()
             if current and current['phase'] == 'joined':
                 if self._bot_absent(current):
                     self._save_left(current, 'bot_absence_verified')
-                elif current['meeting_no'] == self.config.meeting_no:
+                elif current['meeting_no'] == meeting_no:
                     return current
                 else:
-                    raise LifecycleError('bot is still in another meeting; run leave before joining the configured meeting')
+                    raise LifecycleError('bot is still in another meeting; run leave before joining the requested meeting')
                 current = self.session()
             if current and current['phase'] == 'leave_uncertain' and current.get('meeting_id'):
                 if self._bot_absent(current):
@@ -70,14 +73,14 @@ class SessionManager:
                     current = self.session()
             if current and current['phase'] in ('join_pending', 'join_uncertain', 'leave_uncertain'):
                 raise LifecycleError('bot session outcome uncertain; check meeting UI before retrying')
-            pending = {'phase': 'join_pending', 'meeting_no': self.config.meeting_no, 'at': utc_now(self.clock),
+            pending = {'phase': 'join_pending', 'meeting_no': meeting_no, 'at': utc_now(self.clock),
                        'join_instance':str(uuid4())}
             self.store.save_session(self.app_key, pending)
             try:
-                result = self.client.join(self.config.meeting_no, self.config.password)
+                result = self.client.join(meeting_no, password)
                 data = result.get('data') if isinstance(result, dict) else None
                 meeting = data.get('meeting') if isinstance(data, dict) else None
-                if not isinstance(meeting, dict) or meeting.get('meeting_no') != self.config.meeting_no:
+                if not isinstance(meeting, dict) or meeting.get('meeting_no') != meeting_no:
                     raise LifecycleError('join response meeting mismatch; outcome uncertain, check meeting UI')
                 mid = meeting.get('id')
                 if not isinstance(mid, str) or not mid.isascii() or not mid.isdecimal() or len(mid) <= 9:

@@ -17,7 +17,7 @@ codex login status
 
 若未安装依赖或需要新环境，可先执行 `python3 -m venv .venv` 和 `source .venv/bin/activate`。模型接入已在 Codex CLI `0.162.0` 核对；需要 `codex` 在 PATH 中且已用 ChatGPT 账号登录。产品检查订阅认证，不会自动改用 API key。
 
-仅在还没有本机配置时复制 [config.example.yaml](config.example.yaml) 为 `config.yaml`，填写应用凭据、9 位会议号及密码，并执行 `chmod 600 config.yaml`。已有配置不要覆盖。可以追加：
+仅在还没有本机配置时复制 [config.example.yaml](config.example.yaml) 为 `config.yaml`，填写应用凭据并执行 `chmod 600 config.yaml`；会议号/会议链接和密码不写入配置，`join` 时通过参数传入。已有配置不要覆盖。可以追加：
 
 ```yaml
 llm:
@@ -69,14 +69,16 @@ meeting_context:
 
 两个终端都在同一台机器、同一个 `v2/` 目录和虚拟环境中。参会者无需运行代码。主持人在采集和模型处理前口头说明 bot 的作用及字幕保存和模型传输。
 
-测试时也可直接运行本目录的 `./join`、`./collect` 和 `./consume`；`./join` 会先重置旧会话，`./consume` 使用持续消费模式。
+测试时也可直接运行本目录的 `./join`、`./collect` 和 `./consume`；`./join` 会先重置旧会话，会议号或链接同样跟在 `./join` 后传入，`./consume` 使用持续消费模式。
 
 终端 A：
 
 ```bash
-python3 -m feishu_meeting_adviser join
+python3 -m feishu_meeting_adviser join 012345678
 python3 -m feishu_meeting_adviser collect
 ```
+
+`join` 的参数可以是 9 位会议号（加引号保留前导 0），也可以是完整的 `https://vc.feishu.cn/j/<会议号>` 入会链接；链接中的 `pwd` 会议密码会自动使用，也可用 `--password` 显式指定或覆盖。
 
 `collect` 自行持续轮询，默认每轮完成后等待 0.7 秒，HTTP 请求最短间隔同为 0.7 秒；实际轮询周期还包括请求与处理耗时。默认实时打印新入库字幕、说话人和时间，也打印修订/冲突候选；使用 `--no-text` 可关闭正文输出。终端正文是额外的本机副本，按会议授权保管。
 
@@ -137,7 +139,7 @@ python3 -m feishu_meeting_adviser resolve-reply --uuid <UUID> --outcome cancel
 
 介绍发送未确认时暂停模型处理，核对后再恢复；同一次入会不会重复介绍，离会后重新入会会重新介绍。默认不自动重发不确定消息，避免重复发言。
 
-下一场会议先停止旧 collect 与 consume，修改配置中的会议号，再运行 `join`，无需例行 reset-session。`join` 会用已有字幕接口核对旧 bot：确认已不在会中则重新入会；同一会议仍可用则复用身份，不重复介绍；如果 bot 仍在另一场会议中，join 提示先显式运行 `leave`，再运行 `join`；join 不会替你离开另一场会议。9 位会议号重复使用时，旧 bot 已离会会取得新的内部会议 ID 和入会身份。
+下一场会议先停止旧 collect 与 consume，再运行 `join <新会议号或入会链接>`，无需例行 reset-session。`join` 会用已有字幕接口核对旧 bot：确认已不在会中则重新入会；同一会议仍可用则复用身份，不重复介绍；如果 bot 仍在另一场会议中，join 提示先显式运行 `leave`，再运行 `join`；join 不会替你离开另一场会议。9 位会议号重复使用时，旧 bot 已离会会取得新的内部会议 ID 和入会身份。
 
 `leave` 返回 121104 时也会核对 bot 是否已不在会中，能确认则自动完成会话清理。权限/网络错误、缺少内部 ID 的不确定入会或无法证实 bot 已离会时保留状态并报错；reset-session 仅保留为人工核对后的异常恢复入口。自动恢复不删除旧会议字幕和消费资料。
 

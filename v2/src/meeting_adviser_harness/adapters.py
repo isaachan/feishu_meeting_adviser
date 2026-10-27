@@ -38,7 +38,7 @@ class MaterialAdapter:
             'description': '',
             'description_rich': self.description,
             'attachments': [],
-            'vchat': {'meeting_url': 'https://vc.feishu.cn/j/' + self.config.meeting_no},
+            'vchat': {'meeting_url': 'https://vc.feishu.cn/j/' + self.session['meeting_no']},
             'start_time': {'timestamp': str(joined - 60)},
             'end_time': {'timestamp': str(joined + 86400)},
         }

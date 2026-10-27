@@ -17,7 +17,7 @@ action, root = sys.argv[1], Path(sys.argv[2])
 mid='987654321012345678'
 path=root/'config.yaml'
 if not path.exists():
-    path.write_text('app:\n  id: synthetic\n  secret: synthetic\nmeeting:\n  meeting_no: "012345678"\n'
+    path.write_text('app:\n  id: synthetic\n  secret: synthetic\n'
                     'llm:\n  backend: codex\n  batch_seconds: 0\n  introduction: false\n  timeout_seconds: 30\n')
     path.chmod(0o600)
 
@@ -45,7 +45,7 @@ config=load_config(path)
 Store.initialize(config.data_directory/'source.sqlite3')
 source=Store(config.data_directory/'source.sqlite3')
 manager=SessionManager(source,config,api)
-manager.join()
+manager.join('012345678')
 source.ensure_meeting(mid,{})
 if source.caption(mid,'s:1') is None:
     stamp=utc_now()

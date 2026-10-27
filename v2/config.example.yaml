@@ -1,11 +1,9 @@
 # 产品配置示例：仅在没有 config.yaml 时复制，已有本机配置不要覆盖。
 # 使用当前配置结构；未发布版本不保留旧字段兼容路径。
+# 会议号/会议链接与密码不写入配置，join 时通过参数传入。
 app:
   id: ""
   secret: ""
-meeting:
-  meeting_no: ""                       # 9 位会议号，加引号保留前导 0
-  password: ""
 http:
   timeout_seconds: 10
   request_seconds: 0.7           # 每次 HTTP 请求最短间隔；events 文档上限 100 次/分钟

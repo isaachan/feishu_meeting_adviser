@@ -30,14 +30,14 @@ class CollectOutputTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.config_path = Path(self.tmp.name) / 'config.yaml'
-        self.config_path.write_text('app:\n  id: synthetic\n  secret: synthetic-secret\nmeeting:\n  meeting_no: "012345678"\n')
+        self.config_path.write_text('app:\n  id: synthetic\n  secret: synthetic-secret\n')
         self.config_path.chmod(0o600)
         self.config = load_config(self.config_path)
         Store.initialize(self.config.data_directory / 'source.sqlite3')
         self.store = Store(self.config.data_directory / 'source.sqlite3')
         self.addCleanup(self.store.close)
         self.api = BotAPI()
-        SessionManager(self.store, self.config, self.api).join()
+        SessionManager(self.store, self.config, self.api).join('012345678')
         self.caption_event = event(text='合成测试字幕', speaker={'id': 'synthetic-speaker', 'user_name': '合成说话人'},
                                    start_time_ms='1791849600000', end_time_ms='1791849600100')
 

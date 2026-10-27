@@ -21,7 +21,7 @@ class DeadlineRuleTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.config_path = Path(self.tmp.name) / 'config.yaml'
-        self.config_path.write_text('app:\n  id: synthetic\n  secret: synthetic-secret\nmeeting:\n  meeting_no: "012345678"\n')
+        self.config_path.write_text('app:\n  id: synthetic\n  secret: synthetic-secret\n')
         self.config_path.chmod(0o600)
         self.config = load_config(self.config_path)
         Store.initialize(self.config.data_directory / 'source.sqlite3')
@@ -29,7 +29,7 @@ class DeadlineRuleTests(unittest.TestCase):
         self.addCleanup(self.store.close)
         self.api = BotAPI()
         self.manager = SessionManager(self.store, self.config, self.api)
-        self.manager.join()
+        self.manager.join('012345678')
         self.store.ensure_meeting(MID, {})
         self.caption = Caption(MID, 's:1', '项目截止日期是明天。', '2026-10-13T00:00:00Z',
                                speaker_name='合成说话人甲', source_revision=1)

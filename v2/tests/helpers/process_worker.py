@@ -35,7 +35,7 @@ if action == 'crash-consumer':
 if action in ('source','source-once'):
     path = root / 'config.yaml'
     if not path.exists():
-        path.write_text('app:\n  id: synthetic-app\n  secret: synthetic-secret\nmeeting:\n  meeting_no: "012345678"\nhttp:\n  timeout_seconds: 1\n')
+        path.write_text('app:\n  id: synthetic-app\n  secret: synthetic-secret\nhttp:\n  timeout_seconds: 1\n')
         path.chmod(0o600)
     class API:
         def __init__(self):
@@ -56,7 +56,7 @@ if action in ('source','source-once'):
     Store.initialize(config.data_directory / 'source.sqlite3')
     store = Store(config.data_directory / 'source.sqlite3')
     manager = SessionManager(store,config,api)
-    manager.join()  # Existing joined session is reused when restarting.
+    manager.join('012345678')  # Existing joined session is reused when restarting.
     store.close()
     with patch('feishu_meeting_adviser.__main__.FeishuClient',return_value=api), \
          patch('feishu_meeting_adviser.lifecycle.FeishuClient',return_value=api):
