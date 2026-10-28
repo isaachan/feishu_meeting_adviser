@@ -111,7 +111,7 @@ python3 -m feishu_meeting_adviser leave
 ./collect-local /path/to/growing.vemedia
 ```
 
-`./collect-local` 与 `./join`、`./collect`、`./consume` 并列，内部用 v1 虚拟环境运行 `scripts/collect-local.py`（复用 v1 的解析/解码/本地 STT），再把识别结果交给本目录的 `collect --captions -`；无需手动切换解释器。默认 `--stt-provider local`，模型目录默认为 `v2/models/sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05`（162 MB，从 v1 复制，已加入 .gitignore），两个参数仍可显式覆盖。
+`./collect-local` 与 `./join`、`./collect`、`./consume` 并列，内部用 v1 虚拟环境运行 `scripts/collect-local.py`（复用 v1 的解析/解码/本地 STT），再把识别结果交给本目录的 `collect --captions -`；无需手动切换解释器。默认 `--stt-provider local`，模型目录默认为 `v2/models/sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05`（模型不入库：新 clone 后首次使用自动从官方 release 下载，约 127 MiB，SHA-256 校验通过才落盘；也可先运行 `./collect-local --download-model` 预取）。两个参数仍可显式覆盖。
 
 行为与边界：
 

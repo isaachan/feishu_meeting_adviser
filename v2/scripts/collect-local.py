@@ -13,22 +13,77 @@ Run with the v1 virtualenv interpreter when using --stt-provider local, e.g.:
       --stt-provider local \
       --local-model-dir v1/models/sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05
 
-After `./join <meeting>`; `./consume --watch` keeps working unchanged.
+After `./join <meeting>`; `./consume --watch` keeps working unchanged. The model
+directory is not committed: on first local use the script downloads the official
+sherpa-onnx release once (checksum-verified); `--download-model` pre-fetches it.
 """
 import argparse
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
 import queue
+import shutil
 import subprocess
 import sys
+import tarfile
 import time
+import urllib.request
 from uuid import uuid4
 
 V2_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_V1_SCRIPTS = Path(__file__).resolve().parents[2] / 'v1' / 'scripts'
-DEFAULT_MODEL_DIR = V2_ROOT / 'models' / 'sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05'
+MODEL_NAME = 'sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05'
+DEFAULT_MODEL_DIR = V2_ROOT / 'models' / MODEL_NAME
+MODEL_URL = ('https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/'
+             + MODEL_NAME + '.tar.bz2')
+MODEL_SHA256 = 'fa5f63d618e5a01526e275a358bb7772e403f84808a4769fba52cffd8160bf74'
+
+
+def model_files_present(model_dir: Path) -> bool:
+    return all((model_dir / name).is_file() for name in
+               ('tokens.txt', 'encoder.int8.onnx', 'decoder.onnx', 'joiner.int8.onnx'))
+
+
+def ensure_model(model_dir: Path) -> Path:
+    if model_files_present(model_dir):
+        return model_dir
+    parent = model_dir.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    part = parent / f'.{model_dir.name}.{os.getpid()}.part'
+    digest = hashlib.sha256()
+    print(f'model missing; downloading {MODEL_URL}', file=sys.stderr, flush=True)
+    with urllib.request.urlopen(MODEL_URL, timeout=60) as response, part.open('wb') as out:
+        total = int(response.headers.get('Content-Length') or 0)
+        done = 0
+        while True:
+            chunk = response.read(1 << 20)
+            if not chunk:
+                break
+            out.write(chunk)
+            digest.update(chunk)
+            done += len(chunk)
+            if total:
+                print(f'  {done >> 20}/{total >> 20} MiB', end='\r', file=sys.stderr, flush=True)
+        print(file=sys.stderr)
+    if digest.hexdigest() != MODEL_SHA256:
+        part.unlink(missing_ok=True)
+        raise SystemExit('error: model checksum mismatch; partial download removed, retry later')
+    staging = parent / f'.{model_dir.name}.{os.getpid()}.extract'
+    if staging.exists():
+        shutil.rmtree(staging)
+    with tarfile.open(part, 'r:bz2') as tar:
+        tar.extractall(staging, filter='data')
+    part.unlink(missing_ok=True)
+    extracted = staging / model_dir.name
+    if not model_files_present(extracted):
+        shutil.rmtree(staging, ignore_errors=True)
+        raise SystemExit('error: downloaded archive lacks the expected model files')
+    extracted.replace(model_dir)
+    shutil.rmtree(staging, ignore_errors=True)
+    print(f'model ready: {model_dir}', file=sys.stderr, flush=True)
+    return model_dir
 
 
 def iso_utc(seconds: float) -> str:
@@ -46,10 +101,12 @@ def recording_start(source: Path, override: float | None) -> float:
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('vemedia', type=Path, help='path to the actively growing .vemedia recording')
+    ap.add_argument('vemedia', nargs='?', type=Path, help='path to the actively growing .vemedia recording')
     ap.add_argument('--stt-provider', choices=('mock', 'local'), default='local')
     ap.add_argument('--local-model-dir', type=Path, default=DEFAULT_MODEL_DIR,
                     help=f'streaming sherpa-onnx model directory (default: {DEFAULT_MODEL_DIR})')
+    ap.add_argument('--download-model', action='store_true',
+                    help='download the model if missing, then exit')
     ap.add_argument('--local-threads', type=int, default=2)
     ap.add_argument('--speaker', default='local', help='speaker label attached to forwarded captions')
     ap.add_argument('--poll-ms', type=int, default=100)
@@ -71,6 +128,12 @@ def main():
     if args.poll_ms <= 0 or args.missing_grace <= 0 or args.max_chunk_wait_ms <= 0:
         ap.error('poll-ms, missing-grace and max-chunk-wait-ms must be positive')
 
+    if args.download_model:
+        ensure_model(args.local_model_dir.expanduser().resolve())
+        return 0
+    if not args.vemedia:
+        ap.error('vemedia path required unless using --download-model')
+
     sys.path.insert(0, str(args.v1_scripts.resolve()))
     from stream_stt_mock import FFmpegDecoder, PCMChunker, VemediaParser, ffmpeg_executable
     from stt_providers import SAMPLE_RATE, create_stt_session
@@ -81,6 +144,8 @@ def main():
     if not source.exists():
         ap.error(f'vemedia file not found: {source}')
     base = recording_start(source, args.recording_start)
+    if args.stt_provider == 'local':
+        ensure_model(args.local_model_dir.expanduser().resolve())
 
     collect_args = [str(args.python), '-m', 'feishu_meeting_adviser']
     if args.config:
