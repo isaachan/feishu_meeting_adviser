@@ -13,3 +13,4 @@ venv/
 .coverage
 coverage.xml
 htmlcov/
+models/

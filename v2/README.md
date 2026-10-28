@@ -102,6 +102,24 @@ python3 -m feishu_meeting_adviser leave
 
 重启先启动 `collect`，再启动 `consume`；输入、任务、暂停状态和发送记录从本机数据库恢复。同一数据目录只允许一个采集进程和一个模型消费者。采集的定期清理与模型消费共用维护锁，遇到短暂占用会等待，Ctrl-C 可中断等待。
 
+## 本地 .vemedia + STT 字幕输入
+
+飞书字幕事件接口处于灰度、不稳定时，可改用本地录制音频做输入：主持人用飞书客户端开启本地录制（产生持续增长的 `.vemedia` 文件），复用 v1 的增量解析 + FFmpeg 解码 + 本地 sherpa-onnx 流式 STT，把每句**最终**识别结果作为一条字幕交给 `collect`。音频不出本机，只有识别文本进入产品存储；partial 中间结果不转发。`join`、`leave`、会中回答与 `consume` 不变，仍走飞书 API。
+
+```bash
+# 先 ./join <会议号或链接>；模型终端 ./consume --watch 照常
+./collect-local /path/to/growing.vemedia
+```
+
+`./collect-local` 与 `./join`、`./collect`、`./consume` 并列，内部用 v1 虚拟环境运行 `scripts/collect-local.py`（复用 v1 的解析/解码/本地 STT），再把识别结果交给本目录的 `collect --captions -`；无需手动切换解释器。默认 `--stt-provider local`，模型目录默认为 `v2/models/sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05`（162 MB，从 v1 复制，已加入 .gitignore），两个参数仍可显式覆盖。
+
+行为与边界：
+
+- 说话人无法从混音区分，字幕统一标记 `--speaker`（默认 `local`）；`end_time` 按 `.vemedia` 文件创建时刻 + 音频偏移换算（可用 `--recording-start` 覆盖）。无时间的字幕只作上下文，不会触发回答。
+- 每句使用 `run:segment` 稳定句子 ID，重复投递不重复入库；识别文本变化按既有修订/冲突规则处理。
+- 底层实现为 `collect --captions <PATH|->`：从文件或标准输入逐行读取 JSONL（`text` 必填，`id`/`speaker`/`language`/`start_time`/`end_time` 可选），完全不轮询飞书事件接口。本地输入与轮询采集共用应用/会议锁，同一数据目录不能同时运行；混用两种输入会使同一发言产生两份内容不同的字幕，不建议在同一会议交替使用。
+- 生产脚本输出格式错误时进入 `action_required` 并停止，不静默跳过；Ctrl-C 干净停止采集（源文件消失约 10 秒后自动结束）。
+
 ## 本地 LLM harness
 
 无需创建会议或真人发言，可以用独立的 `meeting_adviser_harness` 包测试角色、会议描述、在线文档背景和多人对话。它持续接收本地字幕，后台直接运行产品的 `AdviserRunner`；上下文预算、批处理、模型调用、证据检查、过期和发送前复核与正式 consume 共用，只有日程、字幕和发送三个外部适配器改为本地文件、终端输入和终端输出。

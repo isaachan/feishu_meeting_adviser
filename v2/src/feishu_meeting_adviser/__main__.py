@@ -32,6 +32,10 @@ def parser():
     collect.add_argument('--once', action='store_true', help='one successful page-budget cycle (may leave pending pages)')
     collect.add_argument('--no-text', dest='show_text', action='store_false', default=True,
                          help='do not print caption text, speakers or timestamps')
+    collect.add_argument('--captions', metavar='PATH',
+                         help="read local JSONL caption lines from PATH ('-' for stdin) instead of polling Feishu events")
+    collect.add_argument('--speaker', default='local',
+                         help='speaker label for local captions without a speaker field (default: local)')
     status = commands.add_parser('status', help='show safe session and backlog statistics')
     status.add_argument('--consumer')
     consume = commands.add_parser('consume', help='consume with the configured model backend or the fixed test rule')

@@ -1,6 +1,7 @@
 """Independent command handlers over lazily constructed CLI dependencies."""
 from dataclasses import dataclass, field
 import json
+from pathlib import Path
 import sys
 import time
 
@@ -13,6 +14,7 @@ from ..infrastructure.errors import LifecycleError
 from ..infrastructure.file_lock import FileLock
 from ..infrastructure.signals import stop_on_signals
 from ..lifecycle import MeetingSource, SessionManager
+from ..local_source import LocalCaptionSource
 from ..maintenance import Maintenance
 from ..models import SourceState, digest
 from ..reply_sender import introduce
@@ -115,6 +117,8 @@ def _print_caption(kind, caption):
 
 
 def handle_collect(context, args):
+    if getattr(args, 'captions', None):
+        return _handle_collect_local(context, args)
     source = MeetingSource(
         context.store,
         context.manager,
@@ -133,6 +137,32 @@ def handle_collect(context, args):
             return 1 if status.state == SourceState.ACTION_REQUIRED else 0
     finally:
         source.stop()
+
+
+def _handle_collect_local(context, args):
+    if args.once:
+        raise ConfigError('--once is not supported together with --captions')
+    if args.captions == '-':
+        stream = sys.stdin
+    else:
+        stream = Path(args.captions).expanduser().open('r', encoding='utf-8')
+    source = LocalCaptionSource(
+        context.store,
+        context.manager,
+        speaker=args.speaker,
+        diagnose=context.diagnostics.write,
+        on_caption=_print_caption if args.show_text else None,
+        stream=stream,
+    )
+    try:
+        print('Collecting local caption input to private product storage; Ctrl-C stops collection only, '
+              'not the meeting.', file=sys.stderr)
+        status = source.run()
+        print(json.dumps({'state': status.state.value, 'reason': status.reason}))
+        return 1 if status.state == SourceState.ACTION_REQUIRED else 0
+    finally:
+        if stream is not sys.stdin:
+            stream.close()
 
 
 def handle_status(context, args):
