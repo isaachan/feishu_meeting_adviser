@@ -48,29 +48,29 @@ def load_settings(path: Path) -> Settings:
         raise ValueError(f"无法读取配置文件 {path}: {exc}") from exc
     if not isinstance(data, dict):
         raise ValueError("config.yaml 必须是 YAML 对象")
-    feishu = _section(data, "feishu")
-    opencode = _section(data, "opencode")
+    app = _section(data, "app")
+    llm = _section(data, "llm")
     chat = _section(data, "chat")
-    model = _required(opencode, "model")
+    model = _required(llm, "opencode_model")
     if model.count("/") != 1 or not all(model.split("/")):
-        raise ValueError("opencode.model 必须采用 provider/model 格式")
-    api_key = opencode.get("api_key", "")
-    auth_file = opencode.get("auth_file", "")
+        raise ValueError("llm.opencode_model 必须采用 provider/model 格式")
+    api_key = llm.get("api_key", "")
+    auth_file = llm.get("auth_file", "")
     if not isinstance(api_key, str) or not isinstance(auth_file, str):
-        raise ValueError("opencode.api_key 和 opencode.auth_file 必须是字符串")
+        raise ValueError("llm.api_key 和 llm.auth_file 必须是字符串")
     if bool(api_key.strip()) == bool(auth_file.strip()):
-        raise ValueError("opencode.api_key 和 opencode.auth_file 必须且只能填写一项")
+        raise ValueError("llm.api_key 和 llm.auth_file 必须且只能填写一项")
     auth_path = Path(auth_file.strip()) if auth_file.strip() else None
     if auth_path is not None and not auth_path.is_absolute():
         auth_path = (path.parent / auth_path).resolve()
     settings = Settings(
-        app_id=_required(feishu, "app_id"),
-        app_secret=_required(feishu, "app_secret"),
-        executable=_required(opencode, "executable"),
+        app_id=_required(app, "id"),
+        app_secret=_required(app, "secret"),
+        executable=_required(llm, "opencode_executable"),
         model=model,
         api_key=api_key.strip() or None,
         auth_file=auth_path,
-        timeout_seconds=_positive_int(opencode, "timeout_seconds"),
+        timeout_seconds=_positive_int(llm, "timeout_seconds"),
         max_context_bytes=_positive_int(chat, "max_context_bytes"),
         history_turns=_positive_int(chat, "history_turns"),
         max_reply_characters=_positive_int(chat, "max_reply_characters"),

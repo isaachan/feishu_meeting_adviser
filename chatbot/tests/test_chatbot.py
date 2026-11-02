@@ -20,9 +20,25 @@ class ConfigAndContextTests(unittest.TestCase):
     def test_config_requires_credentials_in_yaml(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "config.yaml"
-            path.write_text("feishu: {}\nopencode: {}\nchat: {}\n", encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "model"):
+            path.write_text("app: {}\nllm: {}\nchat: {}\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "opencode_model"):
                 load_settings(path)
+
+    def test_config_uses_v2_shared_names(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "config.yaml"
+            path.write_text(
+                "app:\n  id: cli_test\n  secret: secret\n"
+                "llm:\n  opencode_executable: opencode\n"
+                "  opencode_model: provider/model\n  api_key: key\n"
+                "  timeout_seconds: 120\n"
+                "chat:\n  max_context_bytes: 1000\n  history_turns: 2\n"
+                "  max_reply_characters: 100\n  queue_size: 10\n",
+                encoding="utf-8",
+            )
+            loaded = load_settings(path)
+            self.assertEqual((loaded.app_id, loaded.app_secret), ("cli_test", "secret"))
+            self.assertEqual((loaded.executable, loaded.model), ("opencode", "provider/model"))
 
     def test_context_reads_text_and_skips_hidden_or_symlinks(self):
         with tempfile.TemporaryDirectory() as temp:
