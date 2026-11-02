@@ -1,45 +1,58 @@
-<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">飞书会议会参谋</title>
+  <desc id="desc">深蓝底上的两层对话气泡、实时语音波形和智能建议星芒。</desc>
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#3D7BFF"/>
-      <stop offset="1" stop-color="#1C4FD6"/>
+    <linearGradient id="tile" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#192D66"/>
+      <stop offset="55%" stop-color="#132255"/>
+      <stop offset="100%" stop-color="#0B1535"/>
     </linearGradient>
-    <linearGradient id="line" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#3370FF"/>
-      <stop offset="1" stop-color="#5E8DFF"/>
-    </linearGradient>
-    <radialGradient id="glow" cx="0.22" cy="0.18" r="0.9">
-      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.28"/>
-      <stop offset="0.55" stop-color="#FFFFFF" stop-opacity="0"/>
+    <radialGradient id="ambient" cx="25%" cy="10%" r="90%">
+      <stop offset="0%" stop-color="#4C83E8" stop-opacity=".45"/>
+      <stop offset="100%" stop-color="#4C83E8" stop-opacity="0"/>
     </radialGradient>
+    <linearGradient id="conversation" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6BE2EB"/>
+      <stop offset="47%" stop-color="#4A9BFA"/>
+      <stop offset="100%" stop-color="#5665E9"/>
+    </linearGradient>
+    <linearGradient id="paper" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#E9F1FF"/>
+    </linearGradient>
+    <linearGradient id="wave" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#6AD9EC"/>
+      <stop offset="50%" stop-color="#3976EB"/>
+      <stop offset="100%" stop-color="#7371ED"/>
+    </linearGradient>
   </defs>
 
-  <!-- rounded square background -->
-  <rect x="0" y="0" width="1024" height="1024" rx="224" fill="url(#bg)"/>
-  <rect x="0" y="0" width="1024" height="1024" rx="224" fill="url(#glow)"/>
+  <rect width="1024" height="1024" rx="224" fill="url(#tile)"/>
+  <rect width="1024" height="1024" rx="224" fill="url(#ambient)"/>
 
-  <!-- speech bubble tail -->
-  <path d="M 316 664 L 316 800 Q 316 818 332 808 L 468 694 Z" fill="#FFFFFF"/>
+  <!-- The meeting conversation sits behind the adviser's response. -->
+  <path d="M704 586h98v109c0 17 20 26 33 15l68-65V338c0-83-67-150-150-150H394c-83 0-150 67-150 150v248z" fill="#081533" opacity=".32"/>
+  <path d="M704 570h96v109c0 17 20 26 33 15l68-65V322c0-83-67-150-150-150H392c-83 0-150 67-150 150v248z" fill="url(#conversation)"/>
 
-  <!-- speech bubble -->
-  <rect x="176" y="240" width="672" height="448" rx="96" fill="#FFFFFF"/>
+  <!-- One precise glint instead of a cluster of decorative stars. -->
+  <path d="M737 236c8 37 26 55 63 63-37 8-55 26-63 63-8-37-26-55-63-63 37-8 55-26 63-63z" fill="#FFF"/>
 
-  <!-- realtime caption lines -->
-  <rect x="272" y="344" width="480" height="48" rx="24" fill="url(#line)"/>
-  <rect x="272" y="440" width="384" height="48" rx="24" fill="url(#line)" opacity="0.72"/>
-  <rect x="272" y="536" width="288" height="48" rx="24" fill="url(#line)" opacity="0.48"/>
+  <!-- Live captions and a voice pulse inside the reply. -->
+  <path d="M252 778v94c0 16 18 25 31 15l128-99" fill="#C5D5F6" opacity=".4"/>
+  <rect x="160" y="355" width="637" height="432" rx="112" fill="#07173B" opacity=".25"/>
+  <path d="M248 760v94c0 16 18 25 31 15l128-99" fill="url(#paper)"/>
+  <rect x="160" y="339" width="637" height="432" rx="112" fill="url(#paper)"/>
 
-  <!-- AI sparkles -->
-  <path d="M 788 120
-           Q 802 190 872 204
-           Q 802 218 788 288
-           Q 774 218 704 204
-           Q 774 190 788 120 Z"
-        fill="#9BE1FF"/>
-  <path d="M 880 300
-           Q 888 336 924 344
-           Q 888 352 880 388
-           Q 872 352 836 344
-           Q 872 336 880 300 Z"
-        fill="#FFFFFF" opacity="0.9"/>
+  <g fill="url(#wave)">
+    <rect x="255" y="502" width="29" height="42" rx="14.5"/>
+    <rect x="303" y="475" width="29" height="96" rx="14.5"/>
+    <rect x="351" y="444" width="29" height="158" rx="14.5"/>
+    <rect x="399" y="463" width="29" height="120" rx="14.5"/>
+    <rect x="447" y="486" width="29" height="74" rx="14.5"/>
+    <rect x="495" y="453" width="29" height="140" rx="14.5"/>
+    <rect x="543" y="475" width="29" height="96" rx="14.5"/>
+    <rect x="591" y="501" width="29" height="44" rx="14.5"/>
+  </g>
+  <rect x="256" y="646" width="358" height="25" rx="12.5" fill="#A9BDE5"/>
+  <rect x="634" y="646" width="67" height="25" rx="12.5" fill="#D5E0F5"/>
 </svg>
