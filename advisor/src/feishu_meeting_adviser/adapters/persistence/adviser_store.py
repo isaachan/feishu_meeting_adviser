@@ -470,7 +470,8 @@ class AdviserStore:
 
     def forget_meeting(self, mid):
         with self.transaction(check_capacity=False):
-            for table in ('inputs', 'context', 'jobs', 'outbox', 'meeting_materials', 'meetings'):
+            for table in ('inputs', 'context', 'jobs', 'outbox', 'meeting_materials',
+                          'local_sessions', 'meetings'):
                 self.db.execute(f'DELETE FROM {table} WHERE meeting_id=?', (mid,))
         self.db.execute('PRAGMA wal_checkpoint(TRUNCATE)')
         self.db.execute('VACUUM')

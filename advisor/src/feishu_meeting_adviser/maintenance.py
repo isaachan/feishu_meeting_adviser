@@ -11,16 +11,17 @@ from .adapters.persistence.factory import StorageFactory
 
 
 class Maintenance:
-    def __init__(self, store, config, *, clock=time.time, diagnose=None):
+    def __init__(self, store, config, *, clock=time.time, diagnose=None, lock_name=None):
         self.store = store
         self.config = config
         self.clock = clock
         self.diagnose = diagnose or (lambda record:None)
         self.last_run = None
         self.storage_factory = StorageFactory(config)
+        self.lock_name = lock_name or 'maintenance.lock'
 
     def lock(self):
-        return FileLock(self.config.data_directory / 'locks' / 'maintenance.lock')
+        return FileLock(self.config.data_directory / 'locks' / self.lock_name)
 
     def _clean_consumer_copies(self, *, strict_runtime=False):
         identities = self.store.deleted_identities()

@@ -19,6 +19,21 @@ from .reply_dispatcher import ReplyDispatcher
 from .material_bootstrap import MaterialBootstrapper
 
 
+def _session_identity(session):
+    """Compare session identity, not volatile fields.
+
+    Local sessions change phase while the meeting stays the same, so phase is
+    excluded for them and checked separately; Feishu sessions keep their join
+    phase in the identity so an external leave still forces a restart.
+    """
+    if not session:
+        return None
+    identity = {key: session.get(key) for key in ('source', 'meeting_id', 'join_instance')}
+    if identity['source'] != 'local':
+        identity['phase'] = session.get('phase')
+    return identity
+
+
 class AdviserService:
     def __init__(self, source, manager, *, backend=None, stop_event=None, clock=time.time, consumer_id='adviser', limit=100, diagnose=None,
                  material_client=None, preview_display=None, material_loader=load_materials,
@@ -27,6 +42,7 @@ class AdviserService:
         self.config, self.settings = manager.config, manager.config.llm
         self.session = manager.saved_meeting(require_joined=True)
         self.mid = self.session['meeting_id']
+        self.local = self.session.get('source') == 'local'
         self.clock = clock
         self.consumer_id, self.limit = consumer_id, limit
         self.diagnose = diagnose or (lambda record:None)
@@ -36,11 +52,16 @@ class AdviserService:
         if self.config.meeting_context.enabled:
             self.role += MATERIAL_POLICY
             self.role_version = digest([self.role_file_version,MATERIAL_POLICY])
-        self.lock = FileLock(self.config.data_directory / 'locks' / 'adviser.lock')
+        # One consumer lease per meeting: independent local sessions may run in
+        # parallel while the legacy Feishu path keeps its single directory lease.
+        lease_name = 'local-' + digest(self.mid) + '.lock' if self.local else 'adviser.lock'
+        self.lock = FileLock(self.config.data_directory / 'locks' / lease_name)
         with self.lock:
             self.data = StorageFactory(self.config).adviser()
             self.data.ensure_meeting(self.mid)
-        self.maintenance = Maintenance(source, self.config)
+        self.maintenance = Maintenance(
+            source, self.config,
+            lock_name=('maintenance-local-' + digest(self.mid) + '.lock') if self.local else None)
         runtime = self.config.data_directory / 'model_runtime'
         if self.settings.backend == 'opencode':
             runtime = runtime / 'opencode' / digest(self.mid)
@@ -109,8 +130,11 @@ class AdviserService:
     def guard(self):
         if self.source.is_deleted(self.mid):
             raise LifecycleError('meeting content was deleted; model consumption cannot restart for this meeting')
-        if self.manager.session() != self.session:
+        if _session_identity(self.manager.session()) != _session_identity(self.session):
             raise LifecycleError('adviser session changed; restart after checking meeting state')
+        phase = getattr(self.manager, 'phase', None)
+        if phase is not None and phase() == 'ended':
+            raise LifecycleError('local session ended; stop consuming and create a new session')
         if file_fingerprint(self.config.path) != self.config.fingerprint:
             raise LifecycleError('adviser configuration changed; restart consumer')
         if load_role(self.settings)[1] != self.role_file_version:
@@ -142,7 +166,7 @@ class AdviserService:
         self.decision_observer(decision)
         self.data.finish_job(job, decision, now=self.clock(), settings=self.settings,
                              joined_at=self.session['joined_at'], bot_id=self.session.get('bot_user_id'),
-                             notifications=getattr(self.config, 'notifications', None))
+                             notifications=None if self.local else getattr(self.config, 'notifications', None))
         self.decisions += 1
         self.diagnose(self._model_metadata() | {'kind':'model','backend':self.settings.backend,'model_ms':elapsed,'decision_saved':True,
                        'participation':self.data.require_meeting(self.mid)['participation']})
@@ -202,11 +226,16 @@ class AdviserService:
             'startup','initialize','account_read','mcp_discovery','thread_start',
             'mcp_verify','turn_start','generation','thread_cleanup','server_start','server_verify',
             'session_start','session_cleanup'} else {}
-        return {'backend': self.settings.backend, 'participation': meeting['participation'],
+        result = {'backend': self.settings.backend, 'participation': meeting['participation'],
                 'model_state': 'running' if self.worker else 'waiting' if meeting['generation']>meeting['decided_generation'] else 'idle',
                 'model_error': meeting['error'], 'offered': self.offered, 'newly_persisted': self.persisted,
                 'decisions': self.decisions, 'replied': self.replied,
                 'material_state':meeting['material_state'] or 'disabled'} | self.data.reply_statistics(self.mid) | live
+        if self.local:
+            phase = getattr(self.manager, 'phase', None)
+            if callable(phase):
+                result['session_phase'] = phase()
+        return result
 
     def run(self, *, watch=False, notify=None):
         previous = None
@@ -214,11 +243,12 @@ class AdviserService:
             try:
                 self.data.recover_sends()
                 self.data.ensure_session(self.session)
-                if getattr(self.config, 'notifications', None):
+                if getattr(self.config, 'notifications', None) and not self.local:
                     self.data.reconcile_destinations(self.mid, self.config.notifications)
                 self.data.ensure_role(self.mid,self.role_version)
                 self._ensure_materials()
-                if self.settings.introduction and getattr(getattr(self.config, 'notifications', None), 'meeting_comment', True):
+                if (not self.local and self.settings.introduction
+                        and getattr(getattr(self.config, 'notifications', None), 'meeting_comment', True)):
                     with self._maintenance_lock():
                         if not introduce(self.data,self.manager,clock=self.clock,diagnose=self.diagnose):
                             raise LifecycleError('introduction send not confirmed; check meeting UI and replies, then resolve-reply before model processing')
