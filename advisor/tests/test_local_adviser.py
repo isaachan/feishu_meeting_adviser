@@ -140,6 +140,38 @@ class LocalAdviserTests(unittest.TestCase):
         service.close()
         self.assertEqual((result['replied'], result['decisions']), (0, 1))
 
+    def test_local_description_becomes_meeting_context_without_feishu(self):
+        session = self.session(description='本次会议讨论方案 B 的落地计划。')
+        self.source.commit_page(session['meeting_id'], [self.caption(session['meeting_id'])], {})
+        backend = FakeBackend()
+        service = self.service(session, backend=backend)
+        result = service.run()
+        service.close()
+        self.assertEqual(result['material_state'], 'ready')
+        context = backend.calls[0]['meeting_context']
+        self.assertEqual(context['identity'], 'local')
+        self.assertEqual(context['description'], '本次会议讨论方案 B 的落地计划。')
+        self.assertEqual(context['documents'], [])
+        # Restarting with the same stored description keeps the material version
+        # stable, so no extra model generation is scheduled by reloads.
+        meeting = self.data.require_meeting(session['meeting_id'])
+        version = meeting['material_version']
+        second = self.service(session, backend=FakeBackend())
+        second._ensure_materials()
+        second.close()
+        self.assertEqual(
+            self.data.require_meeting(session['meeting_id'])['material_version'], version)
+
+    def test_local_session_without_description_runs_with_materials_disabled(self):
+        session = self.session(description='   ')
+        self.source.commit_page(session['meeting_id'], [self.caption(session['meeting_id'])], {})
+        service = self.service(session, backend=FakeBackend())
+        result = service.run()
+        service.close()
+        self.assertEqual(result['material_state'], 'disabled')
+        snapshot_materials = self.data.materials(session['meeting_id'])
+        self.assertEqual(snapshot_materials['state'], 'disabled')
+
     def test_local_reply_is_published_to_local_channel_without_transport(self):
         session = self.session()
         self.source.commit_page(session['meeting_id'], [self.caption(session['meeting_id'])], {})

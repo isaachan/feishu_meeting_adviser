@@ -16,7 +16,7 @@ from .materials import MATERIAL_POLICY, load_materials
 from .adapters.persistence.factory import StorageFactory
 from .model_jobs import ModelJobExecutor
 from .reply_dispatcher import ReplyDispatcher
-from .material_bootstrap import MaterialBootstrapper
+from .material_bootstrap import LocalMaterialBootstrapper, MaterialBootstrapper
 
 
 def _session_identity(session):
@@ -49,9 +49,13 @@ class AdviserService:
         self.stop_event = stop_event or threading.Event()
         self.role, self.role_file_version = load_role(self.settings)
         self.role_version = self.role_file_version
-        if self.config.meeting_context.enabled:
+        # Local sessions use their stored description as the only material source;
+        # the Feishu calendar path stays optional for legacy sessions.
+        self.materials_enabled = ((not self.local and self.config.meeting_context.enabled)
+                                  or (self.local and bool((self.session.get('description') or '').strip())))
+        if self.materials_enabled:
             self.role += MATERIAL_POLICY
-            self.role_version = digest([self.role_file_version,MATERIAL_POLICY])
+            self.role_version = digest([self.role_file_version, MATERIAL_POLICY])
         # One consumer lease per meeting: independent local sessions may run in
         # parallel while the legacy Feishu path keeps its single directory lease.
         lease_name = 'local-' + digest(self.mid) + '.lock' if self.local else 'adviser.lock'
@@ -82,18 +86,22 @@ class AdviserService:
         self.batch_due = None
         self.offered = self.persisted = self.decisions = self.replied = 0
         self.model_failure = None
-        self.materials = MaterialBootstrapper(
-            self.data,
-            self.config,
-            self.session,
-            client=material_client,
-            loader=material_loader,
-            preview_display=preview_display,
-            stop_event=self.stop_event,
-            clock=lambda: self.clock(),
-            maintenance_lock=self._maintenance_lock,
-            guard=self.guard,
-        )
+        if self.local:
+            self.materials = LocalMaterialBootstrapper(
+                self.data, self.session, clock=lambda: self.clock())
+        else:
+            self.materials = MaterialBootstrapper(
+                self.data,
+                self.config,
+                self.session,
+                client=material_client,
+                loader=material_loader,
+                preview_display=preview_display,
+                stop_event=self.stop_event,
+                clock=lambda: self.clock(),
+                maintenance_lock=self._maintenance_lock,
+                guard=self.guard,
+            )
         self.decision_observer = decision_observer or (lambda decision:None)
 
     @property

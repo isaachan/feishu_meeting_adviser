@@ -6,6 +6,45 @@ from .oauth import OAuthError, OAuthManager
 from .storage import StorageError
 
 
+class LocalMaterialBootstrapper:
+    """Description-only materials for local sessions; no calendar or document access."""
+
+    def __init__(self, data, session, *, clock):
+        self.data = data
+        self.session = session
+        self.clock = clock
+        self.loaded = False
+        self.subject = None
+
+    def ensure(self) -> None:
+        if self.loaded:
+            return
+        meeting_id = self.session['meeting_id']
+        description = (self.session.get('description') or '').strip()
+        self.data.ensure_session(self.session)
+        if not description:
+            self.data.set_materials(
+                meeting_id,
+                {'state': 'disabled', 'context_version': None, 'documents': []},
+                now=self.clock(),
+            )
+            self.loaded = True
+            return
+        self.data.set_materials(meeting_id, {
+            'state': 'ready',
+            'binding': {'meeting_id': meeting_id,
+                        'join_instance': self.session['join_instance']},
+            'identity': 'local',
+            'description': self.session['description'],
+            'documents': [],
+            'context_version': digest(['local-materials-v1', meeting_id, description]),
+        }, now=self.clock())
+        self.loaded = True
+
+    def verify_identity(self) -> None:
+        return None
+
+
 class MaterialBootstrapper:
     def __init__(self, data, config, session, *, client, loader, preview_display,
                  stop_event, clock, maintenance_lock, guard,
