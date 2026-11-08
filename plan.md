@@ -154,9 +154,9 @@ POST /v1/inference-jobs/{request_id}/cancel
 - [x] **2.3 实现 fake 回放。** 按指定时间间隔产生最终字幕；支持加速回放、暂停/停止，以及明确的会话/输入流身份。**完成（2026-11-08）：**`FakeReplay` 按台词 delay 生成契约事件（含 offset 与 stream_end），`--speed` 加速，Ctrl-C 经停止事件干净中断且不伪造 stream_end。
 - [x] **2.4 实现可靠本地交接。** advisor 消费前先可靠保存字幕；重复回放/重启不会因随机生成新身份而重复添加同一事件，新的独立回放则有新的输入流。**完成（2026-11-08）：**advisor `SpoolIngester` 按契约消费 spool：顺序消费、缺口等待、持久化后写 ack、重读由字幕库去重吸收；recorder 侧 `SpoolWriter` 原子段写入并按 ack 清理。
 - [x] **2.5 实现结束标记和恢复。** 对已交接进度、最后事件和恢复点有明确记录；停止后可以确认尾部字幕是否完整。**完成（2026-11-08）：**`stream_end` 携带 `last_sequence`，确认到末尾即标记 drained；中断不伪造 stream_end，未确认段保留重投；会话排空条件包含全部输入流 drained。
-- [ ] **2.6 增加集成测试。** fake-recorder → 本地持久化 → advisor → 假模型 → 本地有效决定，验证重复、重启和两场会议交错输入。
+- [x] **2.6 增加集成测试。** fake-recorder → 本地持久化 → advisor → 假模型 → 本地有效决定，验证重复、重启和两场会议交错输入。**完成（2026-11-08）：**根 `integrations/test_recorder_handoff.py` 覆盖完整 M1 切片（回放 → spool → 消费 → 本地决定 → ack → 幂等重跑 → 结束）与中断流阻塞自动结束、`--force` 收尾；CI 与集成说明纳入 recorder 模块。
 
-**验收：** 同一台词可稳定复现本地处理链路；recorder 不关心模型是本地假实现还是远程服务。
+**验收（阶段 2）：** 同一台词可稳定复现本地处理链路；recorder 不关心模型是本地假实现还是远程服务。**已达成（2026-11-08）。**
 
 ### 阶段 3：服务端 llm-gateway
 

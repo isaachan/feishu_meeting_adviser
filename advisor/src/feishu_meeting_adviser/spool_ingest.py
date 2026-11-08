@@ -25,7 +25,6 @@ class SpoolIngester:
         self.spool_root = recorder_root / 'spool' / session_id
         self.ack_root = recorder_root / 'ack' / session_id
         self.started_at = started_at
-        self._drained: set[str] = set()
 
     def _streams(self) -> list[Path]:
         if not self.spool_root.exists():
@@ -56,7 +55,7 @@ class SpoolIngester:
         tmp.write_text(json.dumps({'acked_sequence': number}), encoding='utf-8')
         os.replace(tmp, path)
 
-    def _events_after(self, stream_dir: Path, acked: int) -> list[dict]:
+    def _load(self, stream_dir: Path) -> list[tuple[int, dict]]:
         events: list[tuple[int, dict]] = []
         for segment in sorted(stream_dir.glob('*.jsonl')):
             for line in segment.read_text(encoding='utf-8').splitlines():
@@ -69,12 +68,16 @@ class SpoolIngester:
                 sequence = event.get('sequence') if isinstance(event, dict) else None
                 if not isinstance(sequence, int) or isinstance(sequence, bool):
                     raise StorageError('recorder spool event is damaged')
-                if sequence > acked:
-                    events.append((sequence, event))
+                events.append((sequence, event))
         events.sort(key=lambda item: item[0])
+        return events
+
+    def _events_after(self, stream_dir: Path, acked: int) -> list[dict]:
         ordered: list[dict] = []
         expected = acked + 1
-        for sequence, event in events:
+        for sequence, event in self._load(stream_dir):
+            if sequence <= acked:
+                continue
             if sequence != expected:
                 break  # A gap waits for its segment; never skip ahead.
             ordered.append(event)
@@ -149,10 +152,23 @@ class SpoolIngester:
                 added += len(captions)
             if processed > acked:
                 self._write_ack(stream, processed)
-            if end_sequence is not None and processed >= end_sequence:
-                self._drained.add(stream)
         return added
+
+    def _stream_drained(self, stream_dir: Path) -> bool:
+        """Derive drain state from durable data: the confirmed stream_end.
+
+        An in-flight or crashed recorder never wrote (or never confirmed) its
+        stream_end, so the stream stays undrained across processes and restarts.
+        """
+        acked = self._acked(stream_dir.name)
+        for _sequence, event in self._load(stream_dir):
+            if event.get('kind') == 'stream_end':
+                last = event.get('last_sequence')
+                if not isinstance(last, int) or isinstance(last, bool):
+                    raise StorageError('recorder stream_end is invalid')
+                return event['sequence'] <= acked and last <= acked
+        return False
 
     def drained(self) -> bool:
         """True when every observed stream is consumed through its stream_end."""
-        return all(stream.name in self._drained for stream in self._streams())
+        return all(self._stream_drained(stream) for stream in self._streams())

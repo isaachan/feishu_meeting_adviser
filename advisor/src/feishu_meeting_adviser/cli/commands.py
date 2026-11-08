@@ -14,6 +14,7 @@ from ..infrastructure.signals import stop_on_signals
 from ..local_sessions import LocalSessionManager
 from ..maintenance import Maintenance
 from ..models import digest
+from ..spool_ingest import SpoolIngester
 from ..storage import StorageError
 from .bootstrap import CommandStoragePlan
 
@@ -87,6 +88,11 @@ def _session_idle(context, session):
     consumer = getattr(context.args, 'consumer', None) or 'adviser'
     if context.store is not None and context.store.backlog(session['meeting_id'], consumer) > 0:
         return False
+    # Pending recorder input that was never ingested also blocks an idle end.
+    spool = SpoolIngester(context.store, context.config.data_directory,
+                          session['meeting_id'], started_at=session['started_at'])
+    if not spool.drained():
+        return False
     meeting = context.data.meeting(session['meeting_id'])
     if meeting is None:
         return True
@@ -97,9 +103,17 @@ def _session_idle(context, session):
 
 def handle_session_end(context, args):
     session = context.session()
-    target = 'ended' if args.force or _session_idle(context, session) else 'draining'
-    updated = context.data.set_local_session_phase(session['meeting_id'], target)
-    print(json.dumps({'session_id': updated['meeting_id'], 'phase': updated['phase']}))
+    mid = session['meeting_id']
+    phase = session['phase']
+    if phase != 'ended' and args.force:
+        updated = context.data.set_local_session_phase(mid, 'ended')
+    elif phase in ('ended', 'draining'):
+        updated = session  # Ending is idempotent; draining continues until settled.
+    elif _session_idle(context, session):
+        updated = context.data.set_local_session_phase(mid, 'ended')
+    else:
+        updated = context.data.set_local_session_phase(mid, 'draining')
+    print(json.dumps({'session_id': mid, 'phase': updated['phase']}))
     return 0
 
 
