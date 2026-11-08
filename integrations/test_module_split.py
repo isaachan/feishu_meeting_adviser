@@ -63,12 +63,17 @@ class LocalSessionFlowTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
-        self.config_path = self.root / 'config.yaml'
+        directory = self.root / 'advisor'
+        directory.mkdir()
+        self.config_path = directory / 'config.yaml'
         self.config_path.write_text('app:\n  id: synthetic\n  secret: synthetic-secret\n'
                                     'storage:\n  directory: ../data\n'
                                     'llm:\n  backend: codex\n  batch_seconds: 0\n')
         self.config_path.chmod(0o600)
         self.config = load_config(self.config_path)
+        self.addCleanup(lambda: self.assertTrue(
+            self.config.data_directory.is_relative_to(self.root),
+            'test data must stay inside the temporary directory'))
 
     def run_cli(self, *args):
         output = io.StringIO()

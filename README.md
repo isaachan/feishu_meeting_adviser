@@ -2,48 +2,43 @@
 
 项目分为两个独立模块，通过本机 SQLite 数据交接：
 
-- **[meeting-listener](meeting-listener/README.md)**：机器人入会、官方字幕采集、本地录制转写及字幕数据维护。
-- **[advisor](advisor/README.md)**：消费字幕、读取日程材料、调用模型并发送回答，包含本地 harness。
-- **[data](data/README.md)**：入会会话、字幕、消费进度、模型任务及运行日志。
+- **[advisor](advisor/README.md)**：本地会议会话、消费字幕、会议上下文、模型决策与本地结果保存，包含本地 harness。
+- **[meeting-listener](meeting-listener/README.md)**：**已停用**（飞书权限限制）。代码与测试保留，不再处于默认运行路径；归档范围在 [plan.md](plan.md) 阶段 6 核对。
+- **[data](data/README.md)**：本地会话、字幕、消费进度、模型任务及运行日志。
+- **[plan.md](plan.md)**：方案 B（本地 advisor + 远程模型执行）的架构、契约与任务清单。
 
-两个模块分别维护配置、虚拟环境、测试和 `pyproject.toml`，所需重复实现各自保留。根目录 `integrations/` 默认全部是集成测试。
+advisor 与后续的 `local-meeting-recorder`、`llm-gateway` 各自维护配置、环境、测试和 `pyproject.toml`。根目录 `integrations/` 默认全部是集成测试。
 
 ## 安装
 
 从仓库根目录执行，要求 Python 3.11+：
 
 ```bash
-python3 -m venv meeting-listener/.venv
-meeting-listener/.venv/bin/python -m pip install -e './meeting-listener[stt]'
 python3 -m venv advisor/.venv
-advisor/.venv/bin/python -m pip install -e ./advisor
+advisor/.venv/bin/python -m pip install -e './advisor[dev]'
 ```
 
-仅在模块还没有本机 `config.yaml` 时，复制各自的 `config.example.yaml` 并填写应用凭据，设置文件权限为 `600`。两套配置都将 `storage.directory` 设为 `../data`，并使用相同的应用身份。模型、日程及通知设置由 advisor 配置；meeting-listener 的 `llm.backend`、`llm.introduction`、`notifications.meeting_comment` 决定是否在入会时发送介绍。
+仅在模块还没有本机 `config.yaml` 时，复制 `config.example.yaml` 并填写凭据，设置文件权限为 `600`。`storage.directory` 默认指向 `../data`。模型后端在本地以 OpenCode（GLM）或 Codex 运行；远程 `llm-gateway` 按计划在阶段 3–4 接入。
 
-## 运行
+## 运行（本地会话）
 
 ```bash
-./meeting-listener/join <会议号或入会链接>
-./meeting-listener/collect
-# 另开一个终端
-./advisor/consume
+cd advisor
+.venv/bin/python -m feishu_meeting_adviser session-new --title 周会
+.venv/bin/python -m feishu_meeting_adviser consume --watch <session_id>
+# 停止输入并收尾
+.venv/bin/python -m feishu_meeting_adviser session-end <session_id>
 ```
 
-这些脚本使用所属模块的 `.venv` 和 `config.yaml`，可通过绝对路径从其他目录调用。`join` 脚本先按既有测试流程重置旧会话（没有旧会话时跳过），再入会。直接使用模块 CLI 的 `join` 命令则按会话状态核对和复用入会身份。
-
-停止 `consume` 不会停止采集；停止 `collect` 不会离会。完整停止时先停止消费和采集，再在 `meeting-listener/` 执行 `.venv/bin/python -m meeting_listener leave`。
-
-本地录制转写使用 `./meeting-listener/collect-local /path/to/growing.vemedia`，STT 代码、依赖和模型均由 meeting-listener 维护。
+会话由 advisor 显式创建，不依赖飞书会议号或 bot 入会；模型回答保存为本地结果（`replies` 查看），不发送任何通知（notification 搁置，见 plan.md）。运行期字幕输入源（fake-recorder → 本地交接契约）按计划在阶段 2 接入；当前字幕经由本地字幕存储进入会话。
 
 ## 文档与测试
 
-- 各模块的运行说明、单模块文档和测试见各自目录。
-- 跨模块规划见 [总体计划](docs/PLAN_OFFICIAL_MEETING_EVENTS.md) 和 [TODO](TODO.md)。
+- 各模块的运行说明、单模块文档和测试见各自目录；跨模块规划与契约见 [plan.md](plan.md)。
 - [飞书权限清单](docs/APP_PERMISSIONS_EVENTS.md)、[架构评审](docs/2026-10-15-architecture-review.md)、[实现记录](docs/IMPLEMENTATION_RECORD.md)。
 - [数据操作](data/docs/DATA_OPERATIONS.md)说明保存、清理、授权与恢复边界。
 - [集成测试说明](integrations/README.md)。
 
-产品目标是在会议进行时获取内容并提供辅助。当前规划目标为提问结束到可用回答 20 秒；[字幕延迟调研](meeting-listener/docs/TRANSCRIPT_LATENCY_INVESTIGATION.md)显示拉取通道仍存在约 30 秒暴露延迟，20 秒是预算而非已实现的 SLA。跨会议可靠性和真实问答性能仍需验收。
+方案 B 的目标是在会议进行时获取内容并提供辅助，模型执行集中在服务端网关。旧的 20 秒 P95 目标来自飞书字幕路线，本地采集 + 远程执行的时延预算将在 M1 全链路后重新测量。
 
 独立可行性研究位于 [studies/local-meeting](studies/local-meeting/README.md) 和 [studies/listener](studies/listener/README.md)；官方接口实验位于 `meeting-listener/reference/spike/`。
