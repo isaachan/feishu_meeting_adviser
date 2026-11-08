@@ -4,7 +4,7 @@ import sqlite3
 from .sqlite import SQLiteDatabase, StorageError
 
 
-ADVISER_SCHEMA_VERSION = 3
+ADVISER_SCHEMA_VERSION = 4
 CURRENT_COLUMNS = {
     'meetings': {
         'meeting_id', 'generation', 'decided_generation', 'participation',
@@ -23,7 +23,16 @@ CURRENT_COLUMNS = {
         'answer_uuid', 'channel', 'recipient_id',
     },
     'meeting_materials': {'meeting_id', 'body', 'loaded_ns'},
+    'local_sessions': {
+        'meeting_id', 'title', 'description', 'phase', 'created_ns', 'started_at',
+        'ended_ns',
+    },
 }
+
+LOCAL_SESSIONS_TABLE = '''CREATE TABLE local_sessions (
+        meeting_id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '',
+        description TEXT NOT NULL DEFAULT '', phase TEXT NOT NULL DEFAULT 'recording',
+        created_ns INTEGER NOT NULL, started_at REAL NOT NULL, ended_ns INTEGER)'''
 
 CURRENT_SCHEMA = (
     '''CREATE TABLE meetings (
@@ -57,6 +66,7 @@ CURRENT_SCHEMA = (
     'CREATE INDEX outbox_answer ON outbox(answer_uuid)',
     '''CREATE TABLE meeting_materials (
         meeting_id TEXT PRIMARY KEY, body TEXT NOT NULL, loaded_ns INTEGER NOT NULL)''',
+    LOCAL_SESSIONS_TABLE,
 )
 
 
@@ -69,43 +79,67 @@ def _columns(db: sqlite3.Connection, table: str) -> set[str]:
     return {row['name'] for row in db.execute(f'PRAGMA table_info({table})')}
 
 
+# Shapes accepted by the one-transaction upgrade path.
+V3_COLUMNS = {table: columns for table, columns in CURRENT_COLUMNS.items()
+              if table != 'local_sessions'}
+V2_OUTBOX_COLUMNS = V3_COLUMNS['outbox'] - {'answer_uuid', 'channel', 'recipient_id'}
+
+
+def _shape_matches(db: sqlite3.Connection, columns_by_table: dict) -> bool:
+    return (_tables(db) == set(columns_by_table)
+            and all(_columns(db, table) == columns
+                    for table, columns in columns_by_table.items()))
+
+
+def _is_v2(db: sqlite3.Connection) -> bool:
+    if (db.execute('PRAGMA user_version').fetchone()[0] != 2
+            or _tables(db) != set(V3_COLUMNS)):
+        return False
+    return (_columns(db, 'outbox') == V2_OUTBOX_COLUMNS
+            and all(_columns(db, table) == columns
+                    for table, columns in V3_COLUMNS.items() if table != 'outbox'))
+
+
+def _is_v3(db: sqlite3.Connection) -> bool:
+    return (db.execute('PRAGMA user_version').fetchone()[0] == 3
+            and _shape_matches(db, V3_COLUMNS))
+
+
 def require_current_adviser_schema(connection: sqlite3.Connection) -> None:
     version = connection.execute('PRAGMA user_version').fetchone()[0]
-    if version == 2 and _tables(connection) == set(CURRENT_COLUMNS):
-        old_outbox = CURRENT_COLUMNS['outbox'] - {'answer_uuid', 'channel', 'recipient_id'}
-        if (_columns(connection, 'outbox') == old_outbox
-                and all(_columns(connection, table) == columns
-                        for table, columns in CURRENT_COLUMNS.items() if table != 'outbox')):
-            raise StorageError('adviser database requires v3 initialization; run consume to upgrade')
-    if (version != ADVISER_SCHEMA_VERSION or _tables(connection) != set(CURRENT_COLUMNS)
-            or any(_columns(connection, table) != columns
-                   for table, columns in CURRENT_COLUMNS.items())):
+    if version in (2, 3) and (_is_v2(connection) or _is_v3(connection)):
+        raise StorageError('adviser database requires v4 initialization; '
+                           'run an advisor session command to upgrade')
+    if (version != ADVISER_SCHEMA_VERSION
+            or not _shape_matches(connection, CURRENT_COLUMNS)):
         raise StorageError(
             'development database schema is unsupported; delete local development data '
-            'and initialize again')
+            'and initialize again'
+        )
 
 
 def initialize_adviser_schema(database: SQLiteDatabase) -> None:
-    """Create the current schema or upgrade a verified v2 database in one transaction."""
+    """Create the current schema or upgrade a verified v2/v3 database in one transaction."""
     with database.transaction():
-        version = database.connection.execute('PRAGMA user_version').fetchone()[0]
-        if version == 2 and _tables(database.connection) == set(CURRENT_COLUMNS):
-            expected = CURRENT_COLUMNS['outbox'] - {'answer_uuid', 'channel', 'recipient_id'}
-            if (_columns(database.connection, 'outbox') == expected
-                    and all(_columns(database.connection, table) == columns
-                            for table, columns in CURRENT_COLUMNS.items() if table != 'outbox')):
-                database.connection.execute('ALTER TABLE outbox ADD COLUMN answer_uuid TEXT')
-                database.connection.execute('ALTER TABLE outbox ADD COLUMN channel TEXT NOT NULL DEFAULT \'meeting\'')
-                database.connection.execute('ALTER TABLE outbox ADD COLUMN recipient_id TEXT')
-                database.connection.execute('UPDATE outbox SET answer_uuid=uuid')
-                database.connection.execute('CREATE INDEX outbox_answer ON outbox(answer_uuid)')
-                database.connection.execute(f'PRAGMA user_version={ADVISER_SCHEMA_VERSION}')
-                require_current_adviser_schema(database.connection)
-                return
-        if version or _tables(database.connection):
-            require_current_adviser_schema(database.connection)
+        db = database.connection
+        version = db.execute('PRAGMA user_version').fetchone()[0]
+        if version == 2 and _is_v2(db):
+            db.execute('ALTER TABLE outbox ADD COLUMN answer_uuid TEXT')
+            db.execute('ALTER TABLE outbox ADD COLUMN channel TEXT NOT NULL DEFAULT \'meeting\'')
+            db.execute('ALTER TABLE outbox ADD COLUMN recipient_id TEXT')
+            db.execute('UPDATE outbox SET answer_uuid=uuid')
+            db.execute('CREATE INDEX outbox_answer ON outbox(answer_uuid)')
+            db.execute('PRAGMA user_version=3')
+            version = 3
+        if version == 3 and _is_v3(db):
+            db.execute(LOCAL_SESSIONS_TABLE)
+            db.execute(f'PRAGMA user_version={ADVISER_SCHEMA_VERSION}')
+            require_current_adviser_schema(db)
+            return
+        if version or _tables(db):
+            require_current_adviser_schema(db)
             return
         for statement in CURRENT_SCHEMA:
-            database.connection.execute(statement)
-        database.connection.execute(f'PRAGMA user_version={ADVISER_SCHEMA_VERSION}')
-        require_current_adviser_schema(database.connection)
+            db.execute(statement)
+        db.execute(f'PRAGMA user_version={ADVISER_SCHEMA_VERSION}')
+        require_current_adviser_schema(db)

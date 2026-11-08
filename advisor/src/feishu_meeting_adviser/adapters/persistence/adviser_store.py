@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import sqlite3
 import time
-from uuid import NAMESPACE_URL, uuid5
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from ...models import ChangeKind, MaterialState, digest
 from .source_store import CapacityError, StorageError, caption_from_json, decode_mapping, encode
@@ -157,6 +157,66 @@ class AdviserStore:
 
     def list_meeting_ids(self):
         return [row['meeting_id'] for row in self.db.execute('SELECT meeting_id FROM meetings')]
+
+    LOCAL_SESSION_PHASES = ('recording', 'draining', 'ended')
+    LOCAL_SESSION_TRANSITIONS = {
+        ('recording', 'draining'), ('recording', 'ended'), ('draining', 'ended'),
+    }
+
+    def create_local_session(self, *, title='', description='', now=None):
+        """Create an explicitly owned local meeting session with its own identity space."""
+        if not isinstance(title, str) or not isinstance(description, str):
+            raise StorageError('local session title and description must be strings')
+        moment = time.time() if now is None else now
+        meeting_id = 'local:' + uuid4().hex
+        with self.transaction():
+            self.db.execute(
+                'INSERT INTO local_sessions(meeting_id,title,description,phase,created_ns,started_at) '
+                'VALUES (?,?,?,\'recording\',?,?)',
+                (meeting_id, title[:200], description[:20000],
+                 int(moment * 1_000_000_000), moment))
+            self.ensure_meeting(meeting_id)
+        return self.local_session(meeting_id)
+
+    def local_session(self, mid):
+        row = self.db.execute('SELECT * FROM local_sessions WHERE meeting_id=?', (mid,)).fetchone()
+        if row is None:
+            return None
+        return {
+            'source': 'local', 'meeting_id': row['meeting_id'], 'meeting_no': None,
+            'title': row['title'], 'description': row['description'],
+            'phase': row['phase'], 'join_instance': row['meeting_id'],
+            'joined_at': row['started_at'], 'started_at': row['started_at'],
+            'bot_user_id': None, 'created_ns': row['created_ns'],
+            'ended_ns': row['ended_ns'],
+        }
+
+    def require_local_session(self, mid):
+        session = self.local_session(mid)
+        if session is None:
+            raise StorageError('unknown local session; create one with the session command first')
+        return session
+
+    def list_local_sessions(self):
+        return [self.local_session(row['meeting_id']) for row in
+                self.db.execute('SELECT meeting_id FROM local_sessions ORDER BY created_ns')]
+
+    def set_local_session_phase(self, mid, phase, *, now=None):
+        if phase not in self.LOCAL_SESSION_PHASES:
+            raise StorageError('invalid local session phase')
+        moment = time.time() if now is None else now
+        with self.transaction():
+            row = self.db.execute(
+                'SELECT phase FROM local_sessions WHERE meeting_id=?', (mid,)).fetchone()
+            if row is None:
+                raise StorageError('unknown local session')
+            if (row['phase'], phase) not in self.LOCAL_SESSION_TRANSITIONS:
+                raise StorageError(
+                    f'illegal local session phase transition {row["phase"]} -> {phase}')
+            self.db.execute(
+                'UPDATE local_sessions SET phase=?,ended_ns=? WHERE meeting_id=?',
+                (phase, int(moment * 1_000_000_000) if phase == 'ended' else None, mid))
+        return self.local_session(mid)
 
     def materials(self, mid):
         row = self.db.execute('SELECT body FROM meeting_materials WHERE meeting_id=?',(mid,)).fetchone()

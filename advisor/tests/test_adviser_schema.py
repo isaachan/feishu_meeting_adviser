@@ -44,17 +44,24 @@ class AdviserSchemaTests(unittest.TestCase):
         AdviserStore.initialize(self.path)
         self.assertEqual(self.schema_state(), before)
 
-    def test_v2_upgrade_preserves_existing_reply(self):
-        old_outbox = next(statement for statement in adviser_schema.CURRENT_SCHEMA
-                          if statement.startswith('CREATE TABLE outbox'))
-        old_outbox = old_outbox.replace(
-            ",\n        answer_uuid TEXT NOT NULL, channel TEXT NOT NULL DEFAULT 'meeting',\n        recipient_id TEXT", '')
+    def _build_legacy_schema(self, version):
+        outbox = next(statement for statement in adviser_schema.CURRENT_SCHEMA
+                      if statement.startswith('CREATE TABLE outbox'))
+        if version <= 2:
+            outbox = outbox.replace(
+                ",\n        answer_uuid TEXT NOT NULL, channel TEXT NOT NULL DEFAULT 'meeting',\n        recipient_id TEXT", '')
         db = sqlite3.connect(self.path)
         for statement in adviser_schema.CURRENT_SCHEMA:
-            if statement.startswith('CREATE INDEX outbox_answer'):
+            if statement.startswith('CREATE INDEX outbox_answer') and version <= 2:
                 continue
-            db.execute(old_outbox if statement.startswith('CREATE TABLE outbox') else statement)
-        db.execute('PRAGMA user_version=2')
+            if statement.startswith('CREATE TABLE local_sessions') and version <= 3:
+                continue
+            db.execute(outbox if statement.startswith('CREATE TABLE outbox') else statement)
+        db.execute(f'PRAGMA user_version={version}')
+        return db
+
+    def test_v2_upgrade_preserves_existing_reply(self):
+        db = self._build_legacy_schema(2)
         db.execute('''INSERT INTO outbox(uuid,meeting_id,kind,content,evidence,generation,created_ns)
                       VALUES ('synthetic-uuid','m1','reply','synthetic answer','{}',1,1)''')
         db.commit()
@@ -68,6 +75,27 @@ class AdviserSchemaTests(unittest.TestCase):
                              ('synthetic-uuid', 'meeting', None, 'synthetic answer'))
         finally:
             store.close()
+
+    def test_v3_upgrade_preserves_existing_reply_and_adds_local_sessions(self):
+        db = self._build_legacy_schema(3)
+        db.execute('''INSERT INTO outbox(uuid,meeting_id,kind,content,evidence,generation,created_ns,
+                      answer_uuid,channel) VALUES ('synthetic-uuid','m1','reply','v3 answer','{}',1,1,
+                      'synthetic-uuid','meeting')''')
+        db.commit()
+        db.close()
+        self.path.chmod(0o600)
+        with self.assertRaises(StorageError):
+            AdviserStore(self.path)
+        AdviserStore.initialize(self.path)
+        store = AdviserStore(self.path)
+        try:
+            row = store.db.execute('SELECT content FROM outbox WHERE uuid=?', ('synthetic-uuid',)).fetchone()
+            self.assertEqual(row['content'], 'v3 answer')
+            session = store.create_local_session(title='v4 会话')
+            self.assertEqual(store.require_local_session(session['meeting_id'])['title'], 'v4 会话')
+        finally:
+            store.close()
+        self.assertEqual(self.schema_state()[0], adviser_schema.ADVISER_SCHEMA_VERSION)
 
     def test_runtime_reopen_never_calls_initializer(self):
         AdviserStore.initialize(self.path)
