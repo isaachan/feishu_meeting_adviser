@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """Local .vemedia recording + streaming STT feeding `collect --captions -`.
 
-Revives the v1 input pipeline (incremental .vemedia AAC extraction, resident
+Uses the local-meeting input pipeline (incremental .vemedia AAC extraction, resident
 FFmpeg decode to 16 kHz PCM, streaming sherpa-onnx STT) and forwards each
 FINAL utterance as one JSONL caption line to the v2 product collector; STT
 partials are revisions and are never forwarded. Audio never leaves this
 machine; only recognized text enters the product storage.
 
-Run with the v1 virtualenv interpreter when using --stt-provider local, e.g.:
+Run with the local-meeting virtualenv interpreter when using --stt-provider local, e.g.:
 
-  v1/venv/bin/python v2/scripts/collect-local.py /path/to/growing.vemedia \
+  studies/local-meeting/venv/bin/python v2/scripts/collect-local.py /path/to/growing.vemedia \
       --stt-provider local \
-      --local-model-dir v1/models/sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05
+      --local-model-dir v2/models/sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05
 
 After `./join <meeting>`; `./consume --watch` keeps working unchanged. The model
 directory is not committed: on first local use the script downloads the official
@@ -33,7 +33,7 @@ import urllib.request
 from uuid import uuid4
 
 V2_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_V1_SCRIPTS = Path(__file__).resolve().parents[2] / 'v1' / 'scripts'
+DEFAULT_LOCAL_MEETING_SCRIPTS = Path(__file__).resolve().parents[2] / 'studies' / 'local-meeting' / 'scripts'
 MODEL_NAME = 'sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05'
 DEFAULT_MODEL_DIR = V2_ROOT / 'models' / MODEL_NAME
 MODEL_URL = ('https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/'
@@ -118,8 +118,8 @@ def main():
     ap.add_argument('--recording-start', type=float,
                     help='recording start as unix seconds (default: .vemedia file birthtime)')
     ap.add_argument('--replay', action='store_true', help='read a static snapshot once, no live waiting')
-    ap.add_argument('--v1-scripts', type=Path, default=DEFAULT_V1_SCRIPTS,
-                    help='v1 scripts directory providing the tested parser/decoder/STT modules')
+    ap.add_argument('--local-meeting-scripts', type=Path, default=DEFAULT_LOCAL_MEETING_SCRIPTS,
+                    help='local-meeting scripts directory providing the tested parser/decoder/STT modules')
     ap.add_argument('--python', type=Path, default=V2_ROOT / '.venv' / 'bin' / 'python',
                     help='v2 virtualenv python used to run the product collect command')
     ap.add_argument('--config', type=Path, help='pass an explicit product config path to collect')
@@ -134,7 +134,7 @@ def main():
     if not args.vemedia:
         ap.error('vemedia path required unless using --download-model')
 
-    sys.path.insert(0, str(args.v1_scripts.resolve()))
+    sys.path.insert(0, str(args.local_meeting_scripts.resolve()))
     from stream_stt_mock import FFmpegDecoder, PCMChunker, VemediaParser, ffmpeg_executable
     from stt_providers import SAMPLE_RATE, create_stt_session
 

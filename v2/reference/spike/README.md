@@ -6,7 +6,7 @@
 
 [计划](../../PLAN_OFFICIAL_MEETING_EVENTS.md) · [TODO](../../docs/TODO.md)
 
-依据飞书[加入会议](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/vc-v1/bot/join.md)及[会议事件列表](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/vc-v1/bot/events.md)接口：用应用身份执行 `bots/join`（输入 9 位会议号），**从入会响应直接获取内部会议 ID**，然后用相同应用身份拉事件。无需用户 OAuth，也不再使用 `list_by_no` 查 ID。接口处于灰度开放阶段；用户已在真实会议中观察到 `transcript_received`，并完成一场持续采集/双人脚本对照；多场增量可靠性与问答端到端时延尚未验收。**v2 是当前唯一方案，v1 因无可靠说话人信息、上下文不足而放弃。原 6 秒目标已撤销；新的规划目标是提问结束到可用回答 20 秒，暂分配约 15 秒获取字幕、5 秒 LLM 生成/输出。**这不是达标承诺：单场测试字幕片段的接收差值中位约 15 秒、最大约 24 秒，完整问答链路尚未实现。计时终点及统计口径见 [TODO](../../docs/TODO.md)。
+依据飞书[加入会议](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/vc-v1/bot/join.md)及[会议事件列表](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/vc-v1/bot/events.md)接口：用应用身份执行 `bots/join`（输入 9 位会议号），**从入会响应直接获取内部会议 ID**，然后用相同应用身份拉事件。无需用户 OAuth，也不再使用 `list_by_no` 查 ID。接口处于灰度开放阶段；用户已在真实会议中观察到 `transcript_received`，并完成一场持续采集/双人脚本对照；多场增量可靠性与问答端到端时延尚未验收。**v2 是当前产品方向，本地录制转写因无可靠说话人信息而存在上下文限制。原 6 秒目标已撤销；新的规划目标是提问结束到可用回答 20 秒，暂分配约 15 秒获取字幕、5 秒 LLM 生成/输出。**这不是达标承诺：单场测试字幕片段的接收差值中位约 15 秒、最大约 24 秒，完整问答链路尚未实现。计时终点及统计口径见 [TODO](../../docs/TODO.md)。
 
 ## 准备
 

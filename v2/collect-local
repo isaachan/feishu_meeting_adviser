@@ -2,4 +2,4 @@
 set -euo pipefail
 
 cd "$(dirname "$0")"
-exec ../v1/venv/bin/python scripts/collect-local.py "$@"
+exec ../studies/local-meeting/venv/bin/python scripts/collect-local.py "$@"

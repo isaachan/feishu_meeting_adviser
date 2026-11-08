@@ -1,4 +1,6 @@
-# feishu_meeting_adviser
+# 本地会议录制与流式转写研究
+
+研究代码位于 `studies/local-meeting/`，以下命令均在该目录执行。本地 `.vemedia` 解析、音频解码和流式 STT 模块也供产品的 `v2/collect-local` 使用。
 
 ## 会中 `.vemedia` → 流式 STT
 
