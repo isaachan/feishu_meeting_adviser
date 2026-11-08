@@ -15,7 +15,7 @@ python3 -m venv .venv
 
 仅在没有本机配置时复制 `config.example.yaml` 为 `config.yaml`，填写凭据并执行 `chmod 600 config.yaml`。`storage.directory` 默认配置为 `../data`。
 
-配置 `llm.backend: codex` 或 `opencode` 使用真实模型（本地子进程执行；远程 `llm-gateway` 按计划在阶段 3–4 接入，见 [远程推理契约](../docs/CONTRACT_REMOTE_INFERENCE.md)）。Codex 使用本机 ChatGPT 订阅登录；OpenCode 默认使用已登录的 `zai-coding-plan/glm-5.3`。`llm.role_file` 留空时使用包内 [meeting_adviser.md](src/feishu_meeting_adviser/meeting_adviser.md)，也可指定本机文件。
+配置 `llm.backend: opencode` 在本机执行 OpenCode（GLM），或 `llm.backend: remote` + `remote_url` 经 [llm-gateway](../llm-gateway/README.md) 远程执行（见 [远程推理契约](../docs/CONTRACT_REMOTE_INFERENCE.md)；`remote_backend: fake` 用于测试）。Codex 已取消接入，旧代码仅存档。`llm.role_file` 留空时使用包内 [meeting_adviser.md](src/feishu_meeting_adviser/meeting_adviser.md)，也可指定本机文件。
 
 ## 本地会话
 

@@ -68,7 +68,7 @@ class LocalSessionFlowTests(unittest.TestCase):
         self.config_path = directory / 'config.yaml'
         self.config_path.write_text('app:\n  id: synthetic\n  secret: synthetic-secret\n'
                                     'storage:\n  directory: ../data\n'
-                                    'llm:\n  backend: codex\n  batch_seconds: 0\n')
+                                    'llm:\n  backend: opencode\n  batch_seconds: 0\n')
         self.config_path.chmod(0o600)
         self.config = load_config(self.config_path)
         self.addCleanup(lambda: self.assertTrue(

@@ -2,8 +2,11 @@
 
 Behaviour is selected through ``metadata.fake`` (never through the payload):
 
-    {"fake": {"behavior": "ok"|"fresh"|"silence"|"slow"|"timeout"|"error"|"invalid",
+    {"fake": {"behavior": "fresh"|"ok"|"silence"|"slow"|"timeout"|"error"|"invalid",
               "reply": "...", "keys": ["..."], "seconds": 2.0}}
+
+The default is the deterministic "fresh" success: a reply citing the first
+fresh input key when the payload carries one, silence otherwise.
 """
 import threading
 import time
@@ -15,7 +18,7 @@ class FakeBackend(ModelBackend):
     def decide(self, system, input_value, *, deadline_seconds, stop_event, metadata):
         fake = metadata.get('fake') if isinstance(metadata, dict) else None
         fake = fake if isinstance(fake, dict) else {}
-        behavior = fake.get('behavior', 'silence')
+        behavior = fake.get('behavior', 'fresh')
         if behavior == 'slow':
             if stop_event.wait(float(fake.get('seconds', 1.0))):
                 raise BackendError('cancelled')

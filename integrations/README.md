@@ -1,12 +1,12 @@
 # 集成测试
 
-本目录默认全部为 integration 测试：模块隔离守护、本地会话 CLI 流程，以及 fake-recorder → 本地交接契约 → advisor 的端到端链路。模块单元测试分别位于 `advisor/tests/`、`meeting-listener/tests/` 和 `local-meeting-recorder/tests/`。
+本目录默认全部为 integration 测试：模块隔离守护、本地会话 CLI 流程、fake-recorder → 交接契约 → advisor 链路，以及 fake-recorder → advisor → localhost llm-gateway 的 M1 全链路。模块单元测试位于各模块 `tests/`。
 
 使用独立的临时测试环境，从仓库根目录执行：
 
 ```bash
 python3 -m venv /tmp/meeting-integration
-/tmp/meeting-integration/bin/python -m pip install -e ./advisor -e ./meeting-listener -e ./local-meeting-recorder
+/tmp/meeting-integration/bin/python -m pip install -e ./advisor -e ./meeting-listener -e ./local-meeting-recorder -e ./llm-gateway
 /tmp/meeting-integration/bin/python -m unittest discover -s integrations -v
 ```
 

@@ -2,12 +2,14 @@
 
 项目分为两个独立模块，通过本机 SQLite 数据交接：
 
-- **[advisor](advisor/README.md)**：本地会议会话、消费字幕、会议上下文、模型决策与本地结果保存，包含本地 harness。
+- **[advisor](advisor/README.md)**：本地会议会话、消费字幕、会议上下文、模型决策与本地结果保存，包含本地 harness；经 `llm.backend: remote` 调用网关。
 - **[meeting-listener](meeting-listener/README.md)**：**已停用**（飞书权限限制）。代码与测试保留，不再处于默认运行路径；归档范围在 [plan.md](plan.md) 阶段 6 核对。
 - **[data](data/README.md)**：本地会话、字幕、消费进度、模型任务及运行日志。
+- **[llm-gateway](llm-gateway/README.md)**：localhost 模型执行网关（仅 OpenCode/GLM，首版无认证、限内网）。
+- **[local-meeting-recorder](local-meeting-recorder/README.md)**：fake 台词回放（真实声卡采集暂缓）。
 - **[plan.md](plan.md)**：方案 B（本地 advisor + 远程模型执行）的架构、契约与任务清单。
 
-advisor 与后续的 `local-meeting-recorder`、`llm-gateway` 各自维护配置、环境、测试和 `pyproject.toml`。根目录 `integrations/` 默认全部是集成测试。
+advisor、`local-meeting-recorder` 与 `llm-gateway` 各自维护配置、环境、测试和 `pyproject.toml`。根目录 `integrations/` 默认全部是集成测试。
 
 ## 安装
 
@@ -30,7 +32,7 @@ cd advisor
 .venv/bin/python -m feishu_meeting_adviser session-end <session_id>
 ```
 
-会话由 advisor 显式创建，不依赖飞书会议号或 bot 入会；模型回答保存为本地结果（`replies` 查看），不发送任何通知（notification 搁置，见 plan.md）。运行期字幕输入源（fake-recorder → 本地交接契约）按计划在阶段 2 接入；当前字幕经由本地字幕存储进入会话。
+会话由 advisor 显式创建，不依赖飞书会议号或 bot 入会；模型回答保存为本地结果（`replies` 查看），不发送任何通知（notification 搁置，见 plan.md）。字幕由 fake-recorder 经[交接契约](docs/CONTRACT_RECORDER_INPUT.md)进入会话；模型调用经[远程推理契约](docs/CONTRACT_REMOTE_INFERENCE.md)发往网关（`llm.backend: remote`）。M1（fake-recorder → advisor → 网关假模型 → 本地有效决定）已由集成测试打通；真实 OpenCode 验证（M2）待做。
 
 ## 文档与测试
 

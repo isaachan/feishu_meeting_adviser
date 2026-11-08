@@ -13,6 +13,7 @@
 | `oauth/` | advisor 的用户授权状态 |
 | `model_runtime/` | advisor 的模型临时运行资源 |
 | `harness/` | advisor harness 的独立数据 |
+| `llm-gateway/` | 网关任务数据库与隔离运行目录（见 [llm-gateway](../llm-gateway/README.md)） |
 | `spike/` | meeting-listener 接口实验的独立配置、会话和输出 |
 
 本目录不是 Python 包，不包含公共代码。实际运行数据由 Git 忽略，仅跟踪本说明及 [资料操作说明](docs/DATA_OPERATIONS.md)。STT 模型保存在 `meeting-listener/models/`。
