@@ -17,6 +17,7 @@ from .adapters.persistence.factory import StorageFactory
 from .model_jobs import ModelJobExecutor
 from .reply_dispatcher import ReplyDispatcher
 from .material_bootstrap import LocalMaterialBootstrapper, MaterialBootstrapper
+from .spool_ingest import SpoolIngester
 
 
 def _session_identity(session):
@@ -66,6 +67,11 @@ class AdviserService:
         self.maintenance = Maintenance(
             source, self.config,
             lock_name=('maintenance-local-' + digest(self.mid) + '.lock') if self.local else None)
+        # Local sessions pull their runtime input from the recorder spool before
+        # each step; the durable source store remains the only input source.
+        self.spool = (SpoolIngester(source, self.config.data_directory, self.mid,
+                                    started_at=self.session['started_at'])
+                      if self.local else None)
         runtime = self.config.data_directory / 'model_runtime'
         if self.settings.backend == 'opencode':
             runtime = runtime / 'opencode' / digest(self.mid)
@@ -193,6 +199,8 @@ class AdviserService:
             self.replied += int(self.dispatcher.dispatch())
 
     def step(self):
+        if self.spool is not None:
+            self.spool.poll()
         self._ensure_materials()
         self.ingest()
         # DEMO: do not invalidate pending replies while processing newer input.
@@ -249,6 +257,8 @@ class AdviserService:
     def _drained(self) -> bool:
         """A draining local session ends once inputs, model work and replies settle."""
         if self.worker is not None:
+            return False
+        if self.spool is not None and not self.spool.drained():
             return False
         meeting = self.data.require_meeting(self.mid)
         if meeting['generation'] > meeting['decided_generation']:

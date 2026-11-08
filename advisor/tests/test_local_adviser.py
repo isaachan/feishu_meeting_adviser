@@ -195,6 +195,41 @@ class LocalAdviserTests(unittest.TestCase):
         snapshot_materials = self.data.materials(session['meeting_id'])
         self.assertEqual(snapshot_materials['state'], 'disabled')
 
+    def test_local_service_consumes_recorder_spool_end_to_end(self):
+        import json
+
+        session = self.session()
+        mid = session['meeting_id']
+        stream = f'{mid}:st1'
+        spool = self.config.data_directory / 'recorder' / 'spool' / mid / stream
+        spool.mkdir(mode=0o700, parents=True)
+        # Offsets land inside the freshness window relative to the session origin.
+        spool.joinpath('000001.jsonl').write_text(
+            json.dumps({'schema_version': 1, 'session_id': mid, 'stream_id': stream,
+                        'sequence': 1, 'event_id': f'{stream}:1', 'kind': 'caption',
+                        'utterance_id': 'u-000001', 'revision': 1,
+                        'text': 'spool 来的提问', 'speaker_label': '张三',
+                        'start_offset_ms': 30000, 'end_offset_ms': 30500,
+                        'wall_clock_at': '2026-11-08T10:00:00+00:00'}, ensure_ascii=False)
+            + '\n'
+            + json.dumps({'schema_version': 1, 'session_id': mid, 'stream_id': stream,
+                          'sequence': 2, 'event_id': f'{stream}:2', 'kind': 'stream_end',
+                          'last_sequence': 1,
+                          'wall_clock_at': '2026-11-08T10:00:01+00:00'}, ensure_ascii=False)
+            + '\n', encoding='utf-8')
+        backend = FakeBackend()
+        backend.reply = Decision('none', (), 'spool 回答', ('u-000001',))
+        service = self.service(session, backend=backend)
+        result = service.run()
+        service.close()
+        self.assertEqual(result['decisions'], 1)
+        rows = self.data.list_replies(mid, show_text=True)
+        self.assertEqual([(row['channel'], row['state'], row['text']) for row in rows],
+                         [('local', 'sent', 'spool 回答')])
+        ack = (self.config.data_directory / 'recorder' / 'ack' / mid
+               / (stream + '.json'))
+        self.assertEqual(json.loads(ack.read_text()), {'acked_sequence': 2})
+
     def test_local_reply_is_published_to_local_channel_without_transport(self):
         session = self.session()
         self.source.commit_page(session['meeting_id'], [self.caption(session['meeting_id'])], {})
