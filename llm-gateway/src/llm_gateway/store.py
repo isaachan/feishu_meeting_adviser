@@ -75,7 +75,8 @@ def _open(path: Path, *, create: bool) -> sqlite3.Connection:
         if path.is_symlink() or path.exists() and not path.is_file():
             raise StorageError('gateway database must be a regular file')
         existed = path.exists()
-        db = sqlite3.connect(str(path), isolation_level=None, timeout=5)
+        db = sqlite3.connect(str(path), isolation_level=None, timeout=5,
+                              check_same_thread=False)
         db.row_factory = sqlite3.Row
         db.execute('PRAGMA journal_mode=WAL')
         db.execute('PRAGMA busy_timeout=5000')
@@ -88,7 +89,8 @@ def _open(path: Path, *, create: bool) -> sqlite3.Connection:
         return db
     if not path.exists() or path.is_symlink() or not path.is_file():
         raise StorageError('gateway database does not exist')
-    db = sqlite3.connect(str(path), isolation_level=None, timeout=5)
+    db = sqlite3.connect(str(path), isolation_level=None, timeout=5,
+                          check_same_thread=False)
     db.row_factory = sqlite3.Row
     db.execute('PRAGMA busy_timeout=5000')
     db.execute('PRAGMA query_only=ON')
