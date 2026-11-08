@@ -20,7 +20,7 @@ class DecisionApplier:
 
     def apply(self, job: dict, decision, *, now: float | None = None, settings=None,
               joined_at: float = 0, bot_id: str | None = None,
-              notifications=None, fault=None) -> bool:
+              notifications=None, fault=None, local_result: bool = False) -> bool:
         now = time.time() if now is None else now
         snapshot = decode_mapping(job['snapshot'])
         fresh_keys = set(snapshot['fresh_input_keys'])
@@ -68,6 +68,13 @@ class DecisionApplier:
                 basis = {key: valid_reply[key] for key in decision.reply_sentence_keys}
                 message_uuid = str(uuid5(NAMESPACE_URL, digest([
                     'adviser-reply-v1', job['meeting_id'], job['role_version'], basis, decision.reply])))
+                if local_result:
+                    meeting_comment, reply_recipients = False, ()
+                elif notifications:
+                    meeting_comment = notifications.meeting_comment
+                    reply_recipients = notifications.recipients
+                else:
+                    meeting_comment, reply_recipients = True, ()
                 tx.outbox.save_reply(
                     message_uuid=message_uuid,
                     meeting_id=job['meeting_id'],
@@ -76,8 +83,9 @@ class DecisionApplier:
                     generation=job['generation'],
                     created_ns=int(now * 1_000_000_000),
                     context_version=meeting['material_version'],
-                    meeting_comment=notifications.meeting_comment if notifications else True,
-                    recipients=notifications.recipients if notifications else (),
+                    meeting_comment=meeting_comment,
+                    recipients=reply_recipients,
+                    local=local_result,
                 )
             brief = {
                 'generation': job['generation'],

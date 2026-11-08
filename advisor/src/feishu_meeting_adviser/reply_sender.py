@@ -12,6 +12,12 @@ INTRODUCTION = ('大家好，我是会参谋，会结合讨论内容判断是否
 
 def send_saved_reply(data, client, row, *, clock, interval=0, diagnose=None):
     data.mark_sending(row['uuid'])
+    if row.get('channel', 'meeting') == 'local':
+        # Local results are published by persisting the send; there is no transport.
+        data.mark_sent(row['uuid'], now=clock(), interval=interval)
+        if diagnose:
+            diagnose({'kind':'reply','local_published':True})
+        return True
     try:
         if row.get('channel', 'meeting') == 'im':
             client.send_direct_message(row['recipient_id'], row['content'], row['uuid'])

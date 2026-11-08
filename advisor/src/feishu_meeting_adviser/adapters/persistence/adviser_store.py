@@ -327,7 +327,7 @@ class AdviserStore:
         return dict(self.db.execute('SELECT * FROM jobs WHERE job_id=?', (job_id,)).fetchone())
 
     def finish_job(self, job, decision, *, now=None, settings=None, joined_at=0, bot_id=None,
-                   notifications=None, fault=None):
+                   notifications=None, fault=None, local_result=False):
         return DecisionApplier(self).apply(
             job,
             decision,
@@ -337,6 +337,7 @@ class AdviserStore:
             bot_id=bot_id,
             notifications=notifications,
             fault=fault,
+            local_result=local_result,
         )
 
     def fail_job(self, job, reason, *, retry_at):

@@ -166,7 +166,8 @@ class AdviserService:
         self.decision_observer(decision)
         self.data.finish_job(job, decision, now=self.clock(), settings=self.settings,
                              joined_at=self.session['joined_at'], bot_id=self.session.get('bot_user_id'),
-                             notifications=None if self.local else getattr(self.config, 'notifications', None))
+                             notifications=None if self.local else getattr(self.config, 'notifications', None),
+                             local_result=self.local)
         self.decisions += 1
         self.diagnose(self._model_metadata() | {'kind':'model','backend':self.settings.backend,'model_ms':elapsed,'decision_saved':True,
                        'participation':self.data.require_meeting(self.mid)['participation']})

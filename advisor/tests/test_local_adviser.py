@@ -8,6 +8,7 @@ from feishu_meeting_adviser.adapters.persistence.factory import StorageFactory
 from feishu_meeting_adviser.adviser import AdviserService
 from feishu_meeting_adviser.config import load_config
 from feishu_meeting_adviser.infrastructure.errors import LifecycleError, LockBusy
+from feishu_meeting_adviser.llm import Decision
 from feishu_meeting_adviser.local_sessions import LocalSessionManager
 from feishu_meeting_adviser.models import Caption, digest
 from feishu_meeting_adviser.storage import Store
@@ -138,6 +139,25 @@ class LocalAdviserTests(unittest.TestCase):
         result = service.run()
         service.close()
         self.assertEqual((result['replied'], result['decisions']), (0, 1))
+
+    def test_local_reply_is_published_to_local_channel_without_transport(self):
+        session = self.session()
+        self.source.commit_page(session['meeting_id'], [self.caption(session['meeting_id'])], {})
+        backend = FakeBackend()
+        backend.reply = Decision('none', (), '本地保存的回答', ('s:1',))
+        service = self.service(session, backend=backend)
+        result = service.run()
+        service.close()
+        self.assertEqual(result['replied'], 1)
+        rows = self.data.list_replies(session['meeting_id'], show_text=True)
+        self.assertEqual([(row['channel'], row['state'], row['text']) for row in rows],
+                         [('local', 'sent', '本地保存的回答')])
+        # Re-running never duplicates the locally published answer.
+        service = self.service(session, backend=FakeBackend())
+        rerun = service.run()
+        service.close()
+        self.assertEqual((rerun['replied'], rerun['decisions']), (0, 0))
+        self.assertEqual(len(self.data.list_replies(session['meeting_id'])), 1)
 
 
 if __name__ == '__main__':

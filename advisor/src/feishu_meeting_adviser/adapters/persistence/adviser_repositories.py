@@ -132,11 +132,15 @@ class ReplyOutboxRepository:
                    evidence: str, generation: int, created_ns: int,
                    context_version: str | None,
                    meeting_comment: bool = True,
-                   recipients: tuple[str, ...] = ()) -> None:
-        targets = ([('meeting', None, message_uuid)] if meeting_comment else []) + [
-            ('im', recipient, str(uuid5(NAMESPACE_URL, f'{message_uuid}:im:{recipient}')))
-            for recipient in recipients
-        ]
+                   recipients: tuple[str, ...] = (),
+                   local: bool = False) -> None:
+        if local:
+            targets = [('local', None, message_uuid)]
+        else:
+            targets = ([('meeting', None, message_uuid)] if meeting_comment else []) + [
+                ('im', recipient, str(uuid5(NAMESPACE_URL, f'{message_uuid}:im:{recipient}')))
+                for recipient in recipients
+            ]
         for channel, recipient, delivery_uuid in targets:
             self.connection.execute(
                 '''INSERT INTO outbox(
