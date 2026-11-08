@@ -9,6 +9,18 @@ class InvalidDecision(Exception):
     pass
 
 
+DECISION_SCHEMA = {
+    'type': 'object', 'additionalProperties': False,
+    'properties': {
+        'control': {'type': 'string', 'enum': ['none', 'pause', 'resume', 'cancel']},
+        'control_sentence_keys': {'type': 'array', 'items': {'type': 'string'}},
+        'reply': {'type': ['string', 'null']},
+        'reply_sentence_keys': {'type': 'array', 'items': {'type': 'string'}},
+    },
+    'required': ['control', 'control_sentence_keys', 'reply', 'reply_sentence_keys'],
+}
+
+
 def validate(value) -> dict:
     if not isinstance(value, dict) or set(value) != {
             'control', 'control_sentence_keys', 'reply', 'reply_sentence_keys'}:
