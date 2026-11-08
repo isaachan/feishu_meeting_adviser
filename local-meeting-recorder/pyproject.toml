@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "local-meeting-recorder"
+version = "0.1.0"
+description = "Local meeting capture; fake script replay feeds the recorder handoff contract"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["coverage==7.16.2", "pyright==1.1.414", "ruff==0.17.0"]
+
+[project.scripts]
+recorder = "local_meeting_recorder.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E9", "F63", "F7", "F82"]
+
+[tool.pyright]
+include = ["src/local_meeting_recorder"]
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
+
+[tool.coverage.run]
+branch = true
+source = ["local_meeting_recorder"]
+
+[tool.coverage.report]
+exclude_also = ["if __name__ == .__main__.:", "if TYPE_CHECKING:", '\.\.\.']
