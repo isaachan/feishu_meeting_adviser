@@ -11,15 +11,16 @@ from feishu_meeting_adviser.adapters.persistence.adviser_store import AdviserSto
 from feishu_meeting_adviser.adapters.persistence.factory import StorageFactory
 from feishu_meeting_adviser.collector import utc_now
 from feishu_meeting_adviser.config import load_config
-from feishu_meeting_adviser.llm import CodexBackend
 from feishu_meeting_adviser.models import Caption, SourceState, Status
+from feishu_meeting_adviser.opencode_backend import OpenCodeBackend
 from feishu_meeting_adviser.storage import Store
 
 action, root = sys.argv[1], Path(sys.argv[2])
 path = root / 'config.yaml'
 if not path.exists():
     path.write_text('app:\n  id: synthetic\n  secret: synthetic\n'
-                    'llm:\n  backend: codex\n  batch_seconds: 0\n  introduction: false\n  timeout_seconds: 30\n')
+                    'llm:\n  backend: opencode\n  batch_seconds: 0\n'
+                    '  introduction: false\n  timeout_seconds: 30\n')
     path.chmod(0o600)
 
 config = load_config(path)
@@ -44,10 +45,12 @@ data.close()
 
 
 def backend(settings, workdir, *, stop_event):
-    peer = Path(__file__).with_name('fake_codex_server.py')
-    return CodexBackend(settings, workdir, stop_event=stop_event,
-        command=[sys.executable, str(peer), 'delay' if action == 'watch' else 'reply',
-                 str(root / 'peer-pid')])
+    peer = Path(__file__).with_name('fake_opencode_server.py')
+    # 'timeout' keeps the model running until the deadline; the signal under
+    # test interrupts the consumer first. Every other action needs a decision.
+    mode = 'timeout' if action == 'watch' else 'reply'
+    return OpenCodeBackend(settings, workdir, stop_event=stop_event,
+                           command=[sys.executable, str(peer), mode, str(root / 'peer')])
 
 
 original_mark_sent = AdviserStore.mark_sent

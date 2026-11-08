@@ -16,7 +16,7 @@ HELPER = Path(__file__).parent / 'helpers' / 'model_process.py'
 
 class ModelProcessTests(unittest.TestCase):
     def stop_peer(self, root):
-        path = root / 'peer-pid'
+        path = root / 'peer.pid'
         if path.exists():
             try:
                 os.kill(int(path.read_text()), signal.SIGTERM)
@@ -34,7 +34,7 @@ class ModelProcessTests(unittest.TestCase):
                 ready = False
                 while time.monotonic() < deadline and proc.poll() is None:
                     path = root / 'data' / 'adviser.sqlite3'
-                    if path.exists() and (root / 'peer-pid').exists() and (root / 'session-id').exists():
+                    if path.exists() and (root / 'peer.pid').exists() and (root / 'session-id').exists():
                         data = AdviserStore(path)
                         try:
                             ready = bool(data.db.execute(

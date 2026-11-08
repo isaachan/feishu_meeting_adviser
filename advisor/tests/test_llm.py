@@ -185,7 +185,7 @@ class LLMTests(unittest.TestCase):
         path.write_text(base)
         path.chmod(0o600)
         self.assertEqual(load_config(path).llm.backend, 'rule')
-        path.write_text(base + 'llm:\n  backend: codex\n  role_file: role.md\n  introduction: false\n')
+        path.write_text(base + 'llm:\n  backend: opencode\n  role_file: role.md\n  introduction: false\n')
         settings = load_config(path).llm
         self.assertEqual(settings.role_file, self.root / 'role.md')
         self.assertFalse(settings.introduction)

@@ -133,8 +133,8 @@ def handle_status(context, args):
 
 
 def handle_consume(context, args):
-    if context.config.llm.backend not in ('codex', 'opencode'):
-        raise ConfigError('local sessions require llm.backend codex/opencode or --backend')
+    if context.config.llm.backend not in ('opencode', 'remote'):
+        raise ConfigError('local sessions require llm.backend opencode/remote or --backend')
     session = context.session()
     manager = LocalSessionManager(context.data, context.config, session['meeting_id'])
     adviser = AdviserService(

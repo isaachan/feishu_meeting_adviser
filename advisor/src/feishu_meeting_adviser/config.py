@@ -214,8 +214,14 @@ class NotificationSettings:
 def _parse_llm(section: ConfigSection, base_directory: Path):
     section.reject_unknown(LLMSettings.__dataclass_fields__)
     backend = section.string('backend', 'rule')
-    if backend not in ('rule', 'codex', 'opencode'):
-        raise ConfigError('llm.backend must be rule, codex or opencode')
+    if backend not in ('rule', 'opencode', 'remote'):
+        raise ConfigError('llm.backend must be rule, opencode or remote')
+    remote_backend = section.string('remote_backend', 'opencode')
+    if remote_backend not in ('fake', 'opencode'):
+        raise ConfigError('llm.remote_backend must be fake or opencode')
+    remote_url = section.string('remote_url')
+    if backend == 'remote' and not re.fullmatch(r'https?://[A-Za-z0-9.:_\-\[\]]+/?', remote_url):
+        raise ConfigError('llm.remote_url must be an http(s) base URL when backend is remote')
     opencode_model = section.string(
         'opencode_model', 'zai-coding-plan/glm-5.3', required=True)
     if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', opencode_model):
@@ -247,6 +253,8 @@ def _parse_llm(section: ConfigSection, base_directory: Path):
         opencode_executable=section.string(
             'opencode_executable', 'opencode', required=True),
         opencode_model=opencode_model,
+        remote_url=remote_url,
+        remote_backend=remote_backend,
     )
 
 

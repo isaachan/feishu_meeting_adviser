@@ -43,6 +43,8 @@ class LLMSettings:
     introduction: bool = True
     opencode_executable: str = 'opencode'
     opencode_model: str = 'zai-coding-plan/glm-5.3'
+    remote_url: str = ''
+    remote_backend: str = 'opencode'
 
 
 DECISION_SCHEMA = {
@@ -124,6 +126,9 @@ class ModelBackend(Protocol):
 
 
 def create_backend(settings, workdir, *, stop_event=None) -> ModelBackend:
+    if settings.backend == 'remote':
+        from .remote_backend import RemoteModelBackend
+        return RemoteModelBackend(settings, workdir, stop_event=stop_event)
     if settings.backend == 'opencode':
         from .opencode_backend import OpenCodeBackend
         return OpenCodeBackend(settings, workdir, stop_event=stop_event)

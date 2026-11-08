@@ -36,6 +36,7 @@ include = [
     "src/feishu_meeting_adviser/decision.py",
     "src/feishu_meeting_adviser/material_bootstrap.py",
     "src/feishu_meeting_adviser/model_jobs.py",
+    "src/feishu_meeting_adviser/remote_backend.py",
     "src/feishu_meeting_adviser/reply_dispatcher.py",
     "src/feishu_meeting_adviser/snapshot.py",
 ]

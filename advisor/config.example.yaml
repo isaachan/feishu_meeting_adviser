@@ -24,13 +24,13 @@ storage:
   diagnostic_bytes: 1000000
   diagnostic_backups: 3
 
-# 阶段 2：省略 llm 时保留固定规则；真实模型支持 codex / opencode。
+# 模型后端：opencode 在本机执行；remote 经 llm-gateway 执行（方案 B）。
 llm:
-  backend: codex
-  executable: codex
-  model: ""                      # 空值沿用当前 Codex 默认模型
+  backend: opencode
   opencode_executable: opencode
   opencode_model: zai-coding-plan/glm-5.3 # backend: opencode 时使用；复用 opencode 本机登录
+  remote_url: ""                 # backend: remote 时必填，例如 http://127.0.0.1:8377
+  remote_backend: opencode       # remote 模式下网关执行的后端：opencode 或 fake（测试）
   role_file: ""                  # 空值使用包内 meeting_adviser.md；可设本机 Markdown 路径
   timeout_seconds: 90
   batch_seconds: 2

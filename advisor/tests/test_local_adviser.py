@@ -26,7 +26,7 @@ class LocalAdviserTests(unittest.TestCase):
         self.path.chmod(0o600)
         self.config = load_config(self.path)
         self.config = replace(self.config, llm=replace(
-            self.config.llm, backend='codex', batch_seconds=0, introduction=False))
+            self.config.llm, backend='opencode', batch_seconds=0, introduction=False))
         StorageFactory(self.config).initialize_source()
         StorageFactory(self.config).initialize_adviser()
         self.source = Store(self.config.data_directory / 'source.sqlite3')

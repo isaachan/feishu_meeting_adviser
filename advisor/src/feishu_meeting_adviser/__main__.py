@@ -40,7 +40,7 @@ def parser():
     consume.add_argument('session')
     consume.add_argument('--consumer')
     consume.add_argument('--limit', type=int, default=100)
-    consume.add_argument('--backend', choices=('codex', 'opencode'),
+    consume.add_argument('--backend', choices=('opencode', 'remote'),
                          help='override llm.backend for this invocation')
     consume.add_argument('--watch', action='store_true', help='continuously consume and decide; Ctrl-C stops the consumer only')
     replies = commands.add_parser('replies', help='inspect saved model reply states; text requires explicit flag')

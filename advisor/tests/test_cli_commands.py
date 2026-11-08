@@ -39,7 +39,7 @@ class CLICommandTests(unittest.TestCase):
             root = Path(directory)
             config_path = root / 'config.yaml'
             config_path.write_text('app:\n  id: synthetic\n  secret: synthetic\n'
-                                   'llm:\n  backend: codex\n  batch_seconds: 0\n')
+                                   'llm:\n  backend: opencode\n  batch_seconds: 0\n')
             config_path.chmod(0o600)
             config = load_config(config_path)
             output = io.StringIO()

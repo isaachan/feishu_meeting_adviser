@@ -58,7 +58,7 @@ class AdviserTests(unittest.TestCase):
         self.path.write_text('app:\n  id: synthetic\n  secret: synthetic\n')
         self.path.chmod(0o600)
         self.config = load_config(self.path)
-        self.config = replace(self.config, llm=replace(self.config.llm, backend='codex', batch_seconds=0, introduction=False))
+        self.config = replace(self.config, llm=replace(self.config.llm, backend='opencode', batch_seconds=0, introduction=False))
         StorageFactory(self.config).initialize_source()
         StorageFactory(self.config).initialize_adviser()
         self.source = Store(self.config.data_directory / 'source.sqlite3')
@@ -449,7 +449,7 @@ class AdviserTests(unittest.TestCase):
         self.assertEqual(len(self.backend.calls),1)
 
     def test_configured_join_sends_intro_once_without_starting_model(self):
-        self.path.write_text(self.path.read_text()+'llm:\n  backend: codex\n')
+        self.path.write_text(self.path.read_text()+'llm:\n  backend: opencode\n')
         self.manager.config = load_config(self.path)
         self.manager.join('012345678')
         self.assertTrue(introduce(self.runner.data, self.manager, clock=lambda: NOW))
@@ -462,7 +462,7 @@ class AdviserTests(unittest.TestCase):
         self.assertTrue(introduce(self.runner.data, self.manager, clock=lambda: NOW))
         first_uuid = self.sent[0][2]
         self.runner.data.db.execute('UPDATE meetings SET participation=\'paused\' WHERE meeting_id=?', (MID,))
-        self.path.write_text(self.path.read_text() + 'llm:\n  backend: codex\n')
+        self.path.write_text(self.path.read_text() + 'llm:\n  backend: opencode\n')
         self.api.event_failure = ApiError(ErrorKind.BOT_ABSENT, code=120004)
         self.manager.config = load_config(self.path)
         self.manager.join('012345678')
