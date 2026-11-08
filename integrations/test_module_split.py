@@ -1,4 +1,8 @@
-"""The separately installed modules communicate through durable data, not imports."""
+"""Cross-module guards: module isolation and the advisor local-session flow.
+
+The legacy Feishu handoff between meeting-listener and advisor is disabled; a
+fake-recorder integration will be added with plan phase 2.
+"""
 import ast
 from contextlib import redirect_stderr, redirect_stdout
 import io
@@ -10,19 +14,19 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from feishu_meeting_adviser.__main__ import main as advisor_main
-from feishu_meeting_adviser.config import load_config
-from feishu_meeting_adviser.storage import Store as AdvisorStore
-from meeting_listener.__main__ import main as listener_main
-from meeting_listener.storage import Store as ListenerStore
+from feishu_meeting_adviser.__main__ import main
 from feishu_meeting_adviser.adapters.persistence.adviser_store import AdviserStore
-from synthetic import BotAPI, MID
+from feishu_meeting_adviser.collector import utc_now
+from feishu_meeting_adviser.config import load_config
+from feishu_meeting_adviser.llm import Decision
+from feishu_meeting_adviser.models import Caption
+from feishu_meeting_adviser.storage import Store
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-class ModuleSplitTests(unittest.TestCase):
+class ModuleIsolationTests(unittest.TestCase):
     def test_each_entrypoint_imports_without_loading_the_other_module(self):
         for package, forbidden in (
             ('meeting_listener', 'feishu_meeting_adviser'),
@@ -53,73 +57,91 @@ class ModuleSplitTests(unittest.TestCase):
                 self.assertFalse(
                     any(name.split('.')[0] in forbidden for name in imports), str(path))
 
-    def test_listener_captions_are_consumed_and_acknowledged_by_advisor(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            listener_config = self.config(root, 'listener')
-            advisor_config = self.config(root, 'advisor', 'runtime:\n  poll_seconds: 1\n')
-            captions = root / 'captions.jsonl'
-            captions.write_text(json.dumps({
-                'id': 'split:1', 'speaker': '合成说话人', 'text': '项目截止日期是明天',
-            }, ensure_ascii=False) + '\n')
-            api = BotAPI()
-            sent = []
-            api.send_message = lambda *args: sent.append(args)
-            with (patch('meeting_listener.__main__.FeishuClient', return_value=api),
-                  patch('feishu_meeting_adviser.__main__.FeishuClient', return_value=api),
-                  redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO())):
-                source_args = ['--config', str(listener_config)]
-                consumer_args = ['--config', str(advisor_config)]
-                self.assertEqual(listener_main(source_args + ['join', '012345678']), 0)
-                self.assertEqual(listener_main(source_args + ['collect', '--captions', str(captions)]), 0)
-                self.assertEqual(advisor_main(consumer_args + ['consume']), 0)
-                self.assertEqual(advisor_main(consumer_args + ['consume']), 0)
-            self.assertEqual(len(sent), 1)
-            self.assertEqual(sent[0][:2], (MID, '合成说话人，项目截止日期是今天。'))
-            source_path = load_config(advisor_config).data_directory / 'source.sqlite3'
-            for store_type in (ListenerStore, AdvisorStore):
-                store = store_type(source_path)
-                try:
-                    self.assertEqual(store.caption(MID, 's:split:1').text, '项目截止日期是明天')
-                    self.assertEqual(store.backlog(MID, 'fake-qa'), 0)
-                finally:
-                    store.close()
-            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-                self.assertEqual(listener_main(source_args + ['delete-meeting-data', '--confirm']), 0)
-            store = AdvisorStore(source_path)
-            try:
-                self.assertTrue(store.is_deleted(MID))
-                self.assertIsNone(store.caption(MID, 's:split:1'))
-            finally:
-                store.close()
 
-    def config(self, root, module, extra=''):
-        directory = root / module
-        directory.mkdir()
-        path = directory / 'config.yaml'
-        path.write_text('app:\n  id: synthetic\n  secret: synthetic-secret\n'
-                        'storage:\n  directory: ../data\n' + extra)
-        path.chmod(0o600)
-        return path
+class LocalSessionFlowTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.config_path = self.root / 'config.yaml'
+        self.config_path.write_text('app:\n  id: synthetic\n  secret: synthetic-secret\n'
+                                    'storage:\n  directory: ../data\n'
+                                    'llm:\n  backend: codex\n  batch_seconds: 0\n')
+        self.config_path.chmod(0o600)
+        self.config = load_config(self.config_path)
 
-    def test_join_introduction_is_visible_to_advisor_with_its_own_config(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            listener_config = self.config(root, 'listener', 'llm:\n  backend: codex\n')
-            advisor_config = self.config(root, 'advisor', 'llm:\n  backend: opencode\n')
-            api = BotAPI()
-            sent = []
-            api.send_message = lambda *args: sent.append(args)
-            args = ['--config', str(listener_config), 'join', '012345678']
-            with (patch('meeting_listener.__main__.FeishuClient', return_value=api),
-                  redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO())):
-                self.assertEqual(listener_main(args), 0)
-                self.assertEqual(listener_main(args), 0)
-            self.assertEqual(len(sent), 1)
-            data = AdviserStore(load_config(advisor_config).data_directory / 'adviser.sqlite3')
-            try:
-                replies = data.list_replies(MID, show_text=False)
-                self.assertTrue(replies)
-                self.assertTrue(all(reply['state'] == 'sent' for reply in replies))
-            finally:
-                data.close()
+    def run_cli(self, *args):
+        output = io.StringIO()
+        with redirect_stdout(output), redirect_stderr(io.StringIO()):
+            code = main(['--config', str(self.config_path), *args])
+        return code, output.getvalue()
+
+    def create_session(self, title):
+        code, output = self.run_cli('session-new', '--title', title)
+        self.assertEqual(code, 0)
+        return json.loads(output)['session_id']
+
+    def commit(self, mid, key, text):
+        source = Store(self.config.data_directory / 'source.sqlite3')
+        try:
+            source.ensure_meeting(mid, {})
+            stamp = utc_now()
+            source.commit_page(mid, [Caption(
+                mid, key, text, stamp,
+                event_time=stamp, speaker_id='integration-speaker')], {})
+        finally:
+            source.close()
+
+    def test_two_local_sessions_consume_independently(self):
+        first = self.create_session('会议 A')
+        second = self.create_session('会议 B')
+        self.commit(first, 's:1', '本地集成发言 A')
+        self.commit(second, 's:1', '本地集成发言 B')
+
+        replies = []
+
+        class Backend:
+            context_overhead_characters = 0
+
+            def decide(self, snapshot, role):
+                replies.append(snapshot['captions'][-1]['text'])
+                return Decision('none', (), '只回答第一个会话', ('s:1',))
+
+            def diagnostic_metadata(self):
+                return {}
+
+            def close(self):
+                pass
+
+        for mid in (first, second):
+            with patch('feishu_meeting_adviser.adviser.create_backend', return_value=Backend()):
+                code, _ = self.run_cli('consume', mid)
+                self.assertEqual(code, 0)
+
+        self.assertEqual(replies, ['本地集成发言 A', '本地集成发言 B'])
+        data = AdviserStore(self.config.data_directory / 'adviser.sqlite3')
+        try:
+            for mid, expected in ((first, 1), (second, 1)):
+                rows = data.list_replies(mid, show_text=True)
+                self.assertEqual([(row['channel'], row['state']) for row in rows],
+                                 [('local', 'sent')])
+                self.assertEqual(rows[0]['text'], '只回答第一个会话')
+                self.assertEqual(data.require_local_session(mid)['phase'], 'recording')
+        finally:
+            data.close()
+
+        code, output = self.run_cli('session-end', first)
+        self.assertEqual((code, json.loads(output)['phase']), (0, 'ended'))
+        code, _ = self.run_cli('session-end', second)
+        self.assertEqual(code, 0)
+
+    def test_session_list_and_status_reflect_lifecycle(self):
+        session = self.create_session('列表检查')
+        code, output = self.run_cli('session-list')
+        self.assertEqual(code, 0)
+        rows = json.loads(output)
+        self.assertEqual([row['session_id'] for row in rows], [session])
+        code, _ = self.run_cli('session-end', session, '--force')
+        self.assertEqual(code, 0)
+        code, output = self.run_cli('status', session)
+        self.assertEqual(json.loads(output)['session_phase'], 'ended')

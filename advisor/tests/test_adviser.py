@@ -26,6 +26,11 @@ from test_adviser_store import NOW
 from synthetic import BotAPI, MID
 
 
+def utc_now_epoch():
+    import time as _time
+    return _time.time()
+
+
 class FakeBackend:
     def __init__(self):
         self.calls = []
@@ -229,38 +234,38 @@ class AdviserTests(unittest.TestCase):
         self.assertEqual(len(self.sent),1)
         self.assertEqual(len(self.backend.calls),1)
 
-    def test_cli_codex_backend_uses_separate_consumer_and_reports_reply(self):
-        self.backend.reply=Decision('none',(),'合成 CLI 回复',('s:1',))
-        stamp=utc_now()
-        self.commit(replace(self.caption,event_time=stamp,received_at=stamp))
-        self.path.write_text(self.path.read_text()+'llm:\n  batch_seconds: 0\n  introduction: false\n')
-        output=io.StringIO()
-        with patch('feishu_meeting_adviser.__main__.FeishuClient',return_value=self.api), \
-             patch('feishu_meeting_adviser.adviser.create_backend',return_value=self.backend), \
-             redirect_stdout(output),redirect_stderr(io.StringIO()):
-            result=main(['--config',str(self.path),'consume','--backend','codex'])
-        self.assertEqual(result,0)
-        self.assertEqual(json.loads(output.getvalue())['replied'],1)
-        self.assertEqual(self.source.backlog(MID,'adviser'),0)
-        self.assertGreater(self.source.backlog(MID,'fake-qa'),0)
-
-    def test_cli_opencode_backend_uses_the_same_durable_adviser_consumer(self):
-        self.backend.reply=Decision('none',(),'合成 GLM CLI 回复',('s:1',))
-        stamp=utc_now()
-        self.commit(replace(self.caption,event_time=stamp,received_at=stamp))
-        self.path.write_text(self.path.read_text()+'llm:\n  batch_seconds: 0\n  introduction: false\n')
-        output=io.StringIO()
-        with patch('feishu_meeting_adviser.__main__.FeishuClient',return_value=self.api), \
-             patch('feishu_meeting_adviser.adviser.create_backend',return_value=self.backend) as factory, \
-             redirect_stdout(output),redirect_stderr(io.StringIO()):
-            result=main(['--config',str(self.path),'consume','--backend','opencode'])
-        self.assertEqual(result,0)
-        self.assertEqual(factory.call_args.args[0].backend,'opencode')
-        summary=json.loads(output.getvalue())
-        self.assertEqual(summary['backend'],'opencode')
-        self.assertEqual(summary['replied'],1)
-        self.assertEqual(self.source.backlog(MID,'adviser'),0)
-        self.assertEqual(len(self.sent),1)
+    def test_cli_backend_override_consumes_local_session(self):
+        from feishu_meeting_adviser.adapters.persistence.adviser_store import AdviserStore
+        registry = AdviserStore(self.config.data_directory / 'adviser.sqlite3')
+        try:
+            session = registry.create_local_session(now=utc_now_epoch() - 30)
+        finally:
+            registry.close()
+        mid = session['meeting_id']
+        self.source.ensure_meeting(mid, {})
+        stamp = utc_now()
+        caption = replace(self.caption, sentence_key='s:cli', meeting_id=mid,
+                          event_time=stamp, received_at=stamp)
+        self.source.commit_page(mid, [caption], {})
+        self.path.write_text(self.path.read_text() + 'llm:\n  batch_seconds: 0\n  introduction: false\n')
+        self.path.chmod(0o600)
+        self.backend.reply = Decision('none', (), '合成 CLI 回复', ('s:cli',))
+        output = io.StringIO()
+        with patch('feishu_meeting_adviser.adviser.create_backend', return_value=self.backend) as factory, \
+             redirect_stdout(output), redirect_stderr(io.StringIO()):
+            result = main(['--config', str(self.path), 'consume', '--backend', 'opencode', mid])
+        self.assertEqual(result, 0)
+        self.assertEqual(factory.call_args.args[0].backend, 'opencode')
+        summary = json.loads(output.getvalue())
+        self.assertEqual((summary['backend'], summary['replied']), ('opencode', 1))
+        self.assertEqual(self.source.backlog(mid, 'adviser'), 0)
+        data = AdviserStore(self.config.data_directory / 'adviser.sqlite3')
+        try:
+            rows = data.list_replies(mid, show_text=True)
+            self.assertEqual([(row['channel'], row['state'], row['text']) for row in rows],
+                             [('local', 'sent', '合成 CLI 回复')])
+        finally:
+            data.close()
 
     def test_any_participant_can_pause_and_resume_and_paused_model_keeps_listening(self):
         self.backend.reply=Decision('pause',('s:1',),None,())
@@ -469,19 +474,37 @@ class AdviserTests(unittest.TestCase):
         self.assertEqual(self.backend.calls, [])
 
     def test_status_and_model_diagnostics_do_not_expose_content(self):
-        self.commit(self.caption)
-        self.runner.ingest()
+        from feishu_meeting_adviser.adapters.persistence.adviser_store import AdviserStore
+        from feishu_meeting_adviser.local_sessions import LocalSessionManager
+        registry = AdviserStore(self.config.data_directory / 'adviser.sqlite3')
+        try:
+            session = registry.create_local_session(now=NOW - 30)
+        finally:
+            registry.close()
+        mid = session['meeting_id']
+        self.source.ensure_meeting(mid, {})
+        caption = replace(self.caption, sentence_key='s:local-1', meeting_id=mid)
+        self.source.commit_page(mid, [caption], {})
+        service = AdviserService(
+            self.source, LocalSessionManager(
+                AdviserStore(self.config.data_directory / 'adviser.sqlite3'),
+                self.config, mid),
+            backend=FakeBackend(), clock=lambda: NOW)
+        service.ingest()
+        service.close()
         self.path.write_text(self.path.read_text() + 'llm:\n  backend: opencode\n')
-        output=io.StringIO()
-        with patch('feishu_meeting_adviser.__main__.FeishuClient',return_value=self.api),redirect_stdout(output):
-            self.assertEqual(main(['--config',str(self.path),'status']),0)
-        value=json.loads(output.getvalue())
-        self.assertEqual(value['adviser']['backend'],'opencode')
-        self.assertEqual(value['adviser']['model_state'],'waiting')
-        self.assertEqual(value['adviser']['pending_model_inputs'],1)
-        self.assertNotIn(self.caption.text,output.getvalue())
+        self.path.chmod(0o600)
+        output = io.StringIO()
+        with redirect_stdout(output):
+            self.assertEqual(main(['--config', str(self.path), 'status', mid]), 0)
+        value = json.loads(output.getvalue())
+        self.assertEqual(value['adviser']['backend'], 'opencode')
+        self.assertEqual(value['adviser']['model_state'], 'waiting')
+        self.assertEqual(value['adviser']['pending_model_inputs'], 1)
+        self.assertEqual(value['session_phase'], 'recording')
+        self.assertNotIn(caption.text, output.getvalue())
         safe=sanitize({'kind':'model','model_ms':12,'decision_saved':True,'backend':'codex',
-                       'text':self.caption.text,'prompt':'private prompt','reply':'private answer','model_error':'private server'})
+                       'text':caption.text,'prompt':'private prompt','reply':'private answer','model_error':'private server'})
         self.assertEqual(safe,{'kind':'model','backend':'codex','model_ms':12,'decision_saved':True})
         self.assertEqual(ModelError('private server').reason,'unknown_model_error')
 

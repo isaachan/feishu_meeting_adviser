@@ -69,8 +69,9 @@ class SQLiteFoundationTests(unittest.TestCase):
         config = self.config()
         output = io.StringIO()
         with redirect_stdout(output):
-            self.assertEqual(main(['--config', str(config.path), 'status']), 0)
-        self.assertEqual(json.loads(output.getvalue()), {'session_phase':'none'})
+            self.assertEqual(
+                main(['--config', str(config.path), 'status', 'local:absent']), 0)
+        self.assertEqual(json.loads(output.getvalue()), {'session_phase': 'none'})
         self.assertFalse(config.data_directory.exists())
 
     def test_status_with_databases_does_not_create_a_lock_or_change_files(self):
@@ -78,18 +79,16 @@ class SQLiteFoundationTests(unittest.TestCase):
         factory = StorageFactory(config)
         factory.initialize_source()
         factory.initialize_adviser()
-        source = factory.source()
-        source.save_session(digest(config.credentials.app_id), {
-            'phase': 'joined', 'meeting_id': '987654321012345678',
-            'meeting_no': '012345678',
-        })
-        source.ensure_meeting('987654321012345678', {})
-        source.close()
         adviser = factory.adviser()
-        adviser.ensure_meeting('987654321012345678')
+        session = adviser.create_local_session(title='readonly status')
         adviser.close()
+        source = factory.source()
+        source.ensure_meeting(session['meeting_id'], {})
+        source.close()
+        mid = session['meeting_id']
 
-        lock_path = config.data_directory / 'locks' / 'adviser.lock'
+        lock_path = config.data_directory / 'locks' / (
+            'local-' + digest(mid) + '.lock')
         self.assertFalse(lock_path.exists())
 
         def snapshot():
@@ -104,7 +103,7 @@ class SQLiteFoundationTests(unittest.TestCase):
         before = snapshot()
         output = io.StringIO()
         with redirect_stdout(output):
-            self.assertEqual(main(['--config', str(config.path), 'status']), 0)
+            self.assertEqual(main(['--config', str(config.path), 'status', mid]), 0)
         self.assertFalse(json.loads(output.getvalue())['adviser']['consumer_active'])
         self.assertEqual(snapshot(), before)
         self.assertFalse(lock_path.exists())

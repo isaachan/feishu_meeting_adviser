@@ -1,20 +1,20 @@
 """Independent command handlers over lazily constructed CLI dependencies."""
 from dataclasses import dataclass, field
 import json
+from pathlib import Path
 import sys
 import time
 
 from ..adviser import AdviserService
-from ..client import ApiError, StopRequested
 from ..config import ConfigError, Configuration
 from ..diagnostics import Diagnostics
 from ..infrastructure.errors import LifecycleError
 from ..infrastructure.file_lock import FileLock
 from ..infrastructure.signals import stop_on_signals
-from ..lifecycle import SessionManager
+from ..local_sessions import LocalSessionManager
 from ..maintenance import Maintenance
 from ..models import digest
-from ..rules import deadline_reply
+from ..storage import StorageError
 from .bootstrap import CommandStoragePlan
 
 
@@ -23,12 +23,10 @@ class CommandContext:
     config: Configuration
     storage_factory: object
     storage_plan: CommandStoragePlan
-    store: object
-    client_factory: object
+    store: object | None
+    data: object | None
+    args: object
     _diagnostics: object = field(default=None, init=False)
-    _maintenance: object = field(default=None, init=False)
-    _client: object = field(default=None, init=False)
-    _manager: object = field(default=None, init=False)
 
     @property
     def diagnostics(self):
@@ -40,58 +38,94 @@ class CommandContext:
             )
         return self._diagnostics
 
-    @property
-    def maintenance(self):
-        if self._maintenance is None:
-            self._maintenance = Maintenance(
-                self.store, self.config, diagnose=self.diagnostics.write)
-        return self._maintenance
+    def session(self):
+        if self.data is None:
+            raise StorageError('no saved adviser database; create a session first')
+        return self.data.require_local_session(self.args.session)
 
-    @property
-    def client(self):
-        if self._client is None:
-            self._client = self.client_factory(
-                self.config.credentials,
-                timeout=self.config.timeout_seconds,
-                request_seconds=self.config.request_seconds,
-            )
-        return self._client
-
-    @property
-    def manager(self):
-        if self._manager is None:
-            self._manager = SessionManager(self.store, self.config, self.client)
-        return self._manager
+    def lease_lock(self, meeting_id):
+        return FileLock(
+            self.config.data_directory / 'locks' / ('local-' + digest(meeting_id) + '.lock'))
 
 
-def handle_status(context, args):
-    session = context.manager.session()
-    result = {'session_phase': session['phase'] if session else 'none'}
-    if session and session.get('meeting_id'):
-        mid = session['meeting_id']
-        result.update(context.store.statistics(mid, args.consumer))
-        result['content_deleted'] = context.store.is_deleted(mid)
-        path = context.config.data_directory / 'adviser.sqlite3'
-        if path.exists():
-            lock = FileLock(context.config.data_directory / 'locks' / 'adviser.lock')
-            active = lock.is_locked()
-            data = context.storage_factory.adviser(
-                readonly=context.storage_plan.adviser_readonly)
-            try:
-                result['adviser'] = {
-                    'backend': context.config.llm.backend,
-                } | data.status(mid, active=active)
-            finally:
-                data.close()
-    print(json.dumps(result))
+def _read_description(args):
+    if not args.description_file:
+        return ''
+    path = Path(args.description_file).expanduser()
+    if path.is_symlink() or not path.is_file():
+        raise ConfigError('description file must be a regular local file')
+    raw = path.read_bytes()
+    if len(raw) > 200_000:
+        raise ConfigError('description file exceeds 200000 bytes')
+    try:
+        return raw.decode('utf-8')
+    except UnicodeDecodeError:
+        raise ConfigError('description file must be UTF-8 encoded') from None
+
+
+def handle_session_new(context, args):
+    session = context.data.create_local_session(
+        title=args.title or '', description=_read_description(args))
+    context.store.ensure_meeting(session['meeting_id'], {})
+    print(json.dumps({'session_id': session['meeting_id'], 'phase': session['phase'],
+                      'title': session['title'], 'started_at': session['started_at']},
+                     ensure_ascii=False))
     return 0
 
 
-def _consume_model(context, args):
-    context.storage_factory.initialize_adviser()
+def handle_session_list(context, args):
+    sessions = context.data.list_local_sessions() if context.data else []
+    print(json.dumps([{'session_id': session['meeting_id'], 'title': session['title'],
+                       'phase': session['phase'], 'started_at': session['started_at']}
+                      for session in sessions], ensure_ascii=False))
+    return 0
+
+
+def _session_idle(context, session):
+    if context.lease_lock(session['meeting_id']).is_locked():
+        return False
+    consumer = getattr(context.args, 'consumer', None) or 'adviser'
+    if context.store is not None and context.store.backlog(session['meeting_id'], consumer) > 0:
+        return False
+    meeting = context.data.meeting(session['meeting_id'])
+    if meeting is None:
+        return True
+    if meeting['generation'] > meeting['decided_generation']:
+        return False
+    return context.data.next_reply(session['meeting_id'], now=time.time()) is None
+
+
+def handle_session_end(context, args):
+    session = context.session()
+    target = 'ended' if args.force or _session_idle(context, session) else 'draining'
+    updated = context.data.set_local_session_phase(session['meeting_id'], target)
+    print(json.dumps({'session_id': updated['meeting_id'], 'phase': updated['phase']}))
+    return 0
+
+
+def handle_status(context, args):
+    session = context.session()
+    mid = session['meeting_id']
+    result = {'session_phase': session['phase'], 'session_source': 'local'}
+    result.update(context.store.statistics(mid, args.consumer))
+    result['content_deleted'] = context.store.is_deleted(mid)
+    if context.data is not None:
+        active = context.lease_lock(mid).is_locked()
+        result['adviser'] = {
+            'backend': context.config.llm.backend,
+        } | context.data.status(mid, active=active)
+    print(json.dumps(result, ensure_ascii=False))
+    return 0
+
+
+def handle_consume(context, args):
+    if context.config.llm.backend not in ('codex', 'opencode'):
+        raise ConfigError('local sessions require llm.backend codex/opencode or --backend')
+    session = context.session()
+    manager = LocalSessionManager(context.data, context.config, session['meeting_id'])
     adviser = AdviserService(
         context.store,
-        context.manager,
+        manager,
         consumer_id=args.consumer,
         limit=args.limit,
         diagnose=context.diagnostics.write,
@@ -100,99 +134,48 @@ def _consume_model(context, args):
     )
     try:
         with stop_on_signals(adviser.stop_event.set):
-            print(f'Consuming with {context.config.llm.backend}; stopping does not stop '
-                  'collect or leave the meeting.', file=sys.stderr)
+            print(f'Consuming local session with {context.config.llm.backend}; '
+                  'stopping does not delete the session.', file=sys.stderr)
             summary = adviser.run(
                 watch=args.watch,
                 notify=(lambda value: print(json.dumps(value), flush=True))
                 if args.watch else None,
             )
             if not args.watch:
-                print(json.dumps(summary))
+                print(json.dumps(summary, ensure_ascii=False))
             return int(bool(summary['model_error'] or summary['uncertain_replies']
                             or summary['rejected_replies']))
     finally:
         adviser.close()
 
 
-def _consume_rule(context, args):
-    if args.watch:
-        raise ConfigError(
-            'consume --watch requires llm.backend or --backend codex/opencode')
-    session = context.manager.saved_meeting()
-    with context.maintenance.lock():
-        rows = context.store.read(session['meeting_id'], args.consumer, limit=args.limit)
-        consumer = context.storage_factory.fake_consumer(digest(args.consumer))
-        try:
-            accepted = replied = 0
-            for row in rows:
-                reply = deadline_reply(row)
-                accepted += consumer.accept(row, reply=reply)
-                pending = consumer.pending_reply(reply[0]) if reply else None
-                if pending:
-                    context.manager.saved_meeting(require_joined=True)
-                    try:
-                        context.client.send_message(
-                            pending['meeting_id'], pending['content'], reply[0])
-                    except (ApiError, StopRequested):
-                        print('Reply not confirmed; input remains unacknowledged. Check '
-                              'meeting UI before rerunning consume; the same UUID will be reused.',
-                              file=sys.stderr)
-                        raise
-                    consumer.mark_reply_sent(reply[0])
-                    replied += 1
-                context.store.acknowledge(
-                    session['meeting_id'], args.consumer, row.sequence)
-        finally:
-            consumer.close()
-    print(json.dumps({'offered': len(rows), 'newly_persisted': accepted,
-                      'replied': replied, 'acknowledged': bool(rows)}))
-    return 0
-
-
-def handle_consume(context, args):
-    if context.config.llm.backend in ('codex', 'opencode'):
-        return _consume_model(context, args)
-    return _consume_rule(context, args)
-
-
 def handle_replies(context, args):
-    session = context.manager.saved_meeting()
-    path = context.config.data_directory / 'adviser.sqlite3'
-    if not path.exists():
-        print('[]')
-        return 0
-    data = context.storage_factory.adviser(
-        readonly=context.storage_plan.adviser_readonly)
-    try:
-        print(json.dumps(data.list_replies(
-            session['meeting_id'], show_text=args.show_text), ensure_ascii=False))
-    finally:
-        data.close()
+    session = context.session()
+    rows = (context.data.list_replies(session['meeting_id'], show_text=args.show_text)
+            if context.data else [])
+    print(json.dumps(rows, ensure_ascii=False))
     return 0
 
 
 def handle_resolve_reply(context, args):
-    session = context.manager.saved_meeting()
-    path = context.config.data_directory / 'adviser.sqlite3'
-    if not path.exists():
+    session = context.session()
+    if context.data is None:
         raise LifecycleError('no saved model replies')
-    lock = FileLock(context.config.data_directory / 'locks' / 'adviser.lock')
+    lock = context.lease_lock(session['meeting_id'])
     lock.acquire()
     try:
-        data = context.storage_factory.adviser(
-            readonly=context.storage_plan.adviser_readonly)
-        try:
-            data.resolve_reply(session['meeting_id'], args.uuid, args.outcome, now=time.time())
-            print(json.dumps({'resolved': True, 'outcome': args.outcome}))
-        finally:
-            data.close()
+        context.data.resolve_reply(
+            session['meeting_id'], args.uuid, args.outcome, now=time.time())
+        print(json.dumps({'resolved': True, 'outcome': args.outcome}))
     finally:
         lock.release()
     return 0
 
 
 COMMAND_HANDLERS = {
+    'session-new': handle_session_new,
+    'session-list': handle_session_list,
+    'session-end': handle_session_end,
     'status': handle_status,
     'consume': handle_consume,
     'replies': handle_replies,
