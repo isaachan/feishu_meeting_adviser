@@ -1,5 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-
-cd "$(dirname "$0")"
-exec ../studies/local-meeting/venv/bin/python meeting-listener/scripts/collect-local.py "$@"

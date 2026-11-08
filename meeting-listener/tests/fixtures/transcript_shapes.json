@@ -1,0 +1,41 @@
+{
+  "fixture_provenance": "Synthetic values in the shapes described by STAGE0_FINDINGS.md and official events documentation. No private response was copied.",
+  "response": {
+    "code": 0,
+    "data": {
+      "has_more": false,
+      "events": [
+        {
+          "event_type": "transcript_received",
+          "event_id": "synthetic-direct",
+          "event_time": "2026-10-13T08:00:15.123456789+08:00",
+          "payload": {
+            "transcript_received_items": [
+              {
+                "sentence_id": "synthetic-s1",
+                "text": "合成测试句一",
+                "speaker": {"id": "synthetic-speaker", "user_name": "合成说话人"},
+                "language": "zh",
+                "start_time_ms": "2026-10-13T08:00:00.100000001+08:00",
+                "end_time_ms": "2026-10-13T08:00:01.900000009+08:00"
+              }
+            ]
+          }
+        },
+        {
+          "event_type": "meeting.activity",
+          "event_id": "synthetic-nested",
+          "event_time": "2026-10-13T00:00:16Z",
+          "payload": "{\"activity_event_type\":\"transcript_received\",\"transcript_received_items\":[{\"sentence_id\":\"synthetic-s2\",\"text\":\"Synthetic sentence two\",\"start_time_ms\":\"1791849600000\",\"end_time_ms\":\"1791849602000\"}]}"
+        },
+        {
+          "event_type": "meeting.activity",
+          "payload": {
+            "activity_event_type": "chat_received",
+            "chat_received_items": [{"content": "Synthetic chat must not become a caption"}]
+          }
+        }
+      ]
+    }
+  }
+}

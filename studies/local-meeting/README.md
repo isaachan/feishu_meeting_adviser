@@ -1,6 +1,6 @@
 # 本地会议录制与流式转写研究
 
-研究代码位于 `studies/local-meeting/`，以下命令均在该目录执行。本地 `.vemedia` 解析、音频解码和流式 STT 模块也供产品的 `v2/collect-local` 使用。
+研究代码位于 `studies/local-meeting/`，以下命令均在该目录执行。产品的本地录制解析、解码和 STT 实现由 `meeting-listener/scripts/` 独立维护，入口为 `meeting-listener/collect-local`。
 
 ## 会中 `.vemedia` → 流式 STT
 

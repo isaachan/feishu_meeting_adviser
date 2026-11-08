@@ -1,0 +1,59 @@
+# 产品配置示例：仅在没有 config.yaml 时复制，已有本机配置不要覆盖。
+# 使用当前配置结构；未发布版本不保留旧字段兼容路径。
+# 会议号/会议链接与密码不写入配置，join 时通过参数传入。
+app:
+  id: ""
+  secret: ""
+http:
+  timeout_seconds: 10
+  request_seconds: 0.7           # 每次 HTTP 请求最短间隔；events 文档上限 100 次/分钟
+collector:
+  initial_lookback_seconds: 600   # 首次回看范围，更早内容不自动采集
+  overlap_seconds: 120
+  page_size: 100
+  max_pages_per_cycle: 10
+  reconcile_seconds: 60          # 周期从初始起点回扫，长会议可能增加追赶时间
+runtime:
+  poll_seconds: 0.7              # 正常扫描一轮后等待 0.7 秒，另计请求/处理耗时
+  cooldown_seconds: 30           # 快速重试耗尽后低频恢复探测
+storage:
+  directory: "../data"           # 相对于本模块配置文件；两个模块指向同一数据目录
+  content_capacity_bytes: 100000000
+  database_capacity_bytes: 150000000
+  retention_days: 7
+  diagnostic_bytes: 1000000
+  diagnostic_backups: 3
+
+# 阶段 2：省略 llm 时保留固定规则；真实模型支持 codex / opencode。
+llm:
+  backend: codex
+  executable: codex
+  model: ""                      # 空值沿用当前 Codex 默认模型
+  opencode_executable: opencode
+  opencode_model: zai-coding-plan/glm-5.3 # backend: opencode 时使用；复用 opencode 本机登录
+  role_file: ""                  # 空值使用包内 meeting_adviser.md；可设本机 Markdown 路径
+  timeout_seconds: 90
+  batch_seconds: 2
+  context_characters: 30000
+  freshness_seconds: 120         # 新字幕触发模型与控制的时间窗口
+  reply_evidence_seconds: 600    # 回复可引用字幕的时间窗口；未知时间不当作有效证据
+  reply_interval_seconds: 10
+  introduction: true
+
+# 3.1：模型生成的完整回答可同时发到会议内和指定用户的飞书单聊。
+# 省略本节时只发送会中消息；接收人只能填写本应用对应的 open_id。
+notifications:
+  meeting_comment: true
+  recipients: []                 # 例如 ["ou_xxxxxxxx"]；最多 20 人，勿填姓名/邮箱
+
+# 2.5：绑定一次日历；consume 按当前会议号自动定位唯一日程实例。
+# calendar_id 留空时关闭材料读取；日程实例由 consume 自动发现。
+meeting_context:
+  calendar_id: ""
+  identity: user                  # user 或 application；失败不会切换身份
+  context_characters: 10000       # 材料文本预算，仍受上方模型总上下文预算约束
+  max_documents: 10
+  timeout_seconds: 60
+  binding_tolerance_seconds: 3600 # 自动搜索及入会时间校验的前后容差
+  preview_bytes: 1000000          # 每会议内容预览当前文件上限
+  preview_backups: 3

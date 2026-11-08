@@ -1,20 +1,49 @@
 # 飞书实时会议 AI 助理
 
-在 `v2/` 目录运行：
+项目分为两个独立模块，通过本机 SQLite 数据交接：
+
+- **[meeting-listener](meeting-listener/README.md)**：机器人入会、官方字幕采集、本地录制转写及字幕数据维护。
+- **[advisor](advisor/README.md)**：消费字幕、读取日程材料、调用模型并发送回答，包含本地 harness。
+- **[data](data/README.md)**：入会会话、字幕、消费进度、模型任务及运行日志。
+
+两个模块分别维护配置、虚拟环境、测试和 `pyproject.toml`，所需重复实现各自保留。根目录 `integrations/` 默认全部是集成测试。
+
+## 安装
+
+从仓库根目录执行，要求 Python 3.11+：
 
 ```bash
-cd v2
-./join
-./collect
-# 另开一个终端，同样先 cd v2
-./consume
+python3 -m venv meeting-listener/.venv
+meeting-listener/.venv/bin/python -m pip install -e './meeting-listener[stt]'
+python3 -m venv advisor/.venv
+advisor/.venv/bin/python -m pip install -e ./advisor
 ```
 
-先在 `v2/` 运行 `python3 -m pip install -e ./meeting-listener -e ./advisor` 安装两个模块。这些测试脚本使用 `v2/.venv` 和 `v2/config.yaml`，可从其他工作目录通过绝对路径调用。`./join`、`./collect` 调用 meeting-listener，`./consume` 调用 advisor。`./join` 先执行 `reset-session --confirmed-bot-left`（没有旧会话时跳过），再入会；这会把旧会话直接标记为已离会。`./collect` 与 `./consume` 持续运行，按 Ctrl-C 停止。
+仅在模块还没有本机 `config.yaml` 时，复制各自的 `config.example.yaml` 并填写应用凭据，设置文件权限为 `600`。两套配置都将 `storage.directory` 设为 `../data`，并使用相同的应用身份。模型、日程及通知设置由 advisor 配置；meeting-listener 的 `llm.backend`、`llm.introduction`、`notifications.meeting_comment` 决定是否在入会时发送介绍。
 
-项目目标是在会议进行时获取讨论内容并提供 AI 辅助；会后逐字稿不能代替会中输入。**当前产品主线为 v2 官方会中字幕路线。**独立可行性研究位于 `studies/`。
+## 运行
 
-- **[v2](v2/README.md)**：产品方案，包含 [meeting-listener](v2/meeting-listener/README.md)（入会与采集）和 [advisor](v2/advisor/README.md)（消费、模型决策与回答）两个模块，通过本机 SQLite 交接。主线以应用身份获取官方会中字幕（轮询 `bots/events` 的 `transcript_received`）；本地转写输入由 `collect-local` 提供。接口试验代码在 `v2/reference/spike/`；跨会议回归及 20 秒目标仍待验收。不达标时记录问题并调整产品/技术方案。
-- **[本地会议研究](studies/local-meeting/README.md)**：读取录制中的本地 `.vemedia` 文件、提取音频并用流式 STT 转写。缺少可靠的说话人信息，会议上下文有限；解析、解码和 STT 模块供 `v2/collect-local` 复用。
+```bash
+./meeting-listener/join <会议号或入会链接>
+./meeting-listener/collect
+# 另开一个终端
+./advisor/consume
+```
 
-**原 6 秒目标已撤销。新的规划目标为 20 秒**：约 15 秒取得会中字幕，约 5 秒由 LLM 生成/输出回答；从提问结束到可用回答的精确计时终点及统计口径仍待确认。v2 调研（25 场会议，见 [延迟调研](v2/docs/TRANSCRIPT_LATENCY_INVESTIGATION.md)）显示字幕从接口结束时间到本机接收中位约 31 秒、P95 约 40 秒（早前单场曾测得约 15–24 秒，属场次波动），因此 20 秒**是预算，不是已实现的 SLA**，拉取通道下不可达，达标路径是 v2 接入事件推送。`studies/local-meeting/material/` 和 `v2/output/` 可能包含敏感会议资料；请按授权范围使用，不要将本地模型、虚拟环境或实验产物提交到仓库。
+这些脚本使用所属模块的 `.venv` 和 `config.yaml`，可通过绝对路径从其他目录调用。`join` 脚本先按既有测试流程重置旧会话（没有旧会话时跳过），再入会。直接使用模块 CLI 的 `join` 命令则按会话状态核对和复用入会身份。
+
+停止 `consume` 不会停止采集；停止 `collect` 不会离会。完整停止时先停止消费和采集，再在 `meeting-listener/` 执行 `.venv/bin/python -m meeting_listener leave`。
+
+本地录制转写使用 `./meeting-listener/collect-local /path/to/growing.vemedia`，STT 代码、依赖和模型均由 meeting-listener 维护。
+
+## 文档与测试
+
+- 各模块的运行说明、单模块文档和测试见各自目录。
+- 跨模块规划见 [总体计划](docs/PLAN_OFFICIAL_MEETING_EVENTS.md) 和 [TODO](TODO.md)。
+- [飞书权限清单](docs/APP_PERMISSIONS_EVENTS.md)、[架构评审](docs/2026-10-15-architecture-review.md)、[实现记录](docs/IMPLEMENTATION_RECORD.md)。
+- [数据操作](data/docs/DATA_OPERATIONS.md)说明保存、清理、授权与恢复边界。
+- [集成测试说明](integrations/README.md)。
+
+产品目标是在会议进行时获取内容并提供辅助。当前规划目标为提问结束到可用回答 20 秒；[字幕延迟调研](meeting-listener/docs/TRANSCRIPT_LATENCY_INVESTIGATION.md)显示拉取通道仍存在约 30 秒暴露延迟，20 秒是预算而非已实现的 SLA。跨会议可靠性和真实问答性能仍需验收。
+
+独立可行性研究位于 [studies/local-meeting](studies/local-meeting/README.md) 和 [studies/listener](studies/listener/README.md)；官方接口实验位于 `meeting-listener/reference/spike/`。
