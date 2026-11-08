@@ -75,19 +75,42 @@ class LocalAdviserTests(unittest.TestCase):
             (locks / ('local-' + digest(first['meeting_id']) + '.lock')).name,
             service_a.lock.path.name)
 
-    def test_ended_session_refuses_to_start_and_draining_keeps_running(self):
+    def test_ended_session_refuses_to_start(self):
         session = self.session()
         self.data.set_local_session_phase(session['meeting_id'], 'ended', now=NOW)
         with self.assertRaises(LifecycleError):
             self.service(session)
-        live = self.session()
-        self.data.set_local_session_phase(live['meeting_id'], 'draining', now=NOW)
-        self.source.commit_page(live['meeting_id'], [self.caption(live['meeting_id'])], {})
-        service = self.service(live)
+
+    def test_draining_session_ends_after_inputs_and_replies_settle(self):
+        session = self.session()
+        mid = session['meeting_id']
+        self.source.commit_page(mid, [self.caption(mid), self.caption(mid, key='s:2', text='第二个问题')],
+                                {})
+        self.data.set_local_session_phase(mid, 'draining', now=NOW)
+        backend = FakeBackend()
+        backend.reply = Decision('none', (), '排空后的最终回答', ('s:1',))
+        service = self.service(session, backend=backend)
         result = service.run()
         service.close()
+        self.assertEqual(result['session_phase'], 'ended')
         self.assertEqual(result['decisions'], 1)
-        self.assertEqual(result['session_phase'], 'draining')
+        self.assertEqual(result['replied'], 1)
+        self.assertEqual(self.data.require_local_session(mid)['phase'], 'ended')
+        with self.assertRaises(LifecycleError):
+            self.service(session)  # ended sessions never restart
+
+    def test_watch_mode_drains_and_exits_with_ended_phase(self):
+        session = self.session()
+        mid = session['meeting_id']
+        self.data.set_local_session_phase(mid, 'draining', now=NOW)
+        self.source.commit_page(mid, [self.caption(mid)], {})
+        service = self.service(session)
+        events = []
+        result = service.run(watch=True, notify=events.append)
+        service.close()
+        self.assertEqual(result['session_phase'], 'ended')
+        self.assertTrue(events and events[-1]['session_phase'] == 'ended')
+        self.assertEqual(self.data.require_local_session(mid)['phase'], 'ended')
 
     def test_session_phase_change_is_not_a_session_identity_change(self):
         session = self.session()

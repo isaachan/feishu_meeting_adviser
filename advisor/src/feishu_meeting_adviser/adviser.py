@@ -246,6 +246,26 @@ class AdviserService:
                 result['session_phase'] = phase()
         return result
 
+    def _drained(self) -> bool:
+        """A draining local session ends once inputs, model work and replies settle."""
+        if self.worker is not None:
+            return False
+        meeting = self.data.require_meeting(self.mid)
+        if meeting['generation'] > meeting['decided_generation']:
+            return False
+        if self.data.reply_statistics(self.mid)['pending_replies'] > 0:
+            return False
+        return self.source.backlog(self.mid, self.consumer_id) == 0
+
+    def _finish_draining(self) -> bool:
+        phase_reader = getattr(self.manager, 'phase', None)
+        if phase_reader is None or phase_reader() != 'draining':
+            return False
+        if not self._drained():
+            return False
+        self.data.set_local_session_phase(self.mid, 'ended', now=self.clock())
+        return True
+
     def run(self, *, watch=False, notify=None):
         previous = None
         with self.lock:
@@ -263,9 +283,14 @@ class AdviserService:
                             raise LifecycleError('introduction send not confirmed; check meeting UI and replies, then resolve-reply before model processing')
                 while not self.stop_event.is_set():
                     status = self.step()
+                    drained = self._finish_draining()
+                    if drained:
+                        status = self.statistics()
                     if notify and status != previous:
                         notify(status)
                         previous = status
+                    if drained:
+                        break
                     if not watch and self.worker is None:
                         meeting = self.data.require_meeting(self.mid)
                         if (self.model_failure or meeting['generation'] == meeting['decided_generation']
