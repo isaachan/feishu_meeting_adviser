@@ -53,7 +53,8 @@ class RemoteModelBackend:
                               headers={'Content-Type': 'application/json'})
         with self.opener.open(req, timeout=min(10.0, max(1.0, self.settings.timeout_seconds))) as response:
             raw = response.read()
-        return json.loads(raw) if raw else None
+        value = json.loads(raw) if raw else None
+        return value if isinstance(value, dict) else {'state': 'queued', 'transient': True}
 
     def _submit(self, body: dict) -> dict:
         try:
