@@ -6,12 +6,12 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from feishu_meeting_adviser.__main__ import main
-from feishu_meeting_adviser.collector import Collector, PageFormatError
-from feishu_meeting_adviser.config import load_config
-from feishu_meeting_adviser.lifecycle import SessionManager
-from feishu_meeting_adviser.models import ChangeKind
-from feishu_meeting_adviser.storage import Store
+from meeting_listener.__main__ import main
+from meeting_listener.collector import Collector, PageFormatError
+from meeting_listener.config import load_config
+from meeting_listener.lifecycle import SessionManager
+from meeting_listener.models import ChangeKind
+from meeting_listener.storage import Store
 from test_collector import FakeAPI, event, page
 from test_lifecycle import BotAPI, MID
 
@@ -43,8 +43,8 @@ class CollectOutputTests(unittest.TestCase):
 
     def command(self, *args, output=None):
         output = output if output is not None else FlushedOutput()
-        with patch('feishu_meeting_adviser.__main__.FeishuClient', return_value=self.api), \
-             patch('feishu_meeting_adviser.lifecycle.FeishuClient', return_value=self.api), \
+        with patch('meeting_listener.__main__.FeishuClient', return_value=self.api), \
+             patch('meeting_listener.lifecycle.FeishuClient', return_value=self.api), \
              redirect_stdout(output), redirect_stderr(io.StringIO()):
             result = main(['--config', str(self.config_path), 'collect', '--once', *args])
         self.assertEqual(result, 0)

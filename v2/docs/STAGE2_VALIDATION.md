@@ -7,7 +7,7 @@
 产品安装后，从 v2 执行：
 
 ```bash
-python3 -m pip install -e .
+python3 -m pip install -e ./meeting-listener -e ./advisor
 python3 -m unittest discover -s tests -v
 ```
 

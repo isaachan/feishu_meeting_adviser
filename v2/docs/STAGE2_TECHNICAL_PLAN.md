@@ -18,7 +18,7 @@
 
 ## 2. 当前可复用的实现
 
-产品代码位于 `v2/src/feishu_meeting_adviser/`，不导入 `reference/spike/`。
+采集代码位于 `v2/meeting-listener/src/meeting_listener/`，消费代码位于 `v2/advisor/src/feishu_meeting_adviser/`，两者不相互导入，也不导入 `reference/spike/`。
 
 - `collect` 持续读取字幕，完成规范化、持久化去重、分页与恢复，并默认在本机显示正文；`collect --no-text` 可关闭正文输出。
 - SQLite 保存字幕、检查点、状态与独立的消费者进度；下游采用至少一次投递与幂等消费。

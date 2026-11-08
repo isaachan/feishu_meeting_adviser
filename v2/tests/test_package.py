@@ -10,9 +10,10 @@ import unittest
 class PackageTests(unittest.TestCase):
     def test_installed_entrypoint_runs_outside_repository(self):
         with tempfile.TemporaryDirectory() as cwd:
-            result = subprocess.run([sys.executable, '-I', '-m', 'feishu_meeting_adviser', '--version'],
-                                    cwd=cwd, capture_output=True, text=True, check=True)
-        self.assertEqual(result.stdout.strip(), '0.1.0')
+            for package in ('feishu_meeting_adviser', 'meeting_listener'):
+                result = subprocess.run([sys.executable, '-I', '-m', package, '--version'],
+                                        cwd=cwd, capture_output=True, text=True, check=True)
+                self.assertEqual(result.stdout.strip(), '0.1.0')
 
     def test_product_import_does_not_load_spike(self):
         result = subprocess.run([sys.executable, '-I', '-c',

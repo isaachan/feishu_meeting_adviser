@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from feishu_meeting_adviser.__main__ import main
+from meeting_listener.__main__ import main as listener_main
 from feishu_meeting_adviser.client import ApiError, ErrorKind
 from feishu_meeting_adviser.config import load_config
 from feishu_meeting_adviser.lifecycle import SessionManager
@@ -114,7 +115,7 @@ class DeadlineRuleTests(unittest.TestCase):
         self.assertEqual(self.sent, [])
         self.assertEqual(self.store.backlog(MID, 'fake-qa'), 1)
         with redirect_stdout(io.StringIO()):
-            self.assertEqual(main(['--config', str(self.config_path), 'delete-meeting-data', '--confirm']), 0)
+            self.assertEqual(listener_main(['--config', str(self.config_path), 'delete-meeting-data', '--confirm']), 0)
         for path in (self.config.data_directory / 'fake_consumers').glob('*.sqlite3'):
             consumer = DurableFakeConsumer(path)
             try:

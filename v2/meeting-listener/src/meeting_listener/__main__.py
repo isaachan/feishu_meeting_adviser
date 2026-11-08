@@ -1,6 +1,5 @@
 """Explicit local CLI. Credentials are read only from YAML; the meeting comes from join arguments."""
 import argparse
-from dataclasses import replace
 from pathlib import Path
 import sqlite3
 import sys
@@ -38,11 +37,6 @@ def parser():
                          help='speaker label for local captions without a speaker field (default: local)')
     status = commands.add_parser('status', help='show safe session and backlog statistics')
     status.add_argument('--consumer')
-    consume = commands.add_parser('consume', help='consume with the configured model backend or the fixed test rule')
-    consume.add_argument('--consumer')
-    consume.add_argument('--limit', type=int, default=100)
-    consume.add_argument('--backend', choices=('codex','opencode','rule'), help='override llm.backend for this invocation')
-    consume.add_argument('--watch', action='store_true', help='continuously consume and decide; Ctrl-C stops the consumer only')
     reset = commands.add_parser('reset-session', help='reset stale/uncertain session after manually verifying bot absence')
     reset.add_argument('--confirmed-bot-left', action='store_true', required=True)
     resolve = commands.add_parser('resolve-conflict', help='explicitly accept a stored candidate after local review')
@@ -52,11 +46,6 @@ def parser():
     delete.add_argument('--confirm', action='store_true', required=True)
     inspect = commands.add_parser('conflicts', help='list unresolved candidate hashes; text requires explicit flag')
     inspect.add_argument('--show-text', action='store_true')
-    replies = commands.add_parser('replies', help='inspect saved model reply states; text requires explicit flag')
-    replies.add_argument('--show-text', action='store_true')
-    resolve_reply = commands.add_parser('resolve-reply', help='resolve one uncertain/rejected model send after checking meeting UI; stop consume first')
-    resolve_reply.add_argument('--uuid', required=True)
-    resolve_reply.add_argument('--outcome', choices=('sent','retry','cancel'), required=True)
     return root
 
 
@@ -68,9 +57,7 @@ def main(argv=None):
     store = None
     try:
         config = load_config(args.config)
-        if args.command == 'consume' and args.backend:
-            config = replace(config,llm=replace(config.llm,backend=args.backend))
-        if args.command in ('status','consume'):
+        if args.command == 'status':
             args.consumer = args.consumer or ('adviser' if config.llm.backend in ('codex','opencode') else 'fake-qa')
         storage_factory = StorageFactory(config)
         plan = storage_plan(args.command)

@@ -11,6 +11,8 @@ import json
 
 from feishu_meeting_adviser.adviser import AdviserRunner, AdviserService
 from feishu_meeting_adviser.__main__ import main
+from meeting_listener.__main__ import main as listener_main
+from meeting_listener.client import ApiError as ListenerApiError, ErrorKind as ListenerErrorKind
 from feishu_meeting_adviser.client import ApiError, ErrorKind
 from feishu_meeting_adviser.collector import utc_now
 from feishu_meeting_adviser.config import NotificationSettings, load_config
@@ -445,10 +447,10 @@ class AdviserTests(unittest.TestCase):
 
     def test_configured_join_sends_intro_once_without_starting_model(self):
         self.path.write_text(self.path.read_text()+'llm:\n  backend: codex\n')
-        with patch('feishu_meeting_adviser.__main__.FeishuClient',return_value=self.api), \
+        with patch('meeting_listener.__main__.FeishuClient',return_value=self.api), \
              redirect_stdout(io.StringIO()),redirect_stderr(io.StringIO()):
-            self.assertEqual(main(['--config',str(self.path),'join','012345678']),0)
-            self.assertEqual(main(['--config',str(self.path),'join','012345678']),0)
+            self.assertEqual(listener_main(['--config',str(self.path),'join','012345678']),0)
+            self.assertEqual(listener_main(['--config',str(self.path),'join','012345678']),0)
         self.assertEqual(len(self.sent),1)
         self.assertEqual(self.backend.calls,[])
 
@@ -457,10 +459,10 @@ class AdviserTests(unittest.TestCase):
         first_uuid = self.sent[0][2]
         self.runner.data.db.execute('UPDATE meetings SET participation=\'paused\' WHERE meeting_id=?', (MID,))
         self.path.write_text(self.path.read_text() + 'llm:\n  backend: codex\n')
-        self.api.event_failure = ApiError(ErrorKind.BOT_ABSENT, code=120004)
-        with patch('feishu_meeting_adviser.__main__.FeishuClient', return_value=self.api), \
+        self.api.event_failure = ListenerApiError(ListenerErrorKind.BOT_ABSENT, code=120004)
+        with patch('meeting_listener.__main__.FeishuClient', return_value=self.api), \
              redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-            self.assertEqual(main(['--config', str(self.path), 'join', '012345678']), 0)
+            self.assertEqual(listener_main(['--config', str(self.path), 'join', '012345678']), 0)
         self.assertEqual(len(self.sent), 2)
         self.assertNotEqual(self.sent[1][2], first_uuid)
         self.assertEqual(self.runner.data.meeting(MID)['participation'], 'active')

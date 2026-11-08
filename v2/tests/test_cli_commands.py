@@ -4,7 +4,8 @@ from types import SimpleNamespace
 import json
 import unittest
 
-from feishu_meeting_adviser.cli.commands import COMMAND_HANDLERS, handle_conflicts
+from feishu_meeting_adviser.cli.commands import COMMAND_HANDLERS as ADVISOR_HANDLERS
+from meeting_listener.cli.commands import COMMAND_HANDLERS, handle_conflicts
 
 
 class _Manager:
@@ -24,11 +25,11 @@ class _Store:
 class CLICommandTests(unittest.TestCase):
     def test_every_parser_command_has_an_independent_handler(self):
         self.assertEqual(set(COMMAND_HANDLERS), {
-            'join', 'leave', 'collect', 'status', 'consume', 'reset-session',
+            'join', 'leave', 'collect', 'status', 'reset-session',
             'resolve-conflict', 'prune', 'delete-meeting-data', 'conflicts',
-            'replies', 'resolve-reply',
         })
         self.assertEqual(len(set(COMMAND_HANDLERS.values())), len(COMMAND_HANDLERS))
+        self.assertEqual(set(ADVISOR_HANDLERS), {'status', 'consume', 'replies', 'resolve-reply'})
 
     def test_handler_can_be_called_without_cli_bootstrap(self):
         store = _Store()

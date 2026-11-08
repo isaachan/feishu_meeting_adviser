@@ -7,14 +7,14 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from feishu_meeting_adviser.__main__ import main
-from feishu_meeting_adviser.collector import PageFormatError
-from feishu_meeting_adviser.config import load_config
-from feishu_meeting_adviser.infrastructure.errors import LifecycleError, LockBusy
-from feishu_meeting_adviser.lifecycle import SessionManager
-from feishu_meeting_adviser.local_source import LocalCaptionSource, parse_local_line
-from feishu_meeting_adviser.models import ChangeKind, SourceState, epoch_ns
-from feishu_meeting_adviser.storage import Store
+from meeting_listener.__main__ import main
+from meeting_listener.collector import PageFormatError
+from meeting_listener.config import load_config
+from meeting_listener.infrastructure.errors import LifecycleError, LockBusy
+from meeting_listener.lifecycle import SessionManager
+from meeting_listener.local_source import LocalCaptionSource, parse_local_line
+from meeting_listener.models import ChangeKind, SourceState, epoch_ns
+from meeting_listener.storage import Store
 from test_lifecycle import BotAPI, MID
 
 
@@ -161,8 +161,8 @@ class CollectLocalCLITests(unittest.TestCase):
 
     def command(self, *args):
         output = io.StringIO()
-        with patch('feishu_meeting_adviser.__main__.FeishuClient'), \
-             patch('feishu_meeting_adviser.lifecycle.FeishuClient'), \
+        with patch('meeting_listener.__main__.FeishuClient'), \
+             patch('meeting_listener.lifecycle.FeishuClient'), \
              redirect_stdout(output), redirect_stderr(io.StringIO()):
             result = main(['--config', str(self.config_path), 'collect', *args])
         return result, [json.loads(text) for text in output.getvalue().splitlines()]

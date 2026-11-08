@@ -14,7 +14,7 @@
 
 ## 1. 现状:为什么当前代码只能本地
 
-`OpenCodeBackend`(`src/feishu_meeting_adviser/opencode_backend.py`)与本地子进程的耦合点:
+`OpenCodeBackend`(`advisor/src/feishu_meeting_adviser/opencode_backend.py`)与本地子进程的耦合点:
 
 - **自起进程**:`_start()` 经 `opencode_guard` 用 `subprocess.Popen` 启动 `opencode serve --pure --hostname 127.0.0.1 --port 0`,强制回环、随机端口;配置面只有 `opencode_executable`(本地可执行文件路径),没有 server URL 入口。
 - **stdout 地址发现**:从进程输出用正则 `http://127\.0\.0\.1:([0-9]{1,5})` 解析 origin,远程服务没有这个输出。

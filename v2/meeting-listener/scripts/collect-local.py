@@ -9,7 +9,7 @@ machine; only recognized text enters the product storage.
 
 Run with the local-meeting virtualenv interpreter when using --stt-provider local, e.g.:
 
-  studies/local-meeting/venv/bin/python v2/scripts/collect-local.py /path/to/growing.vemedia \
+  studies/local-meeting/venv/bin/python v2/meeting-listener/scripts/collect-local.py /path/to/growing.vemedia \
       --stt-provider local \
       --local-model-dir v2/models/sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05
 
@@ -32,8 +32,8 @@ import time
 import urllib.request
 from uuid import uuid4
 
-V2_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_LOCAL_MEETING_SCRIPTS = Path(__file__).resolve().parents[2] / 'studies' / 'local-meeting' / 'scripts'
+V2_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_LOCAL_MEETING_SCRIPTS = V2_ROOT.parent / 'studies' / 'local-meeting' / 'scripts'
 MODEL_NAME = 'sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05'
 DEFAULT_MODEL_DIR = V2_ROOT / 'models' / MODEL_NAME
 MODEL_URL = ('https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/'
@@ -147,7 +147,7 @@ def main():
     if args.stt_provider == 'local':
         ensure_model(args.local_model_dir.expanduser().resolve())
 
-    collect_args = [str(args.python), '-m', 'feishu_meeting_adviser']
+    collect_args = [str(args.python), '-m', 'meeting_listener']
     if args.config:
         collect_args += ['--config', str(args.config.expanduser().resolve())]
     collect_args += ['collect', '--captions', '-', '--speaker', args.speaker]

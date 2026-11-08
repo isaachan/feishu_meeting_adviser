@@ -1,6 +1,11 @@
 # v2 飞书会议会参谋
 
-产品使用飞书官方会议字幕，持续采集并保存带说话人的输入，通过 **Codex + ChatGPT 订阅，或 OpenCode + GLM-5.3** 自主判断发言、沉默和自然语言控制意图，回答一次完整发送到会议内。产品代码在 `src/feishu_meeting_adviser/`，旧实验在 [reference/spike](reference/spike/README.md)，运行时互不依赖。
+产品使用飞书官方会议字幕，持续采集并保存带说话人的输入，通过 **Codex + ChatGPT 订阅，或 OpenCode + GLM-5.3** 自主判断发言、沉默和自然语言控制意图，回答一次完整发送到会议内。产品分为两个可独立安装的模块：
+
+- [meeting-listener](meeting-listener/README.md)：`join`、`collect`、离会和字幕数据维护，代码在 `meeting-listener/src/meeting_listener/`。
+- [advisor](advisor/README.md)：`consume`、模型回复管理、材料读取和本地 harness，代码在 `advisor/src/`。
+
+两个模块各自保留依赖到的实现，不相互导入，不依赖公共代码包；通过相同配置指定的本机 SQLite 数据目录交接。配置、数据库格式和锁保持一致。接口实验在 [reference/spike](reference/spike/README.md)，运行时不导入实验代码。
 
 TODO 2.5 已实现：绑定日历后，consume 按当前会议号与入会时间自动定位唯一日程实例，读取日程描述和关联 Docx / Wiki 中的 Docx，作为带来源、版本和省略标记的会议背景。材料不会自行触发回答，更新后重启 consume 才重新读取。用户 OAuth 只用于材料读取，VC 入会、字幕和会中发送继续使用应用身份。操作见 [USER_OAUTH](docs/USER_OAUTH.md)、[只读探测](docs/CONTEXT_PROBE.md) 和 [2.5 验证记录](docs/STAGE2_CALENDAR_VALIDATION.md)。
 
@@ -11,7 +16,7 @@ TODO 2.5 已实现：绑定日历后，consume 按当前会议号与入会时间
 Python 3.11+，本机 POSIX 文件系统。模型后端选择与切换见下文；OpenCode 设置及实测见 [OPENCODE_GLM](docs/OPENCODE_GLM.md)。进入 `v2/`，使用已有虚拟环境安装产品：
 
 ```bash
-python3 -m pip install -e .
+python3 -m pip install -e ./meeting-listener -e ./advisor
 codex login status
 ```
 
@@ -26,7 +31,7 @@ llm:
 
 这样 `join` 成功后发送介绍，`consume` 默认采用真实模型。省略 `llm` 时默认使用固定测试规则；用 `consume --backend codex` 可单次覆盖，首次模型消费补发介绍。
 
-默认沿用 Codex 当前模型；本机合成调用使用 `gpt-6-astra`。可设置 `llm.model`；`llm.role_file` 为空时加载包内 [meeting_adviser.md](src/feishu_meeting_adviser/meeting_adviser.md)，也可指定本机 Markdown 路径。配置或角色文件更改后需重启消费者，新角色会重新检查待发候选。
+默认沿用 Codex 当前模型；本机合成调用使用 `gpt-6-astra`。可设置 `llm.model`；`llm.role_file` 为空时加载包内 [meeting_adviser.md](advisor/src/feishu_meeting_adviser/meeting_adviser.md)，也可指定本机 Markdown 路径。配置或角色文件更改后需重启消费者，新角色会重新检查待发候选。
 
 默认批次等待 2 秒、模型上下文预算 30000 字符（含角色、材料、字幕及证据）、新发言触发窗口 120 秒、回复可引用字幕窗口 600 秒、两次普通回复至少间隔 10 秒、模型整次调用超时 90 秒。两个窗口分别由 `llm.freshness_seconds` 和 `llm.reply_evidence_seconds` 配置；较早的回复证据本身不触发模型。每次决定使用有界上下文，不承诺完整长会议记忆；超过窗口的资料仍保存在本机供核对。
 
@@ -74,8 +79,8 @@ meeting_context:
 终端 A：
 
 ```bash
-python3 -m feishu_meeting_adviser join 012345678
-python3 -m feishu_meeting_adviser collect
+python3 -m meeting_listener join 012345678
+python3 -m meeting_listener collect
 ```
 
 `join` 的参数可以是 9 位会议号（加引号保留前导 0），也可以是完整的 `https://vc.feishu.cn/j/<会议号>` 入会链接；链接中的 `pwd` 会议密码会自动使用，也可用 `--password` 显式指定或覆盖。
@@ -97,7 +102,7 @@ python3 -m feishu_meeting_adviser consume --backend codex --watch
 完整停止：先在终端 B 按 Ctrl-C 停止模型消费，再在终端 A 按 Ctrl-C 停止采集；机器人仍在会中。如需离会再执行：
 
 ```bash
-python3 -m feishu_meeting_adviser leave
+python3 -m meeting_listener leave
 ```
 
 重启先启动 `collect`，再启动 `consume`；输入、任务、暂停状态和发送记录从本机数据库恢复。同一数据目录只允许一个采集进程和一个模型消费者。采集的定期清理与模型消费共用维护锁，遇到短暂占用会等待，Ctrl-C 可中断等待。
@@ -111,7 +116,7 @@ python3 -m feishu_meeting_adviser leave
 ./collect-local /path/to/growing.vemedia
 ```
 
-`./collect-local` 与 `./join`、`./collect`、`./consume` 并列，内部用 `studies/local-meeting/venv` 虚拟环境运行 `scripts/collect-local.py`（复用本地会议研究的解析/解码/本地 STT），再把识别结果交给本目录的 `collect --captions -`；无需手动切换解释器。默认 `--stt-provider local`，模型目录默认为 `v2/models/sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05`（模型不入库：新 clone 后首次使用自动从官方 release 下载，约 127 MiB，SHA-256 校验通过才落盘；也可先运行 `./collect-local --download-model` 预取）。两个参数仍可显式覆盖。
+`./collect-local` 与 `./join`、`./collect`、`./consume` 并列，内部用 `studies/local-meeting/venv` 虚拟环境运行 `meeting-listener/scripts/collect-local.py`（复用本地会议研究的解析/解码/本地 STT），再把识别结果交给 meeting-listener 的 `collect --captions -`；无需手动切换解释器。默认 `--stt-provider local`，模型目录默认为 `v2/models/sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05`（模型不入库：新 clone 后首次使用自动从官方 release 下载，约 127 MiB，SHA-256 校验通过才落盘；也可先运行 `./collect-local --download-model` 预取）。两个参数仍可显式覆盖。
 
 行为与边界：
 
@@ -169,9 +174,12 @@ python3 -m feishu_meeting_adviser resolve-reply --uuid <UUID> --outcome cancel
 
 固定链路规则显式使用 `consume --backend rule`：收到“项目截止日期是明天”时发送“{speaker}，项目截止日期是今天。”；它只用于测试，不与模型消费者同时运行。正式模型依据实际上下文，不沿用这条固定更正。
 
-安装产品后运行测试：
+安装两个模块后运行测试；工作区根包仅提供开发工具配置，不包含产品代码：
 
 ```bash
+python3 -m pip install -e '.[dev]' -e ./meeting-listener -e ./advisor
+ruff check meeting-listener/src advisor/src tests
+pyright
 python3 -m unittest discover -s tests -v
 ```
 

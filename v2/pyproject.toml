@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "feishu-meeting-adviser"
+name = "feishu-meeting-workspace"
 version = "0.1.0"
-description = "Durable Feishu meeting transcript input source"
+description = "Development tools for the listener and advisor workspace"
 requires-python = ">=3.11"
 dependencies = ["PyYAML>=6.0,<7"]
 
@@ -16,15 +16,8 @@ dev = [
     "ruff==0.17.0",
 ]
 
-[project.scripts]
-meeting-transcripts = "feishu_meeting_adviser.__main__:main"
-meeting-adviser-harness = "meeting_adviser_harness.__main__:main"
-
-[tool.setuptools.packages.find]
-where = ["src"]
-
-[tool.setuptools.package-data]
-feishu_meeting_adviser = ["meeting_adviser.md"]
+[tool.setuptools]
+packages = []
 
 [tool.ruff]
 target-version = "py311"
@@ -35,21 +28,23 @@ select = ["E9", "F63", "F7", "F82"]
 
 [tool.pyright]
 include = [
-    "src/feishu_meeting_adviser/models.py",
-    "src/feishu_meeting_adviser/adapters/persistence",
-    "src/feishu_meeting_adviser/adviser.py",
-    "src/feishu_meeting_adviser/decision.py",
-    "src/feishu_meeting_adviser/material_bootstrap.py",
-    "src/feishu_meeting_adviser/model_jobs.py",
-    "src/feishu_meeting_adviser/reply_dispatcher.py",
-    "src/feishu_meeting_adviser/snapshot.py",
+    "advisor/src/feishu_meeting_adviser/models.py",
+    "advisor/src/feishu_meeting_adviser/adapters/persistence",
+    "advisor/src/feishu_meeting_adviser/adviser.py",
+    "advisor/src/feishu_meeting_adviser/decision.py",
+    "advisor/src/feishu_meeting_adviser/material_bootstrap.py",
+    "advisor/src/feishu_meeting_adviser/model_jobs.py",
+    "advisor/src/feishu_meeting_adviser/reply_dispatcher.py",
+    "advisor/src/feishu_meeting_adviser/snapshot.py",
+    "meeting-listener/src/meeting_listener/models.py",
+    "meeting-listener/src/meeting_listener/adapters/persistence",
 ]
 pythonVersion = "3.11"
 typeCheckingMode = "basic"
 
 [tool.coverage.run]
 branch = true
-source = ["feishu_meeting_adviser", "meeting_adviser_harness"]
+source = ["meeting_listener", "feishu_meeting_adviser", "meeting_adviser_harness"]
 
 [tool.coverage.report]
 exclude_also = [

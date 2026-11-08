@@ -1,9 +1,9 @@
 from pathlib import Path
 import tempfile
 import unittest
-from feishu_meeting_adviser.collector import Collector, PageFormatError, ScanSettings, parse_page
-from feishu_meeting_adviser.models import ChangeKind, IngestMode
-from feishu_meeting_adviser.storage import Store
+from meeting_listener.collector import Collector, PageFormatError, ScanSettings, parse_page
+from meeting_listener.models import ChangeKind, IngestMode
+from meeting_listener.storage import Store
 
 
 def event(sid='s1', text='synthetic', timestamp='2026-10-13T00:00:00.100Z', *, nested=False, **item):

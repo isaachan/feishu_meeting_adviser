@@ -6,7 +6,7 @@ import re
 import unittest
 
 
-PACKAGE = Path(__file__).parents[1] / "src" / "feishu_meeting_adviser"
+PACKAGE = Path(__file__).parents[1] / "advisor" / "src" / "feishu_meeting_adviser"
 SQL_START = re.compile(r"^\s*(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|PRAGMA|REPLACE|VACUUM)\b", re.I)
 SQL_TABLE = re.compile(
     r"\b(?:FROM|INTO|UPDATE|TABLE|JOIN)\s+([A-Za-z_][A-Za-z0-9_]*)",

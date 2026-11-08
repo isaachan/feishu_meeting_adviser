@@ -6,13 +6,13 @@ import tempfile
 import threading
 import unittest
 
-from feishu_meeting_adviser.client import ApiError, ErrorKind
-from feishu_meeting_adviser.collector import Collector, PageFormatError, ScanSettings, parse_page
-from feishu_meeting_adviser.config import load_config
-from feishu_meeting_adviser.lifecycle import MeetingSource, SessionManager
-from feishu_meeting_adviser.models import Caption, ChangeKind, IngestMode, SourceState, Status
-from feishu_meeting_adviser.recovery import RecoveryLoop
-from feishu_meeting_adviser.storage import DurableFakeConsumer, StorageError, Store
+from meeting_listener.client import ApiError, ErrorKind
+from meeting_listener.collector import Collector, PageFormatError, ScanSettings, parse_page
+from meeting_listener.config import load_config
+from meeting_listener.lifecycle import MeetingSource, SessionManager
+from meeting_listener.models import Caption, ChangeKind, IngestMode, SourceState, Status
+from meeting_listener.recovery import RecoveryLoop
+from meeting_listener.storage import DurableFakeConsumer, StorageError, Store
 from test_collector import FakeAPI, event, page
 from test_lifecycle import BotAPI, MID
 

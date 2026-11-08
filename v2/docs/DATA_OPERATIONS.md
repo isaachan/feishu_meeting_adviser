@@ -17,15 +17,15 @@
 ```bash
 .venv/bin/python -m feishu_meeting_adviser status
 # 采集时显式显示新入库字幕、说话人和时间；不确认消费。
-.venv/bin/python -m feishu_meeting_adviser collect
+.venv/bin/python -m meeting_listener collect
 # 手动维护前先停止 collect 与 consume；正常采集会自动维护。
-.venv/bin/python -m feishu_meeting_adviser prune
+.venv/bin/python -m meeting_listener prune
 # 默认只列未解决候选的交付哈希；下条命令明确在本机显示候选正文。
-.venv/bin/python -m feishu_meeting_adviser conflicts
-.venv/bin/python -m feishu_meeting_adviser conflicts --show-text
-.venv/bin/python -m feishu_meeting_adviser resolve-conflict --delivery-id <候选交付哈希>
+.venv/bin/python -m meeting_listener conflicts
+.venv/bin/python -m meeting_listener conflicts --show-text
+.venv/bin/python -m meeting_listener resolve-conflict --delivery-id <候选交付哈希>
 # 先停止 collect 与 consume；删除当前会议的输入、消费进度和所有托管消费者资料，不可恢复。
-.venv/bin/python -m feishu_meeting_adviser delete-meeting-data --confirm
+.venv/bin/python -m meeting_listener delete-meeting-data --confirm
 ```
 
 显式删除不受“未确认”保护规则限制；产品保留必要的 bot 控制 session，以便显式离会，但已删除会议不能自动重采。删除标记只保存会议标识摘要与删除时间，不保存正文。SQLite 启用安全删除并在显式删除后压缩/截断 WAL；这是应用数据清理，不承诺存储介质物理擦除。手动备份、终端正文、其他自建消费者和 spike 的 `output/` 不属于产品托管副本，应另行按授权清理。撤销授权时先停止模型消费和采集，按需要显式离会并删除资料。

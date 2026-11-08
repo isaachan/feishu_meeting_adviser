@@ -31,7 +31,7 @@
 |---|---|---|
 | （暂无） | | |
 
-另：用户 OAuth 流程声明的 scope（`calendar:calendar:read`、`calendar:calendar.event:read`、`docx:document:readonly`、`wiki:node:read`、`offline_access`，见 `src/feishu_meeting_adviser/oauth.py`）需在 app 的"安全设置"重定向 URL 与权限管理中配置，待 OAuth 链路运行时逐一验证。
+另：用户 OAuth 流程声明的 scope（`calendar:calendar:read`、`calendar:calendar.event:read`、`docx:document:readonly`、`wiki:node:read`、`offline_access`，见 `advisor/src/feishu_meeting_adviser/oauth.py`）需在 app 的"安全设置"重定向 URL 与权限管理中配置，待 OAuth 链路运行时逐一验证。
 
 ## 验证日志
 

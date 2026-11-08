@@ -4,11 +4,11 @@ from pathlib import Path
 import sys
 from unittest.mock import patch
 
-from feishu_meeting_adviser.__main__ import main
-from feishu_meeting_adviser.config import load_config
-from feishu_meeting_adviser.lifecycle import SessionManager
-from feishu_meeting_adviser.models import Caption
-from feishu_meeting_adviser.storage import DurableFakeConsumer, Store
+from meeting_listener.__main__ import main
+from meeting_listener.config import load_config
+from meeting_listener.lifecycle import SessionManager
+from meeting_listener.models import Caption
+from meeting_listener.storage import DurableFakeConsumer, Store
 
 MID = '987654321012345678'
 root = Path(sys.argv[2])
@@ -58,8 +58,8 @@ if action in ('source','source-once'):
     manager = SessionManager(store,config,api)
     manager.join('012345678')  # Existing joined session is reused when restarting.
     store.close()
-    with patch('feishu_meeting_adviser.__main__.FeishuClient',return_value=api), \
-         patch('feishu_meeting_adviser.lifecycle.FeishuClient',return_value=api):
+    with patch('meeting_listener.__main__.FeishuClient',return_value=api), \
+         patch('meeting_listener.lifecycle.FeishuClient',return_value=api):
         args = ['--config',str(path),'collect','--no-text']
         if action == 'source-once':
             args.append('--once')

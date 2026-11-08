@@ -21,7 +21,7 @@
 
 ## 阶段 1：产品级字幕输入源
 
-具体拆解与完成状态以 [TODO](docs/TODO.md) 为准。接口实验代码与测试位于 `reference/spike/`；产品在 `src/feishu_meeting_adviser/` 实现，产品测试独立，运行不导入 spike。
+具体拆解与完成状态以 [TODO](docs/TODO.md) 为准。接口实验代码与测试位于 `reference/spike/`；采集模块在 `meeting-listener/src/meeting_listener/`，消费模块在 `advisor/src/feishu_meeting_adviser/`，产品测试独立，运行不导入 spike。
 
 - 定义确认字幕、新增/更新/冲突、历史回补、消费确认及状态契约，保留时间精度和未知字段语义。没有可靠版本依据的变化保留候选并显式报告冲突。
 - 使用本地 SQLite 将规范化输入、去重/版本状态及采集检查点原子提交；下游消费进度独立持久化，采用至少一次投递与幂等消费。

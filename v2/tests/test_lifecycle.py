@@ -5,11 +5,11 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from feishu_meeting_adviser.client import ApiError, ErrorKind
-from feishu_meeting_adviser.config import ConfigError, load_config, parse_meeting_reference
-from feishu_meeting_adviser.lifecycle import FileLock, LifecycleError, LockBusy, MeetingSource, SessionManager
-from feishu_meeting_adviser.models import Caption, ChangeKind, SourceState
-from feishu_meeting_adviser.storage import Store
+from meeting_listener.client import ApiError, ErrorKind
+from meeting_listener.config import ConfigError, load_config, parse_meeting_reference
+from meeting_listener.lifecycle import FileLock, LifecycleError, LockBusy, MeetingSource, SessionManager
+from meeting_listener.models import Caption, ChangeKind, SourceState
+from meeting_listener.storage import Store
 from test_collector import event, page
 
 MID = '987654321012345678'
@@ -353,9 +353,9 @@ class LifecycleTests(unittest.TestCase):
     def test_cli_join_status_consume_leave_use_local_fake_api(self):
         from contextlib import redirect_stdout
         import io
-        from feishu_meeting_adviser.__main__ import main
+        from meeting_listener.__main__ import main
         output = io.StringIO()
-        with patch('feishu_meeting_adviser.__main__.FeishuClient', return_value=self.api), redirect_stdout(output):
+        with patch('meeting_listener.__main__.FeishuClient', return_value=self.api), redirect_stdout(output):
             self.assertEqual(main(['--config', str(self.path), 'join', MEETING]), 0)
             self.assertEqual(main(['--config', str(self.path), 'status']), 0)
             # No network request for status and no credentials in default output.
@@ -367,9 +367,9 @@ class LifecycleTests(unittest.TestCase):
     def test_cli_join_accepts_link_password_and_requires_meeting_argument(self):
         from contextlib import redirect_stdout
         import io
-        from feishu_meeting_adviser.__main__ import main
+        from meeting_listener.__main__ import main
         output = io.StringIO()
-        with patch('feishu_meeting_adviser.__main__.FeishuClient', return_value=self.api), redirect_stdout(output):
+        with patch('meeting_listener.__main__.FeishuClient', return_value=self.api), redirect_stdout(output):
             self.assertEqual(main(['--config', str(self.path), 'join',
                                     f'https://vc.feishu.cn/j/{MEETING}?pwd=link-secret']), 0)
             self.assertEqual(self.api.passwords[-1], 'link-secret')
@@ -384,10 +384,10 @@ class LifecycleTests(unittest.TestCase):
     def test_cli_switch_requires_leave_then_join_without_reset(self):
         from contextlib import redirect_stdout, redirect_stderr
         import io
-        from feishu_meeting_adviser.__main__ import main
+        from meeting_listener.__main__ import main
         saved = self.manager.join(MEETING)
         output, errors = io.StringIO(), io.StringIO()
-        with patch('feishu_meeting_adviser.__main__.FeishuClient', return_value=self.api), \
+        with patch('meeting_listener.__main__.FeishuClient', return_value=self.api), \
              redirect_stdout(output), redirect_stderr(errors):
             self.assertEqual(main(['--config', str(self.path), 'join', '123456789']), 1)
             self.assertIn('run leave', errors.getvalue())
