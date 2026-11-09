@@ -7,7 +7,7 @@ name = "local-meeting-recorder"
 version = "0.1.0"
 description = "Local meeting capture; fake script replay feeds the recorder handoff contract"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["sounddevice>=0.5"]
 
 [project.optional-dependencies]
 dev = ["coverage==7.16.2", "pyright==1.1.414", "ruff==0.17.0"]
@@ -17,6 +17,9 @@ recorder = "local_meeting_recorder.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+local_meeting_recorder = ["audio/*.swift"]
 
 [tool.ruff]
 target-version = "py311"

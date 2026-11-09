@@ -196,19 +196,27 @@ POST /v1/inference-jobs/{request_id}/cancel
 - 静音门控是硬需求：用户在飞书静音时，麦克风仍可能拾到用户在电脑前说的话，这些音频未进入会议且涉及隐私，必须丢弃、不得转写；远端 loopback 不受静音影响。
 - 交付形态：Mac（.app/.dmg）与 Windows 安装包，干净机器安装后无需开发环境即可运行；权限引导与签名/公证列入任务。
 
+**选型决策（2026-11-09 确认）：**
+
+- Mac loopback 主通路为 ScreenCaptureKit 音频采集（可按 App 过滤飞书音频、无需用户装驱动，代价是「屏幕录制」权限与平台桥接层）；BlackHole 虚拟声卡仅作兜底实测。
+- 首版 remote STT 选定智谱 GLM-ASR（HTTP）；Transcriber 接口仍按 `stt: remote|local` 可切换设计，便于更换服务商。
+- 静音门控首版为**显式手动开关**：本机麦克风采集默认关闭，由用户在工具内开关；飞书静音自动检测（代理静音/被动检测）降为后续增强。隐私边界由「自动保证」调整为「用户显式控制」，阶段 5 验收同步调整为「开关关闭期间无本机字幕」。
+- real 模式**整场原始音频本地留存**（与字幕同会话目录归属，不自动删除，手动清理），用于排障、重转写与验收取证。
+- 首版双平台安装包均**不签名/不公证**：Mac 引导右键打开绕过 Gatekeeper，Windows 引导绕过 SmartScreen；「干净机器可运行」验收按此放宽。
+
 任务：
 
-- [ ] **5.1 选型采集栈并核实 Mac 通路。** 实测 macOS 采集系统播放音频的候选通路（ScreenCaptureKit 音频采集 vs 虚拟声卡如 BlackHole），以及统一跨平台音频库（soundcard/sounddevice 系）对两平台的覆盖面；确定采样格式、缓冲与设备切换策略。平台分支仅允许存在于设备获取层。
-- [ ] **5.2 实现可停止的双路采集。** 远端 loopback 与本机麦克风两路 AudioSource 统一帧格式与时间轴；支持暂停/恢复、设备异常与音频缺口的显式记录；采集线程不被慢 STT 或模型调用阻塞。
-- [ ] **5.3 飞书静音检测与门控。** 调研并实测本机飞书静音状态检测：飞书进程对麦克风的占用变化（静音时是否停流，需实测）、由本工具代理静音操作（向飞书转发全局静音快捷键，状态自可知）、读取飞书 UI 状态（仅兜底）。实现 MuteGate：静音期间丢弃麦克风音频、不产生字幕、时间轴不伪造缺口；无可靠检测方案时安全默认（不采集麦克风或仅显式手动开启），隐私优先。
-- [ ] **5.4 实现 Transcriber 接口与远程 STT。** 冻结 STT 接口（帧流输入、partial/最终句语义、说话人路由），`stt: remote|local` 配置切换；首版 remote 走 HTTP ASR（独立部署或复用网关部署形态，接口实现前冻结）；处理重采样、端点检测与最终句输出，partial 不触发本期模型判断；local 实现为可选 extra，不阻塞 Mac 验收。
-- [ ] **5.5 统一 fake 与 real 输入。** real 采集与 fake 回放输出同一 recorder 输入契约（spool/ack、流身份、stream_end），advisor 不按声卡或台词来源分支处理；说话人按双路来源标注（麦克风=本机用户，loopback=远端或未知），无法区分时保持未知，不把录制用户假定为所有发言人。
+- [x] **5.1 选型采集栈并核实 Mac 通路。** 实测 macOS 采集系统播放音频的候选通路（ScreenCaptureKit 音频采集 vs 虚拟声卡如 BlackHole），以及统一跨平台音频库（soundcard/sounddevice 系）对两平台的覆盖面；确定采样格式、缓冲与设备切换策略。平台分支仅允许存在于设备获取层。**完成（2026-11-09，Mac 部分）：**实测确定主通路为 ScreenCaptureKit audio-only SCStream + 飞书系进程过滤（`com.electron.lark`/`.iron`/`.helper` 及同名 widget 服务；飞书会议走独立进程 `com.electron.lark.iron`），Swift 助手子进程作为平台采集层；16kHz/mono/float32 由 SCK 直接重采样输出（ASR 免转换），静音期持续零帧、流不断，per-app 过滤不漏入外部声音（afplay 对照无声），BlackHole 兜底取消。麦克风通路选定 sounddevice（PortAudio，cp311–cp314 wheel，Windows 可复用）。缓冲策略：采集回调只入队、逐源写盘线程独立消费，慢 STT 不阻塞采集（5.2 落地并有测试）。证据：`local-meeting-recorder/studies/sck_audio_spike.swift`、`studies/mic_spike.py`（macOS 26.6 实测）；Windows WASAPI loopback 覆盖面随 5.8 移植时核实。
+- [x] **5.2 实现可停止的双路采集。** 远端 loopback 与本机麦克风两路 AudioSource 统一帧格式与时间轴；支持暂停/恢复、设备异常与音频缺口的显式记录；采集线程不被慢 STT 或模型调用阻塞。（2026-11-09 决策：整场原始音频本地留存。）**完成（2026-11-09）：**`local-meeting_recorder` 新增 `audio/` 包：`AudioFrame`/`SourceEvent` 统一 16k/mono/float32 与累计 sample_offset 时间轴（暂停=显式 gap 事件，不拉伸时间轴）；`SwiftLoopbackSource`（SCK 助手子进程，音频层协议：stdout PCM + stderr JSON 事件 + stdin stop，支持 video-fallback 与 pause 重启续轴）；`MicSource`（sounddevice 回调入队）；`CaptureSession` 逐源写盘线程独立消费（整场 int16 wav 留存 + events.jsonl），订阅者队列解耦（慢订阅不阻塞采集，测试覆盖）。22 项模块测试 + ruff/pyright 通过；真机 12s 双路联测（macOS 26.6）：两路连续无缺口、0 告警、优雅停止，证据 `studies/live_dual_capture.py`。
+- [ ] **5.3 飞书静音检测与门控。** 调研并实测本机飞书静音状态检测：飞书进程对麦克风的占用变化（静音时是否停流，需实测）、由本工具代理静音操作（向飞书转发全局静音快捷键，状态自可知）、读取飞书 UI 状态（仅兜底）。实现 MuteGate：静音期间丢弃麦克风音频、不产生字幕、时间轴不伪造缺口；无可靠检测方案时安全默认（不采集麦克风或仅显式手动开启），隐私优先。（2026-11-09 决策：首版仅显式手动开关、默认关闭，自动检测降为后续增强，不阻塞 Mac 验收。）
+- [ ] **5.4 实现 Transcriber 接口与远程 STT。** 冻结 STT 接口（帧流输入、partial/最终句语义、说话人路由），`stt: remote|local` 配置切换；首版 remote 走 HTTP ASR（独立部署或复用网关部署形态，接口实现前冻结）；处理重采样、端点检测与最终句输出，partial 不触发本期模型判断；local 实现为可选 extra，不阻塞 Mac 验收。（2026-11-09 决策：首版 remote 选定智谱 GLM-ASR。）**完成（2026-11-09）：**STT 接口冻结于 `local_meeting_recorder/stt/`（帧流输入 → VadSegmenter 能量分段（≤25s，适配 GLM-ASR 30s 上限；gap 显式闭段、时间轴不伪造）→ `Transcriber.transcribe()` 仅最终文本、无 partial；说话人路由不在 STT 层，仅透传 source_id）；remote 实现 `ZhipuASR`（glm-asr-2512，multipart wav 上传、prompt 上下文延续、429/5xx 退避重试、401/413/4xx 显式错误分类，纯 stdlib），`stt: remote|local` 工厂切换，local 留 extra 未实现。39 项模块测试通过；真机验证：12s 真实语音 VAD 分 2 段、GLM-ASR 转写准确、单段延迟 779/453ms（复用既有 GLM API key），证据 `studies/asr_live_check.py`。
+- [x] **5.5 统一 fake 与 real 输入。** real 采集与 fake 回放输出同一 recorder 输入契约（spool/ack、流身份、stream_end），advisor 不按声卡或台词来源分支处理；说话人按双路来源标注（麦克风=本机用户，loopback=远端或未知），无法区分时保持未知，不把录制用户假定为所有发言人。**完成（2026-11-09）：**`RealRecorder`（`recorder real --session … [--mic] [--duration N]`）输出 schema v1 契约事件至同一 spool：说话人映射 mic→`本机`（`--mic-speaker` 可改）、loopback→`None`（远端/未知）；offset 由每源首帧锚点换算到流时间轴；干净停止（duration 到期）写 stream_end，中断（Ctrl-C/stop_event）不伪造；整场音频留存于 `recorder/audio/<stream_id>/`；STT 失败不中断管线（诊断计数）；麦克风默认关闭（隐私手动开关），request_id 适配 ASR 6-64 字符限制。46 项模块测试 + 真机验证（飞书音频+人声 15s：7 段 7 句 0 失败，mic 短句与 loopback 长段转写均准确，证据 `data/recorder/spool/local:real-test-1109b`）。
 - [ ] **5.6 Mac 端到端验收。** 以获准的真实飞书会议验证：双路采集质量、静音门控正确性（静音期间无本机字幕）、从发言到字幕落库的各阶段延迟、设备切换与中断恢复；记录转写准确度与延迟证据，不以 fake 通过替代音频验收。
-- [ ] **5.7 Mac 安装包。** 打包 .app/.dmg（PyInstaller/py2app 择一），包含麦克风/系统音频采集权限引导与签名公证；干净机器安装后无需开发环境即可运行。
+- [ ] **5.7 Mac 安装包。** 打包 .app/.dmg（PyInstaller/py2app 择一），包含麦克风/系统音频采集权限引导与签名公证；干净机器安装后无需开发环境即可运行。（2026-11-09 决策：首版不签名/公证，以文档引导绕过 Gatekeeper。）
 - [ ] **5.8 Windows 移植。** 复用采集抽象、STT 与契约层，仅替换设备获取层为 WASAPI loopback；核实 Windows 上飞书静音检测的等价实现与权限模型。
 - [ ] **5.9 Windows 安装包与验收。** 打包 exe/msi（PyInstaller），按 5.6 同一验收清单在 Windows 跑通；两平台安装包与验收证据归档。
 
-**验收：** Mac 与 Windows 安装包均可安装运行；真实飞书会议中采集远端声音与受静音门控的本机语音，STT 本地/远程按配置切换；字幕经同一契约被 advisor 消费并走完本地有效决定链路；用户飞书静音期间不产生本机语音字幕。
+**验收：** Mac 与 Windows 安装包均可安装运行；真实飞书会议中采集远端声音与受手动开关门控的本机语音（自动静音门控为后续增强），STT 本地/远程按配置切换；字幕经同一契约被 advisor 消费并走完本地有效决定链路；用户飞书静音期间不产生本机语音字幕。
 
 ### 阶段 6：部署、文档与最终整理
 
