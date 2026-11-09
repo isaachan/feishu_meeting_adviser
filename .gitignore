@@ -17,3 +17,5 @@ meeting-listener/reference/spike/output/
 data/*
 !data/README.md
 !data/docs/
+config.*.yaml
+!config.example.yaml
