@@ -22,14 +22,20 @@ SCOPE = 'vc:meeting.meetingevent:read'
 
 
 class ListenerError(Exception):
-    pass
+    def __init__(self, message, code=None, transient=False):
+        super().__init__(message)
+        self.code = code
+        self.transient = transient
 
 
 def api_get(url, token, query=None):
     if query:
         url += '?' + parse.urlencode(query)
     req = request.Request(url, headers={'Authorization': 'Bearer ' + token, 'Accept': 'application/json'})
-    return json_request(req)
+    data = json_request(req).get('data')
+    if not isinstance(data, dict):
+        raise ListenerError('Feishu API response missing data')
+    return data
 
 
 def json_request(req):
@@ -43,13 +49,17 @@ def json_request(req):
             code = body.get('code') if isinstance(body, dict) else None
         except (ValueError, OSError):
             code = None
-        raise ListenerError(f'Feishu HTTP {exc.code}, API code={code if type(code) is int else "unknown"}') from None
-    except (error.URLError, TimeoutError, ValueError, OSError):
-        raise ListenerError('Feishu request or JSON decoding failed') from None
+        raise ListenerError(f'Feishu HTTP {exc.code}, API code={code if type(code) is int else "unknown"}',
+                            code=code if type(code) is int else None,
+                            transient=exc.code >= 500) from None
+    except (error.URLError, TimeoutError, OSError):
+        raise ListenerError('Feishu network request failed', transient=True) from None
+    except ValueError:
+        raise ListenerError('Feishu response was not valid JSON', transient=True) from None
     if not isinstance(result, dict) or result.get('code') != 0:
         code = result.get('code') if isinstance(result, dict) else None
         raise ListenerError(f'Feishu API rejected request (code={code})')
-    return result.get('data')
+    return result
 
 
 def authorize(app_id, app_secret, port):
@@ -109,10 +119,22 @@ def authorize(app_id, app_secret, port):
     req = request.Request(TOKEN, data=payload, headers={
         'Content-Type': 'application/json; charset=utf-8', 'Accept': 'application/json',
     })
-    data = json_request(req)
-    token = data.get('access_token') if isinstance(data, dict) else None
-    if not isinstance(token, str) or not token or SCOPE not in data.get('scope', '').split():
-        raise ListenerError('User authorization did not return the required scope/token')
+    return parse_token_response(json_request(req))
+
+
+def parse_token_response(result):
+    """The authen v2 token endpoint puts access_token/scope at the top level, not under data."""
+    token = result.get('access_token') if isinstance(result, dict) else None
+    if not isinstance(token, str) or not token:
+        keys = sorted(result) if isinstance(result, dict) else 'not a dict'
+        raise ListenerError(f'Token exchange returned no access_token (response keys: {keys})')
+    scope = result.get('scope')
+    granted = scope.split() if isinstance(scope, str) else []
+    if SCOPE not in granted:
+        # Not fatal here; let the VC API state the definitive per-meeting error.
+        print(f'Warning: granted scopes {granted or ["<none>"]} do not include {SCOPE}. '
+              'Enable this user-identity permission and republish the app, then retry.',
+              file=sys.stderr)
     return token
 
 
@@ -130,7 +152,31 @@ def choose_meeting(token, meeting_no=None):
     mid = matches[0].get('meeting_id')
     if not isinstance(mid, str) or not mid:
         raise ListenerError('Active meeting has no internal meeting_id')
+    print(f"Selected meeting {matches[0].get('meeting_no', '?')} "
+          f"({matches[0].get('meeting_title') or 'untitled'}); long meeting ID stays hidden.",
+          file=sys.stderr)
     return mid
+
+
+KIND_LABELS = {'transcript_received': 'transcript', 'chat_received': 'chat',
+               'participant_joined': 'join', 'participant_left': 'left'}
+
+
+def count_events(page):
+    counts = dict.fromkeys(('transcript', 'chat', 'join', 'left', 'other'), 0)
+    for event in page.get('events') or []:
+        if not isinstance(event, dict):
+            continue
+        payload = event.get('payload')
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except ValueError:
+                payload = None
+        subtype = payload.get('activity_event_type') if isinstance(payload, dict) else None
+        label = KIND_LABELS.get(subtype or event.get('event_type'), 'other')
+        counts[label] += 1
+    return counts
 
 
 def captions(page, meeting_id):
@@ -174,16 +220,47 @@ def captions(page, meeting_id):
 def listen(token, meeting_id, *, interval=2, lookback=180, once=False):
     seen = set()
     order = deque()
+    gate_cycles = 0
+    failures = 0
     while True:
         end = int(time.time())
         query = {'meeting_id': meeting_id, 'start_time': str(end - lookback),
                  'end_time': str(end), 'page_size': 100}
         cursor = None
         visited = set()
+        counts = dict.fromkeys(('transcript', 'chat', 'join', 'left', 'other'), 0)
+        aborted = False
+        sleep = interval
         while True:
             if cursor:
                 query['page_token'] = cursor
-            page = api_get(EVENTS, token, query)
+            try:
+                page = api_get(EVENTS, token, query)
+            except ListenerError as exc:
+                if exc.code == 120002:
+                    # Meeting-side gate: retry instead of exiting so the transition can be
+                    # observed when the host enables AI Summary / allow-agents mid-meeting.
+                    gate_cycles += 1
+                    if gate_cycles == 1 or gate_cycles % 15 == 0:
+                        print(f'Meeting gate active (API 120002, attempt {gate_cycles}); waiting for the '
+                              'host to enable AI Summary and allow agents to join.', file=sys.stderr)
+                    aborted = True
+                    break
+                if exc.transient:
+                    failures += 1
+                    if failures == 1 or failures % 5 == 0:
+                        print(f'Transient request failure ({failures} consecutive): {exc}; retrying.',
+                              file=sys.stderr)
+                    if failures >= 30:
+                        print('Giving up after 30 consecutive transient failures.', file=sys.stderr)
+                        raise
+                    aborted = True
+                    sleep = max(interval, 5)
+                    break
+                raise
+            failures = 0
+            for label, amount in count_events(page).items():
+                counts[label] += amount
             for key, text, speaker in captions(page, meeting_id):
                 identity = (key, text)
                 if identity in seen:
@@ -199,9 +276,12 @@ def listen(token, meeting_id, *, interval=2, lookback=180, once=False):
             if not isinstance(cursor, str) or not cursor or cursor in visited:
                 raise ListenerError('Missing or repeated event pagination cursor')
             visited.add(cursor)
+        if not aborted and any(counts.values()):
+            print('# events this cycle: ' + ', '.join(f'{k}={v}' for k, v in counts.items() if v),
+                  file=sys.stderr)
         if once:
             return
-        time.sleep(interval)
+        time.sleep(sleep)
 
 
 def main(argv=None):
