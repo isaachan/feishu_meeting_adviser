@@ -14,6 +14,7 @@ python3 -m venv .venv
 .venv/bin/llm-gateway serve --host 127.0.0.1 --port 8377 \
   [--database ../data/llm-gateway/tasks.sqlite3] \
   [--opencode-auth ~/.local/share/opencode/auth.json]
+  [--opencode-executable /usr/bin/opencode]   # 系统级安装时显式指定，避免默认路径不匹配
 ```
 
 启动输出一行 JSON（监听地址、数据库、恢复的任务数、pid）。Ctrl-C 干净停机：先停 HTTP，再停 worker，中断任务标记为 `failed(backend_unavailable)`，客户端按契约复用原 `request_id` 重试。
