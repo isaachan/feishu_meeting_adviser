@@ -58,6 +58,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.path=='/mcp':
             return self.send({'synthetic':{'status':'connected'}} if mode=='mcp' else {})
         if self.path=='/provider':
+            if mode=='slow-provider':
+                time.sleep(2)  # Catalog fetches can exceed a 1s request budget.
             return self.send({'all':[{'id':model[0],'models':{model[1]:{}} if mode!='model-missing' else {}}],
                 'connected':[model[0]] if mode!='auth-missing' else []})
         if self.path=='/experimental/tool/ids':

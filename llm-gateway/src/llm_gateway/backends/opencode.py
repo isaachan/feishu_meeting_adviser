@@ -241,7 +241,10 @@ class OpenCodeBackend:
                 ('meeting-adviser:' + self.password).encode()).decode(),
             'Content-Type': 'application/json', 'Accept': 'application/json'})
         try:
-            with self.opener.open(req, timeout=min(1.0, max(0.01, remaining))) as response:
+            # Verification endpoints (notably /provider) may fetch a remote
+            # catalog and exceed a tight per-request budget on slower links;
+            # the decision deadline watchdog still bounds the whole call.
+            with self.opener.open(req, timeout=min(10.0, max(0.01, remaining))) as response:
                 raw = response.read(2_000_001)
                 if len(raw) > 2_000_000:
                     raise BackendError('output_invalid')

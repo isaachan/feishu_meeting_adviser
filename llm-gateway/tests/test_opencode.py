@@ -53,6 +53,10 @@ class OpenCodeBackendTests(unittest.TestCase):
         decision = self.decide(self.backend('disconnect-once-verify'))
         self.assertIsNone(decision['reply'])
 
+    def test_slow_provider_catalog_stays_within_the_request_budget(self):
+        decision = self.decide(self.backend('slow-provider'))
+        self.assertIsNone(decision['reply'])
+
     def test_deadline_overrun_maps_to_execution_timeout(self):
         with self.assertRaises(BackendError) as caught:
             self.decide(self.backend('timeout'), deadline=1)
