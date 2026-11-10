@@ -57,7 +57,7 @@
 
 ## 4. 阶段 1：云端三节点最小实现（单用户，桩优先）
 
-- [ ] **1.1 auth 服务。** 平移 oauth.py；存储多用户化（每 open_id 一记录）；实现内部 API 与回调端点（transport 可注入桩）；凭据目录独立。**验收：**单测覆盖授权/刷新/过期/重放/并发单飞；桩模式下全流程可跑。
+- [x] **1.1 auth 服务。** 平移 oauth.py；存储多用户化（每 open_id 一记录）；实现内部 API 与回调端点（transport 可注入桩）；凭据目录独立。**验收：**单测覆盖授权/刷新/过期/重放/并发单飞；桩模式下全流程可跑。**完成（2026-11-10）：**`new/auth/` 落地（constants/errors/storage/transport/store/state_table/service/config/api/__main__，stdlib only）；30 项单测全绿（授权成功/主体串换拒绝/拒绝/重放/过期/轮转强制/网络失败 fail-closed/崩溃 marker 残留/refresh 过期/并发 8 线程单飞/0600-0700 权限/原子写无残留/HTTP 全流程含页面与错误映射）；ruff/pyright 通过。实现期修正 CONTRACT_AUTH §2.2.5（503 不改状态与 marker 先行语义冲突，改为 409 fail-closed）。
 - [ ] **1.2 advisor 会话域平移。** 复制旧 store/repo/snapshot/decision/jobs/outbox 与本地会话状态机；材料来源改为建会时从日历事件描述自动带出（对应旧 `LocalMaterialBootstrapper`"显式描述即材料、无描述即 disabled"语义）；所有表加 `owner`（v1 单用户写死占位）；移除 CLI 入口依赖，暴露 API；每会话租约由 FileLock 改 DB 内租约（沿用"同会话第二消费者被拒"语义）。**验收：**旧 advisor 的关键单测语义在新模块复现（决策幂等、outbox 状态机、draining 排空、ended 拒绝迟到结果）。
 - [ ] **1.3 advisor ingest 网关。** 独立线程/进程承载 WS：流令牌校验（铸造/吊销在会话域）、音频帧转投 stt-server（云内 WS 客户端）、final 按契约幂等落库、与业务循环只经持久化队列交接；背压策略（队列上限+丢帧显式计数）。**验收：**注入式桩测试覆盖鉴权拒绝、重复 sequence 去重、STT 断连不崩、慢消费者不阻塞另一会话。
 - [ ] **1.4 advisor 会话监督器。** 建会即自动启动 consume 循环（多会话并发，沿用旧 AdviserService 每会话循环语义）；`结束`→draining→落定→ended 全自动；进程重启后恢复未 ended 会话的循环。**验收：**重启恢复测试；N 会话并发互不串扰测试。
@@ -122,3 +122,4 @@
 - 2026-11-10 **0.4 完成**：CONTRACT_AUTH v1 冻结（authorize/start + credentials/token + oauth/callback；marker 先行/必须轮转/崩溃 fail-closed/单飞；0600/0700 原子存储；四段时序）。
 - 2026-11-10 **0.5 完成**：CONTRACT_RECORDER_STREAM 附录 A 冻结（命令模板、参数字符集、转义规则、凭据红线验收用例、退出码表）。
 - 2026-11-10 **0.6 完成**：STATE_MACHINES.md 冻结（订阅 T1–T5/幂等拒绝表；会话 S1–S4/排空条件；源 live/drained/lost；idle_timeout_s 默认 900）。**阶段 0 全部完成，进入阶段 1。**
+- 2026-11-10 **1.1 完成**：auth 服务（stdlib，多用户凭据库 + 内部 API + OAuth 回调 + 单飞刷新）；30 项单测全绿；CONTRACT_AUTH §2.2.5 fail-closed 修正。

@@ -54,7 +54,7 @@
 2. 记录 `state != ready`（含刷新中途崩溃残留 `refreshing`）→ `409 {"code":"reauthorization_required"}`（fail-closed，一次性凭据绝不重放）。
 3. 有效即返：`now < expires_at − refresh_margin` 且未传 `rejected`（或 `rejected` 与当前 token 不一致）→ 直接返回。
 4. 临期/被拒 → **单飞刷新**（第 3 节）；同 open_id 并发请求只执行一次 POST，其余等待同一结果。
-5. 刷新失败或 `refresh_expires_at` 已过 → `409 reauthorization_required`；飞书不可达 → `503 {"code":"upstream_unavailable"}`（可稍后重试，不改状态）。
+5. 刷新路径上的任何失败（网络不可达、响应非法、refresh 未轮转）或 `refresh_expires_at` 已过 → 凭据已按 fail-closed 置 `reauthorization_required`，返回 `409`。刷新 POST 一旦发出，一次性 refresh token 可能已被消费，客户端不得原样重试（2026-11-10 实现期修正：原文"503 不改状态"与 marker 先行语义冲突）。
 6. `refresh_margin = min(300, expires_in / 2)`。
 
 ## 3. 刷新语义（marker 先行、必须轮转）
