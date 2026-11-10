@@ -20,6 +20,7 @@
 - [产品需求（REQUIREMENTS）](docs/REQUIREMENTS.md)：personas（小A/小B）、端到端 scenarios、范围与非目标。
 - [架构（ARCHITECTURE）](docs/ARCHITECTURE.md)：节点拓扑、模块职责、边界决策、数据流、关键状态机。
 - [部署（DEPLOYMENT）](docs/DEPLOYMENT.md)：部署节点、组件端口、网络与凭据边界、首版基线。
+- [实施计划（plan）](plan.md)：阶段任务拆解、依赖、里程碑（M1–M4）、验收口径与风险清单——团队工作依据。
 
 ## 模块规划（目标形态）
 

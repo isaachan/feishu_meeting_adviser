@@ -1,0 +1,116 @@
+# 方案 C 实施计划（new/）
+
+状态：v0.1，2026-11-10 立项。本文是 `new/` 的唯一工作依据：任务拆解、依赖、验收口径与里程碑。
+上游文档：[REQUIREMENTS](docs/REQUIREMENTS.md)（场景）、[ARCHITECTURE](docs/ARCHITECTURE.md)（v0.3 架构与决策）、[DEPLOYMENT](docs/DEPLOYMENT.md)（v0.3 部署基线）。
+旧仓库（`../`）为停止维护的方案 B 实现，仅作平移素材，**不在旧目录里改代码**。
+
+## 0. 工作约定（全体任务默认遵守）
+
+1. **模块独立**：六个模块（recorder / advisor / bot / auth / stt-server / llm-gateway）各自 pyproject、venv、测试；跨模块只走书面契约，不导入彼此源码；可复用逻辑显式复制并注明来源。
+2. **桩先行**：飞书 IM、OAuth、日历、GLM 一律先接桩打通，再切真实；桩与真实实现可配置切换。
+3. **证据验收**：每个任务完成时附测试与证据（日志/数据快照存 `new/data/acceptance-*` 或模块内）；未验证的能力不勾选、不记通过。
+4. **契约即法**：阶段 0 冻结的契约是实现的唯一依据；变更必须 bump 协议版本、双侧同步、一版向前兼容。
+5. **v1 技术基线**：Python 3.11+；云端各节点持久化用 SQLite（独立数据目录）；HTTP/WS 服务用标准库或已验证依赖；不引入框架级重依赖，新增依赖需在任务内说明理由。
+
+## 1. 资产平移对照（从旧仓库复制，不导入）
+
+| 新模块 | 旧资产（相对 `new/`） | 处置 |
+|---|---|---|
+| `recorder/` | `../local-meeting-recorder/src/local_meeting_recorder/audio/`（双路采集、CaptureSession、MuteGate 语义）、`real.py` 的采集编排 | 保留采集/留存；去 spool、去本地 OAuth、去 STT 客户端 |
+| `auth/` | `../local-meeting-recorder/src/local_meeting_recorder/oauth.py`（授权/换取/一次性 refresh 轮转/存储加固） | redirect URI 云端化；存储按 open_id 多用户化；去掉本地浏览器回调流程 |
+| `advisor/` 会话域 | `../advisor/src/feishu_meeting_adviser/`：`adapters/persistence/`（store/repo/schema）、`snapshot.py`、`decision.py`、`model_jobs.py`、`llm.py` 的 RemoteModelBackend、`local_sessions.py` 状态机 | 核心平移；CLI 生命周期改 API 驱动；加 owner 与 ingest 网关 |
+| `advisor/` 校验 | `../local-meeting-recorder/src/local_meeting_recorder/feishu_calendar.py`（日历读取/组织者判定，2026-11-10 已对真实 API 形状验证） | 平移为 advisor 内部组件 |
+| `bot/` | `../chatbot/chatbot/bot.py`（lark 长连接、事件去重、顺序 worker） | 接线模式复制；后端换 advisor API 客户端 |
+| `stt-server/` | `../stt-server/`（sherpa 流式 WS 服务） | 整体平移；`auth` 配置固定 `none`，删除飞书鉴权分支或保留不启用 |
+| `llm-gateway/` | `../llm-gateway/`（任务/幂等/OpenCode 沙箱） | 原样平移，不动契约 |
+| 契约语义 | `../docs/CONTRACT_RECORDER_INPUT.md`、`CONTRACT_STT_STREAM.md`、`CONTRACT_REMOTE_INFERENCE.md`、`APP_PERMISSIONS_EVENTS.md` | 语义提炼进新契约，文件留在旧处引用 |
+
+## 2. 里程碑与依赖
+
+```
+阶段0 契约与骨架
+   ├──► 阶段1 云端三节点（可并行）──┐
+   └──► 阶段2 recorder 改造 ────────┤
+                                   ▼
+                          阶段3 M1：S1/S2 端到端（全桩）
+                                   ▼
+                          阶段4 M2：S3 订阅场景（全桩）
+                                   ▼
+                          阶段5 M3：真实接入联调
+                                   ▼
+                          阶段6 M4：多租户、部署与真实会议验收
+```
+
+- **M1** = S1+S2 假链路端到端（假飞书/假 OAuth/假模型）。
+- **M2** = M1 + S3 订阅审批全场景（仍全桩）。
+- **M3** = 真实飞书 IM + 真实 OAuth + 真实日历校验 + 真实 GLM。
+- **M4** = 多租户隔离 + 五单元部署 + 真实会议验收取证。
+
+## 3. 阶段 0：契约冻结与模块骨架
+
+- [ ] **0.1 建模块骨架与 CI。** 六个模块目录 + pyproject + 空测试 + ruff/pyright 配置；根 `new/integrations/` 集成测试骨架；CI 矩阵（3.11/3.14）沿用旧 `quality.yml` 形态。**验收：**CI 全绿，六模块可独立 `pip install -e .` 并跑空测试。
+- [ ] **0.2 冻结 recorder ↔ advisor 流式接入契约**（`new/docs/CONTRACT_RECORDER_STREAM.md`）。内容：WS 端点与消息面（`start` 携流令牌/session/事件绑定 → `started` 回显；二进制音频帧 int16/16k/mono；`gap`/`stop`；下行 `final` 回执不需要，改为服务端落库确认 `ack(sequence)`）；sequence/event_id 幂等与缺口语义（照搬旧 spool 契约）；断线重连=新流、重传窗口、`stream_end.last_sequence`；服务端错误码（含 `bad_token`/`session_ended`）。**验收：**契约评审通过，含正常/重复/断连/越权四个时序示例。
+- [ ] **0.3 冻结 bot ↔ advisor 内部 API 契约**（`new/docs/CONTRACT_ADVISOR_API.md`）。资源面：`POST /sessions`（入会：meeting_no/link → 校验+建会+返回 recorder 命令）、`POST /sessions/{id}/end|pause|resume`、`GET /sessions/{id}/status`、订阅 `POST /subscription-requests`、`POST /subscription-requests/{id}/decide`、outbox `GET /outbox/pending?limit=`、`POST /outbox/{uuid}/result`。语义：幂等键（message_id 派生）、审批状态机、fan-out 仅前向。**验收：**每接口有请求/响应/错误码示例；与 REQUIREMENTS S3 边界逐条对应。
+- [ ] **0.4 冻结 auth 契约**（`new/docs/CONTRACT_AUTH.md`）。内部 API：`GET /credentials/{open_id}/token`（有效即返、临期静默刷新、并发刷新单飞——沿用旧 oauth.py 的"提交 marker 后才允许一次性 POST"语义）；OAuth 面：`GET /oauth/start?open_id=` → 授权 URL（state 绑定 open_id 与待续接意图）、`GET /oauth/callback`（state+code 校验、换取、按 open_id 存储）；存储格式与权限（0600、原子写、目录 0700）。**验收：**含过期/拒绝/重放/并发刷新时序说明。
+- [ ] **0.5 冻结 recorder 启动命令格式。** 参数表：`--session --event --url --token [--mic] [--mic-speaker] [--duration]`；bot 生成命令的模板与转义规则；明确 **user_access_token 禁止出现在命令文本**（验收用例固化）。**验收：**格式写入 CONTRACT_RECORDER_STREAM 附录。
+- [ ] **0.6 订阅/会话状态机规格化。** 把 REQUIREMENTS/ARCHITECTURE 的状态机（订阅 requested/approved/denied/revoked；会话 recording/draining/ended）落成带迁移约束的规格表（含非法迁移的错误码），作为 advisor 实现与测试的对照。**验收：**规格表评审通过。
+
+## 4. 阶段 1：云端三节点最小实现（单用户，桩优先）
+
+- [ ] **1.1 auth 服务。** 平移 oauth.py；存储多用户化（每 open_id 一记录）；实现内部 API 与回调端点（transport 可注入桩）；凭据目录独立。**验收：**单测覆盖授权/刷新/过期/重放/并发单飞；桩模式下全流程可跑。
+- [ ] **1.2 advisor 会话域平移。** 复制旧 store/repo/snapshot/decision/jobs/outbox 与本地会话状态机；所有表加 `owner`（v1 单用户写死占位）；移除 CLI 入口依赖，暴露 API；每会话租约由 FileLock 改 DB 内租约（沿用"同会话第二消费者被拒"语义）。**验收：**旧 advisor 的关键单测语义在新模块复现（决策幂等、outbox 状态机、draining 排空、ended 拒绝迟到结果）。
+- [ ] **1.3 advisor ingest 网关。** 独立线程/进程承载 WS：流令牌校验（铸造/吊销在会话域）、音频帧转投 stt-server（云内 WS 客户端）、final 按契约幂等落库、与业务循环只经持久化队列交接；背压策略（队列上限+丢帧显式计数）。**验收：**注入式桩测试覆盖鉴权拒绝、重复 sequence 去重、STT 断连不崩、慢消费者不阻塞另一会话。
+- [ ] **1.4 advisor 会话监督器。** 建会即自动启动 consume 循环（多会话并发，沿用旧 AdviserService 每会话循环语义）；`结束`→draining→落定→ended 全自动；进程重启后恢复未 ended 会话的循环。**验收：**重启恢复测试；N 会话并发互不串扰测试。
+- [ ] **1.5 bot 服务骨架。** lark 长连接接线（可桩）、事件去重、顺序 worker；指令解析器（`入会/结束会议/暂停/恢复/同意/拒绝/撤销订阅/状态`，会议号与链接解析沿用旧 `parse_meeting_reference` 规则）；advisor API 客户端。**验收：**解析单测覆盖合法/非法/含 @/含密码链接；桩模式下指令往返可跑。
+- [ ] **1.6 stt-server / llm-gateway 平移。** 目录搬入 + 测试迁跑 + 部署配置（stt auth=none）。**验收：**两模块原有测试全绿；llm-gateway 假模型经 HTTP 可用。
+
+## 5. 阶段 2：recorder 改造（可与阶段 1 并行）
+
+- [ ] **2.1 剥离与保留。** 保留 audio/ 采集、MuteGate 手动开关、整场本地音频留存、`--mic` 默认关；删除 spool writer、本地 OAuth、STT 客户端（remote-stream/sherpa/zhipu 全下线）。**验收：**采集层原有单测通过；无对旧 spool/oauth 模块的引用。
+- [ ] **2.2 WS 推流客户端。** 按契约 0.2 实现：建连出示流令牌、双路音频帧上行、断线本地缓冲与重传窗口、`stream_end` 干净收尾、Ctrl-C 不伪造 end；连接失败显式退出码。**验收：**注入式假服务端覆盖重连/重传/令牌过期三场景单测。
+- [ ] **2.3 启动命令与诊断。** 参数解析、事件绑定回显、上行速率/丢帧计数本地打印。**验收：**命令行契约测试。
+
+## 6. 阶段 3：M1 —— S1/S2 端到端（全桩）
+
+- [ ] **3.1 集成测试床。** `new/integrations/`：进程级拉起 advisor/bot/auth/stt-server/llm-gateway（假模型后端）；假飞书 IM 总线（模拟小A/小B 会话、事件重放）；假 OAuth（跳过浏览器直接发码）。**验收：**一键拉起/清场脚本。
+- [ ] **3.2 S1 主链路。** 假小A 发"入会"→ 校验（桩日历可控组织者/时间窗）→ 建会+流令牌 → bot 下发命令 → 假粘贴执行 recorder（fake 音频源，沿用旧 fake 台词回放思路）→ ingest → STT（真 sherpa 或桩）→ 字幕落库。**验收：**四种拒绝路径各有用例；命令文本断言不含用户凭据。
+- [ ] **3.3 S2 决策与通知。** 假模型产生决策 → outbox `local`+`im` 行 → bot 拉取发送（假 IM）→ 小A 收到；暂停/恢复生效；`结束会议` 排空至 ended。**验收：**e2e 断言决策幂等（重跑不重复）；ended 后迟到结果不应用。
+- [ ] **3.4 可靠性用例。** recorder 断线重连重传、advisor 重启恢复监督、bot 重启后 outbox 续发、重复事件去重。**验收：**四类用例全绿并留证据。
+- [ ] **3.5 时延测量。** 假链路各段计时（说完→字幕→决策→IM）。**验收：**给出分段时延表（真实预算待 M3 后修订）。
+
+## 7. 阶段 4：M2 —— S3 订阅场景（全桩）
+
+- [ ] **4.1 订阅域。** 订阅表+状态机（规格 0.6）；小B 会议号解析到"正被服务中的会话"注册表；审批请求生成与 #rN 编号。**验收：**状态机全迁移路径单测（含非法迁移拒绝）。
+- [ ] **4.2 fan-out 扩展。** 决策时实时查询 approved 集合；组织者行建会自动写入；每收件人独立 IM 行；撤销时 cancel 该收件人 pending 行（沿用旧 `reconcile_destinations` 同型逻辑）。**验收：**审批后下一条回答双收件人；撤销即刻止血；仅前向不回溯。
+- [ ] **4.3 会话与审批交互。** ended 拒新订阅；重复申请幂等；denied 再申请走新审批。**验收：**对应 REQUIREMENTS S3 每条边界的用例各一。
+
+## 8. 阶段 5：M3 —— 真实接入联调
+
+- [ ] **5.1 真实 OAuth + 日历校验。** 飞书应用后台注册回调（指向 auth）；真实账号授权（电脑+手机）；真实日历组织者/时间窗校验。**验收：**`data/acceptance-auth/` 同款取证（脱敏）。
+- [ ] **5.2 真实飞书 IM。** bot 上真应用（IM 三权限+长连接事件，沿用旧权限清单）；小A/小B 真账号跑 S1–S3。**验收：**真机全场景走查记录。
+- [ ] **5.3 真实 GLM。** gateway 切 OpenCode 后端，复用旧 M2 部署经验（`../docs/REMOTE_SERVER_DEVELOPMENT.md`）。**验收：**真实会议片段端到端，记录执行耗时。
+- [ ] **5.4 真实会议预验收。** 一场真实飞书会议全链路（双路采集、延迟、字幕质量、回答质量）。**验收：**证据存档；问题清单回填任务。
+
+## 9. 阶段 6：M4 —— 多租户、部署与收尾
+
+- [ ] **6.1 多租户隔离。** owner 贯穿会话/字幕/outbox/订阅；ingest 令牌绑定 owner 校验；跨用户访问显式拒绝；按用户容量/并发配额首版上限。**验收：**双用户并发互不可见、互不挤占的集成测试。
+- [ ] **6.2 安全加固。** 流令牌 TTL 与吊销闭环；auth 凭据静态加密（可选但记录决策）；回调/ingest 经反代 TLS；节点间预留服务认证接口（拆机前启用）。**验收：**越权/过期令牌/重放三组负向测试。
+- [ ] **6.3 部署件。** 五个 systemd 单元、TLS 反代（回调+ingest）、healthz 与最小指标、有界停机、备份/删除脚本（按用户）。**验收：**干净服务器按文档一次拉起；演练停机恢复。
+- [ ] **6.4 真实会议正式验收。** REQUIREMENTS S1–S5 全场景+异常路径（断网/合盖/撤销/拒绝/授权失效），双 persona 各自设备取证。**验收：**验收报告与证据归档，时延对照 20s 预算给结论。
+- [ ] **6.5 文档与归档收尾。** new/README 更新为运行文档；模块 README（安装/配置/排障）；旧仓库资产归档核对（对照 §1 表逐项标记"已平移/不带走"）。
+
+## 10. 已知风险与显式待定项
+
+| 项 | 状态 | 归属任务 |
+|---|---|---|
+| WS 音频中转的背压与线程模型（新运行时职责，advisor 无先例） | 风险 | 1.3 先行验证（含慢消费者测试） |
+| 云端并发刷新 refresh token 的竞态（旧实现单机单文件锁） | 风险 | 1.1 单飞语义 + 并发测试 |
+| IM 复制粘贴命令的 UX 失败率（粘错/漏参数） | 接受+缓解 | 0.5 参数校验与清晰报错；一键启动列为后续增强 |
+| 时延预算 20s 未在新链路实测 | 待定 | 3.5 假链路分段 → 6.4 真实结论 |
+| SQLite 三节点各自独立库，拆机部署需迁移 | v1 接受 | 6.3 记录边界；拆机前再立项 |
+| 端口/反代选型（P_ingest/P_api/P_auth/P_stt 具体值） | 待定 | 0.1 骨架时定缺省值并写入 DEPLOYMENT |
+| GLM Coding Plan 供多人使用的政策边界（bot 转发是否合规） | 关注 | 5.3 联调时复核旧 chatbot/README 的政策提示，必要时切独立 API |
+
+## 11. 进度记录
+
+- 2026-11-10 立项，计划 v0.1（契约/骨架未开始）。
