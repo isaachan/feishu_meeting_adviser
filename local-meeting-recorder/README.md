@@ -40,7 +40,9 @@ python3 -m venv .venv
 
 - **权限**：宿主终端 App 需要系统设置 → 隐私与安全性中的「屏幕录制」（ScreenCaptureKit loopback，采集飞书系进程音频）与「麦克风」（仅 `--mic` 时）；首次授权后需重启终端 App。
 - **隐私（手动开关）**：麦克风默认**关闭**；`--mic` 显式开启（本工具不检测飞书静音状态，静音期间请自行关闭）。
-- **STT（默认 sherpa 本地流式）**：模型为 sherpa-onnx 流式 Zipformer（zh-en-punct int8，2026-06-05 版），`--stt-model-dir` 或 `LMR_STT_MODEL_DIR` 指定模型目录；partial 不落契约，模型端点检测出 final 后写字幕。模型下载（约 128 MiB，不进 Git，SHA-256 见 [studies/local-meeting](../studies/local-meeting/README.md)）：
+- **STT（默认 remote-stream 远端流式）**：远端 `stt-server`（见 [stt-server](../stt-server/README.md) 与 [流式 STT 契约](../docs/CONTRACT_STT_STREAM.md)）承担识别，客户端零本地 STT 计算；`--stt-url` 或 `LMR_STT_URL` 指定服务地址（如 `ws://stt.internal:8392`），未配置时报错——或改用 `--stt sherpa` 本地流式（`--stt-model-dir`/`LMR_STT_MODEL_DIR` 指定模型目录，模型下载见下）。
+- **STT（可选 zhipu 文件上传）**：`--stt zhipu`（glm-asr-2512，API key 取 `GLM_ASR_API_KEY`/`GLM_API_KEY`；GLM Coding Plan 无 ASR 配额，需单独计费资源）；分段上限 25s（API 限 30s/25MB），转写失败重试后丢弃该段并在 summary 记录。
+- sherpa 模型下载（remote-stream/sherpa 共用同一模型；约 128 MiB，不进 Git，SHA-256 见 [stt-server](../stt-server/README.md)）：
   ```bash
   curl -fL --retry 2 -o /tmp/stt-model.tar.bz2 \
     'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05.tar.bz2'
@@ -48,7 +50,6 @@ python3 -m venv .venv
   mkdir -p models && tar xjf /tmp/stt-model.tar.bz2 -C models
   export LMR_STT_MODEL_DIR=$PWD/models/sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05
   ```
-- **STT（可选 zhipu 文件上传）**：`--stt zhipu`（glm-asr-2512，API key 取 `GLM_ASR_API_KEY`/`GLM_API_KEY`；GLM Coding Plan 无 ASR 配额，需单独计费资源）；分段上限 25s（API 限 30s/25MB），转写失败重试后丢弃该段并在 summary 记录。
 - **留存**：整场原始音频（int16 wav）与事件日志保存在 `<data-root>/recorder/audio/<stream_id>/`，**不自动删除**，请手动清理。
 - `--duration N` 到期后干净停止并写 `stream_end`；Ctrl-C 中断不写（语义与 fake 一致）。
 - 首次运行会用 `swiftc` 编译采集助手（缓存于临时目录）；打包版本通过 `LOCAL_MEETING_RECORDER_SCK_BIN` 使用预编译二进制。

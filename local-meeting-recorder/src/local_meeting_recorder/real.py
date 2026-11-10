@@ -40,6 +40,10 @@ def _default_stt_model_dir() -> Path | None:
     return Path(env) if env else None
 
 
+def _default_stt_url() -> str | None:
+    return os.environ.get('LMR_STT_URL')
+
+
 class RealRecorder:
     """Runs one real capture stream end to end; stop via ``stop_event``.
 
@@ -51,8 +55,9 @@ class RealRecorder:
     def __init__(self, *, session_id: str, data_root: Path,
                  mic_enabled: bool = False,
                  mic_speaker: str = _DEFAULT_MIC_SPEAKER,
-                 stt_mode: str = 'sherpa',
+                 stt_mode: str = 'remote-stream',
                  stt_model_dir: Path | None = None,
+                 stt_url: str | None = None,
                  transcriber: Transcriber | None = None,
                  streaming_sessions: 'Callable[[str], StreamingSession] | None' = None,
                  sources: list[AudioSource] | None = None,
@@ -64,6 +69,7 @@ class RealRecorder:
         self.mic_speaker = mic_speaker
         self.stt_mode = stt_mode
         self.stt_model_dir = Path(stt_model_dir) if stt_model_dir else None
+        self.stt_url = stt_url or _default_stt_url()
         self._transcriber = transcriber
         self._streaming_sessions = streaming_sessions
         self._source_override = sources
@@ -88,24 +94,41 @@ class RealRecorder:
                    LOOPBACK_SOURCE: None}
         transcriber = self._transcriber
         streaming = None
-        if self.stt_mode == 'sherpa':
+        if self.stt_mode in ('sherpa', 'remote-stream'):
             make_session = self._streaming_sessions
             if make_session is None:
-                from .stt import LocalSherpaSession
-                model_dir = self.stt_model_dir or _default_stt_model_dir()
-                if model_dir is None:
-                    raise ValueError(
-                        'sherpa STT needs --stt-model-dir or '
-                        'LMR_STT_MODEL_DIR (see recorder README)')
+                if self.stt_mode == 'remote-stream':
+                    from .stt import RemoteStreamSession
+                    url = self.stt_url
+                    if not url:
+                        raise ValueError(
+                            'stt remote-stream needs --stt-url or '
+                            'LMR_STT_URL (or run with --stt sherpa)')
 
-                def default_factory(source_id: str) -> StreamingSession:
-                    return LocalSherpaSession(source_id, model_dir=model_dir)
+                    def default_factory(source_id: str) -> StreamingSession:
+                        return RemoteStreamSession(source_id, url=url)
+                else:
+                    from .stt import LocalSherpaSession
+                    model_dir = self.stt_model_dir or _default_stt_model_dir()
+                    if model_dir is None:
+                        raise ValueError(
+                            'sherpa STT needs --stt-model-dir or '
+                            'LMR_STT_MODEL_DIR (see recorder README)')
+
+                    def default_factory(source_id: str) -> StreamingSession:
+                        return LocalSherpaSession(source_id, model_dir=model_dir)
 
                 make_session = default_factory
-            streaming = {source.source_id: make_session(source.source_id)
-                         for source in sources}
-            for sess in streaming.values():
-                sess.start()
+            sessions: dict[str, StreamingSession | None] = {
+                source.source_id: make_session(source.source_id)
+                for source in sources}
+            streaming = sessions
+            try:
+                for sess in streaming.values():
+                    if sess is not None:
+                        sess.start()
+            except Exception as exc:  # noqa: BLE001 - surface as config error
+                raise ValueError(f'stt {self.stt_mode} failed to start: {exc}') from exc
         elif self.stt_mode == 'zhipu':
             if transcriber is None:
                 from .stt import create_transcriber
@@ -162,6 +185,20 @@ class RealRecorder:
                 f'u-{nonce}-{source_id}-{final_seq[source_id]:06d}', event.text,
                 speaker.get(source_id), start_ms, end_ms))
 
+        def run_session(source_id: str, op) -> list:
+            """Run a streaming op; a dead session is reported and skipped."""
+            sess = streaming[source_id] if streaming is not None else None
+            if sess is None:
+                return []
+            try:
+                return op(sess)
+            except Exception as exc:  # noqa: BLE001 - keep ingesting
+                errors.append({'source': source_id, 'type': 'stt_error',
+                               'message': str(exc)})
+                if streaming is not None:
+                    streaming[source_id] = None
+                return []
+
         def ingest() -> None:
             while len(stopped_sources) < len(sources):
                 item = subscriber.get()
@@ -172,7 +209,10 @@ class RealRecorder:
                                   - item.sample_offset / item.rate)
                         source_anchors[item.source_id] = anchor
                     if streaming is not None:
-                        for event in streaming[item.source_id].feed(item):
+                        events = run_session(
+                            item.source_id,
+                            lambda sess, frame=item: sess.feed(frame))
+                        for event in events:
                             if event.status == FINAL:
                                 emit_streaming_final(item.source_id, event)
                     else:
@@ -182,7 +222,9 @@ class RealRecorder:
                 elif isinstance(item, SourceEvent):
                     if item.type in ('gap_begin', 'source_paused'):
                         if streaming is not None:
-                            for event in streaming[item.source_id].feed_gap():
+                            events = run_session(item.source_id,
+                                                 lambda sess: sess.feed_gap())
+                            for event in events:
                                 if event.status == FINAL:
                                     emit_streaming_final(item.source_id, event)
                         else:
@@ -191,7 +233,9 @@ class RealRecorder:
                                 segment_queue.put(seg)
                     elif item.type == 'source_stopped':
                         if streaming is not None:
-                            for event in streaming[item.source_id].close():
+                            events = run_session(item.source_id,
+                                                 lambda sess: sess.close())
+                            for event in events:
                                 if event.status == FINAL:
                                     emit_streaming_final(item.source_id, event)
                         else:

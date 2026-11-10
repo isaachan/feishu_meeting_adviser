@@ -20,10 +20,10 @@ Contract:
   never reach the caption contract; gaps close utterances explicitly.
 """
 from .base import Transcriber, TranscriptionResult, TranscriberError
+from .remote import RemoteStreamError, RemoteStreamSession
 from .segmenter import Segment, VadSegmenter
 from .streaming import FINAL, PARTIAL, LocalSherpaSession, SttEvent, StreamingSession
 from .zhipu import ZhipuASR
-
 
 def create_transcriber(config: dict) -> Transcriber:
     """Build the configured transcriber (``stt: remote|local``)."""
@@ -44,6 +44,8 @@ def create_transcriber(config: dict) -> Transcriber:
 __all__ = [
     'FINAL',
     'PARTIAL',
+    'RemoteStreamError',
+    'RemoteStreamSession',
     'Segment',
     'LocalSherpaSession',
     'StreamingSession',
