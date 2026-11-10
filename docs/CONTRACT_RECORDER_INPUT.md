@@ -1,6 +1,6 @@
 # Recorder 输入与本地交接契约
 
-状态：阶段 0 冻结（2026-11-08）。`local-meeting-recorder` 与 `advisor` 各自按本文件实现与测试；两侧不得互相导入源码，契约变更需同步修改两侧实现并更新根 `integrations/` 用例。背景见 [plan.md](../plan.md)。
+状态：阶段 0 冻结（2026-11-08）；2026-11-10 增补 real 模式会议绑定元数据（第 6 节，向后兼容，不改事件格式）。`local-meeting-recorder` 与 `advisor` 各自按本文件实现与测试；两侧不得互相导入源码，契约变更需同步修改两侧实现并更新根 `integrations/` 用例。背景见 [plan.md](../plan.md)。
 
 ## 1. 范围与模块入口（plan 0.1）
 
@@ -73,6 +73,7 @@ data/recorder/ack/<session_id>/<stream_id>.json             # advisor 写入的�
 
 - 本地会话使用独立标识空间（`local:` 前缀 + UUID），与既有飞书会议数据并存；旧数据保留可查，不清库、不迁移。
 - 飞书链路已停用：不再从本契约之外的来源创建新会话。
+- real 模式录制绑定经飞书组织者授权核验选定的日历会议（授权语义见 [STT 流契约](CONTRACT_STT_STREAM.md) 第 2.1 节）：recorder 将 `calendar_event_id` 以流级元数据随 spool 交接（须在该流字幕事件被消费前可读），advisor 将其与会话关联保存，用于把字幕对应到飞书会议。fake 模式与未绑定会议的流缺省该字段；此增补不改变事件字段与 `schema_version`。
 
 ## 7. 示例
 
