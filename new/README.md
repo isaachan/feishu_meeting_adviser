@@ -1,0 +1,46 @@
+# 会参谋 · 新架构（方案 C）
+
+状态：**设计阶段（v0.1）**。本目录是新架构的唯一开发入口；旧架构（方案 B）的代码与文档在仓库上层目录，作为移植参考资产，不再维护。
+
+## 这是什么
+
+会参谋是一个实时会议 AI 助理：在会议进行中为**组织者**听会、判断并给出回答，并按组织者的显式授权，把回答分发给**参会者**。
+
+新架构（方案 C）相对旧架构（方案 B，见上层 `plan.md`）的关键翻转：
+
+| | 方案 B（旧，已停止维护） | 方案 C（本目录） |
+|---|---|---|
+| 会议业务状态（会话/字幕/材料/决策） | laptop 本地 SQLite | 云端 advisor，集中多用户 |
+| 通知 bot | 搁置（本地架构下无法闭环） | 云端，与 advisor 同库，一等公民 |
+| laptop 上跑什么 | recorder + advisor | 只跑飞书客户端 + local-recorder（音频上行） |
+| 参会者获得信息 | 不支持 | 飞书 IM 订阅，经组织者审批 |
+
+## 文档
+
+- [产品需求（REQUIREMENTS）](docs/REQUIREMENTS.md)：personas（小A/小B）、端到端 scenarios、范围与非目标。
+- [架构（ARCHITECTURE）](docs/ARCHITECTURE.md)：节点拓扑、模块职责、边界决策、数据流、关键状态机。
+- [部署（DEPLOYMENT）](docs/DEPLOYMENT.md)：部署节点、组件端口、网络与凭据边界、首版基线。
+
+## 模块规划（目标形态）
+
+```
+new/
+├── docs/                  # 本设计文档
+├── recorder/              # laptop 端采集器（自旧 local-meeting-recorder 瘦身移植）
+├── advisor/               # 云端会话服务（自旧 advisor 服务化改造 + bot 子系统）
+├── stt-server/            # 流式 STT 服务（自旧 stt-server 平移，退化纯内网）
+└── llm-gateway/           # 模型执行网关（自旧 llm-gateway 平移）
+```
+
+每个模块独立配置、环境、测试与 `pyproject.toml`；模块间只经书面契约（WebSocket / HTTP）交接，不导入彼此源码——沿用旧仓库已验证的模块独立原则。
+
+## 从旧仓库平移时的资产地图
+
+| 旧资产 | 去向 |
+|---|---|
+| recorder 双路采集（SCK loopback + mic）、MuteGate、OAuth 登录/选会议、本地音频留存 | `recorder/`，去 spool，改 WS 上行 |
+| advisor 的 snapshot / decision / jobs / outbox / 会话状态机 | `advisor/` 核心域，基本平移，加多租户外壳 |
+| 旧 spool/ack 契约的幂等语义（event_id/sequence/stream_end） | 演化为 recorder↔advisor 的网络契约 |
+| stt-server（sherpa 流式 + v2 组织者授权） | `stt-server/`；鉴权前移到 advisor 后转内网模式 |
+| llm-gateway（OpenCode/GLM 沙箱执行） | `llm-gateway/`，原样平移 |
+| chatbot 的飞书长连接接线 | 吸收进 `advisor/` 的 bot 子系统 |
