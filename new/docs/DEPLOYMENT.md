@@ -24,12 +24,12 @@
 
 | 组件 | 监听 | 暴露范围 | 说明 |
 |---|---|---|---|
-| auth OAuth 回调（HTTPS） | `https://<域名>/oauth/callback`（反代 → `127.0.0.1:<P_auth>`） | 浏览器可达（部署网络内，**含手机**点开 IM 里的授权链接；域名可仅内网/VPN 解析） | 首次授权/重新授权；redirect URI 必须与飞书应用后台注册值**精确匹配** |
-| auth API（HTTP） | `127.0.0.1:<P_auth>` | 仅 localhost | advisor 获取有效用户凭据（`get_valid_token(open_id)` 类接口）与授权 URL；bot 不直连 auth |
-| advisor ingest（WS） | `0.0.0.0:<P_ingest>`（待定） | 受信网络 | recorder 音频/事件上行唯一入口；**流令牌**鉴权（非用户凭据）；每条音频源一条连接；v1 受信网络**明文 ws**（最简基线，公网/拆机前补 TLS） |
-| advisor API（HTTP） | `127.0.0.1:<P_api>` | 仅 localhost | bot 调用（指令触发会话操作、订阅读写、待发 IM 拉取/回写）+ 运维 CLI |
+| auth OAuth 回调（HTTPS） | `https://<域名>/oauth/callback`（反代 → `127.0.0.1:8381`） | 浏览器可达（部署网络内，**含手机**点开 IM 里的授权链接；域名可仅内网/VPN 解析） | 首次授权/重新授权；redirect URI 必须与飞书应用后台注册值**精确匹配** |
+| auth API（HTTP） | `127.0.0.1:8381` | 仅 localhost | advisor 获取有效用户凭据（`get_valid_token(open_id)` 类接口）与授权 URL；bot 不直连 auth |
+| advisor ingest（WS） | `0.0.0.0:8400` | 受信网络 | recorder 音频/事件上行唯一入口；**流令牌**鉴权（非用户凭据）；每条音频源一条连接；v1 受信网络**明文 ws**（最简基线，公网/拆机前补 TLS） |
+| advisor API（HTTP） | `127.0.0.1:8380` | 仅 localhost | bot 调用（指令触发会话操作、订阅读写、待发 IM 拉取/回写）+ 运维 CLI |
 | bot | 出站长连接 | — | 主动外连飞书（`lark.ws.Client`），不监听端口 |
-| stt-server（WS） | `127.0.0.1:<P_stt>` | 仅 localhost | auth 固定 `none`（准入已由 advisor 完成） |
+| stt-server（WS） | `127.0.0.1:8392`（沿用旧部署） | 仅 localhost | auth 固定 `none`（准入已由 advisor 完成） |
 | llm-gateway（HTTP） | `127.0.0.1:8377`（沿用） | 仅 localhost | 与旧部署一致 |
 
 网络边界一句话：**对外两个入口——auth 的 OAuth 回调（浏览器可达，HTTPS 域名经反代）与 advisor 的 ingest WS（受信网络）；云内互调全部 localhost**：bot→advisor、advisor→auth、advisor→stt-server、advisor→llm-gateway。

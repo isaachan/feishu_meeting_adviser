@@ -48,7 +48,7 @@
 
 ## 3. 阶段 0：契约冻结与模块骨架
 
-- [ ] **0.1 建模块骨架与 CI。** 六个模块目录 + pyproject + 空测试 + ruff/pyright 配置；根 `new/integrations/` 集成测试骨架；CI 矩阵（3.11/3.14）沿用旧 `quality.yml` 形态。**验收：**CI 全绿，六模块可独立 `pip install -e .` 并跑空测试。
+- [x] **0.1 建模块骨架与 CI。** 六个模块目录 + pyproject + 空测试 + ruff/pyright 配置；根 `new/integrations/` 集成测试骨架；CI 矩阵（3.11/3.14）沿用旧 `quality.yml` 形态。**验收：**CI 全绿，六模块可独立 `pip install -e .` 并跑空测试。**完成（2026-11-10）：**六模块 src 布局骨架 + `.github/workflows/quality-new.yml`（模块矩阵 + integrations 两 job）；本地 3.11 验证：六模块 `pip install -e .`、ruff、pyright、unittest 全绿，`new/integrations` 跨模块导入用例通过；端口缺省值已定并写入 DEPLOYMENT（P_ingest=8400、P_api=8380、P_auth=8381、P_stt=8392 沿用、gateway=8377 沿用）。
 - [ ] **0.2 冻结 recorder ↔ advisor 流式接入契约**（`new/docs/CONTRACT_RECORDER_STREAM.md`）。内容：WS 端点与消息面（`start` 携流令牌/session/事件绑定/音频源标识 → `started` 回显；二进制音频帧 int16/16k/mono；`gap`/`stop`；下行 `final` 回执不需要，改为服务端落库确认 `ack(sequence)`）；**每条音频源一条连接**（loopback 常开、mic 开启时独立加一条，两路互不影响——沿用旧 STT 契约"每连接一个音频源会话"语义），sequence/event_id 按连接（流）独立；幂等与缺口语义照搬旧 spool 契约；断线重连=新流、重传窗口、`stream_end.last_sequence`；服务端错误码（含 `bad_token`/`session_ended`）；v1 受信网络明文 ws。**验收：**契约评审通过，含正常/重复/断连/越权四个时序示例。
 - [ ] **0.3 冻结 bot ↔ advisor 内部 API 契约**（`new/docs/CONTRACT_ADVISOR_API.md`）。资源面：`POST /sessions`（入会：meeting_no/link → 校验+建会+返回 recorder 命令，**建会时从日历事件描述自动带出会话材料**（空描述即无材料，不阻塞）；**凭据缺失/失效时返回 `authorization_required` + 授权 URL**，由 bot 转发小A）、`POST /sessions/{id}/end`、`GET /sessions/{id}/status`、订阅 `POST /subscription-requests`（`#rN` 编号**全局唯一**，advisor 分配）、`POST /subscription-requests/{id}/decide`、outbox `GET /outbox/pending?limit=`、`POST /outbox/{uuid}/result`。语义：幂等键（message_id 派生）、审批状态机（revoked 终态）、fan-out 仅前向。**验收：**每接口有请求/响应/错误码示例；与 REQUIREMENTS S3 边界逐条对应。
 - [ ] **0.4 冻结 auth 契约**（`new/docs/CONTRACT_AUTH.md`）。内部 API（**仅 advisor 调用**，bot 不直连 auth）：`GET /credentials/{open_id}/token`（有效即返、临期静默刷新、并发刷新单飞——沿用旧 oauth.py 的"提交 marker 后才允许一次性 POST"语义）、授权 URL 生成（入参 open_id+待续接意图 → 授权 URL，state 绑定 open_id 与意图）；OAuth 面：`GET /oauth/callback`（浏览器经 TLS 反代到达；state+code 校验、换取、按 open_id 存储）；存储格式与权限（0600、原子写、目录 0700）。**验收：**含过期/拒绝/重放/并发刷新时序说明。
@@ -109,10 +109,11 @@
 | IM 复制粘贴命令的 UX 失败率（粘错/漏参数） | 接受+缓解 | 0.5 参数校验与清晰报错；一键启动列为后续增强 |
 | 时延预算 20s 未在新链路实测 | 待定 | 3.5 假链路分段 → 6.4 真实结论 |
 | SQLite 三节点各自独立库，拆机部署需迁移 | v1 接受 | 6.3 记录边界；拆机前再立项 |
-| 端口/反代选型（P_ingest/P_api/P_auth/P_stt 具体值） | 待定 | 0.1 骨架时定缺省值并写入 DEPLOYMENT |
+| 端口/反代选型（P_ingest/P_api/P_auth/P_stt 具体值） | 已定（0.1） | P_ingest=8400、P_api=8380、P_auth=8381、P_stt=8392（沿用）、gateway=8377（沿用）；已写入 DEPLOYMENT §2 |
 | GLM Coding Plan 供多人使用的政策边界（bot 转发是否合规） | 关注 | 5.3 联调时复核旧 chatbot/README 的政策提示，必要时切独立 API |
 
 ## 11. 进度记录
 
 - 2026-11-10 立项，计划 v0.1（契约/骨架未开始）。
 - 2026-11-10 首轮评审修订（v0.2）：删除暂停/恢复辅助（无 paused 状态）；订阅 revoked 定为终态（再申请直接拒绝）；draining/ended 拒新订阅；采集空闲超时阈值改 config 可配；ingest 改为每条音频源一条连接、v1 受信网络明文 ws（后端不接公网）；授权链接统一经 advisor 下发（bot 不直连 auth）；#rN 定为全局编号；材料来源定为建会时从日历事件描述自动带出（空描述即无材料，不阻塞）；新增 2.4 打包分发；笔误修正（拓扑图编号冲突、`--mic` 命令模板、`--mic-speaker` 语义、时延预算出处、会话 id 前缀）。
+- 2026-11-10 **0.1 完成**：六模块骨架 + CI（quality-new.yml）+ integrations 骨架；端口缺省值定稿写入 DEPLOYMENT。

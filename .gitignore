@@ -21,3 +21,4 @@ config.*.yaml
 !config.example.yaml
 local-meeting-recorder/data/
 local-meeting-recorder/config.json
+new/data/
