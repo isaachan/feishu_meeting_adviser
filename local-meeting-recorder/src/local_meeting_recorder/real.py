@@ -58,6 +58,9 @@ class RealRecorder:
                  stt_mode: str = 'remote-stream',
                  stt_model_dir: Path | None = None,
                  stt_url: str | None = None,
+                 calendar_event_id: str | None = None,
+                 stt_auth: 'Callable[[], dict] | None' = None,
+                 stt_auth_refresh: 'Callable[[], None] | None' = None,
                  transcriber: Transcriber | None = None,
                  streaming_sessions: 'Callable[[str], StreamingSession] | None' = None,
                  sources: list[AudioSource] | None = None,
@@ -70,6 +73,9 @@ class RealRecorder:
         self.stt_mode = stt_mode
         self.stt_model_dir = Path(stt_model_dir) if stt_model_dir else None
         self.stt_url = stt_url or _default_stt_url()
+        self.calendar_event_id = calendar_event_id
+        self._stt_auth = stt_auth
+        self._stt_auth_refresh = stt_auth_refresh
         self._transcriber = transcriber
         self._streaming_sessions = streaming_sessions
         self._source_override = sources
@@ -106,7 +112,9 @@ class RealRecorder:
                             'LMR_STT_URL (or run with --stt sherpa)')
 
                     def default_factory(source_id: str) -> StreamingSession:
-                        return RemoteStreamSession(source_id, url=url)
+                        return RemoteStreamSession(source_id, url=url,
+                                                   auth=self._stt_auth,
+                                                   on_auth_expired=self._stt_auth_refresh)
                 else:
                     from .stt import LocalSherpaSession
                     model_dir = self.stt_model_dir or _default_stt_model_dir()
@@ -142,6 +150,12 @@ class RealRecorder:
         subscriber = session.subscribe()
         writer = SpoolWriter(self.data_root, self.session_id, self.stream_id,
                              clock=self._clock)
+        if self.calendar_event_id:
+            # Stream-level meeting binding per recorder input contract §6;
+            # written before any caption event of this stream.
+            writer.write_meta({'session_id': self.session_id,
+                               'stream_id': self.stream_id,
+                               'calendar_event_id': self.calendar_event_id})
         segmenters = {source.source_id: VadSegmenter(source.source_id)
                       for source in sources}  # unused in streaming mode
         segment_queue: queue.Queue = queue.Queue()

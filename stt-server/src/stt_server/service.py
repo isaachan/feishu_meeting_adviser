@@ -1,8 +1,10 @@
-"""WebSocket service per CONTRACT_STT_STREAM v1.
+"""WebSocket service per CONTRACT_STT_STREAM v2.
 
 One connection = one audio source session. Audio decode runs in a worker
 thread (sherpa/onnxruntime calls are blocking); events are sent as JSON
-text frames immediately after each audio batch.
+text frames immediately after each audio batch. Organizer authorization
+(auth mode `feishu`) is validated before any session slot or recognizer
+is created.
 """
 from __future__ import annotations
 
@@ -10,9 +12,10 @@ import asyncio
 import json
 import threading
 
+from .auth import AuthError, AuthValidate
 from .session import SessionConfigError, ServerSession
 
-PROTOCOL = 1
+PROTOCOL = 2
 MAX_MESSAGE_BYTES = 1 << 20
 
 
@@ -49,12 +52,13 @@ class SttService:
     def __init__(self, *, model_dir, num_threads: int = 2,
                  max_sessions: int = 8, idle_timeout: float = 60.0,
                  model_name: str = 'sherpa-zh-en-punct-int8-2026-06-05',
-                 recognizer_factory=None):
+                 recognizer_factory=None, auth: AuthValidate | None = None):
         self.model_dir = model_dir
         self.num_threads = num_threads
         self.idle_timeout = idle_timeout
         self.model_name = model_name
         self._recognizer_factory = recognizer_factory
+        self.auth = auth
         self.state = ServiceState(max_sessions=max_sessions)
 
     async def handle(self, websocket) -> None:
@@ -74,14 +78,31 @@ class SttService:
             if not isinstance(start, dict) or start.get('type') != 'start':
                 await self._fail(websocket, 'bad_message', 'expected start')
                 return
-            if start.get('protocol') != PROTOCOL:
+            protocol = start.get('protocol')
+            allowed_protocols = (2,) if self.auth is not None else (1, 2)
+            if protocol not in allowed_protocols:
                 await self._fail(websocket, 'bad_protocol',
-                                 f'protocol {start.get("protocol")} unsupported')
+                                 f'protocol {protocol} unsupported')
                 return
             if start.get('rate') != 16000 or start.get('channels') != 1:
                 await self._fail(websocket, 'unsupported_format',
-                                 'v1 supports 16 kHz mono only')
+                                 'v2 supports 16 kHz mono only')
                 return
+            validated = None
+            if self.auth is not None:
+                auth_field = start.get('auth')
+                if not isinstance(auth_field, dict):
+                    await self._fail(websocket, 'unauthorized',
+                                     'start must carry an auth object')
+                    return
+                try:
+                    validated = await asyncio.to_thread(
+                        self.auth.validate,
+                        auth_field.get('user_access_token'),
+                        auth_field.get('calendar_event_id'))
+                except AuthError as exc:
+                    await self._fail(websocket, exc.code, exc.message)
+                    return
             if not self.state.acquire():
                 await self._fail(websocket, 'overloaded',
                                  f'more than {self.state.max_sessions} sessions')
@@ -95,8 +116,11 @@ class SttService:
             except SessionConfigError as exc:
                 await self._fail(websocket, 'internal', str(exc))
                 return
-            await _send_json(websocket, {'type': 'started', 'protocol': PROTOCOL,
-                                         'model': self.model_name})
+            await _send_json(websocket, {'type': 'started', 'protocol': protocol,
+                                         'model': self.model_name,
+                                         **({'user_id': validated.user_id,
+                                             'calendar_event_id': validated.calendar_event_id}
+                                            if validated is not None else {})})
 
             finals = 0
             while True:

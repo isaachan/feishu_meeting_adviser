@@ -1,10 +1,16 @@
-"""Remote streaming STT client per CONTRACT_STT_STREAM v1.
+"""Remote streaming STT client per CONTRACT_STT_STREAM v2.
 
 Implements the same StreamingSession interface as the local sherpa session:
 feed(frame) returns partial/final events with source-timeline offsets, but
 the decode runs on the remote stt-server. Audio is transported as int16
 PCM (halves uplink bandwidth); offsets count samples fed since session
 start, which equals the server-side offsets by contract.
+
+v2 authorization: when an ``auth`` provider is set, every connection's
+start message carries its payload (user_access_token + calendar_event_id);
+an ``auth_expired`` refusal at start triggers one silent refresh + reconnect
+via ``on_auth_expired`` (contract §3.5/§4). Other refusals fail the session
+with the server's error code exposed as ``error_code``.
 """
 from __future__ import annotations
 
@@ -13,6 +19,7 @@ import json
 import queue
 import threading
 import time
+from typing import Callable
 
 from ..audio.frames import AudioFrame
 from .streaming import FINAL, PARTIAL, RATE, SttEvent, StreamingSession
@@ -26,7 +33,7 @@ def _float32_to_int16(pcm: bytes) -> bytes:
     floats = array.array('f')
     floats.frombytes(pcm)
     return array.array('h', (int(max(-1.0, min(1.0, v)) * 32766)
-                             for v in floats)).tobytes()
+                              for v in floats)).tobytes()
 
 
 class RemoteStreamSession(StreamingSession):
@@ -34,7 +41,9 @@ class RemoteStreamSession(StreamingSession):
 
     def __init__(self, source_id: str, *, url: str, connect_timeout: float = 10.0,
                  gap_wait: float = 1.5, stop_wait: float = 3.0,
-                 clock=time.monotonic, connect=None):
+                 clock=time.monotonic, connect=None,
+                 auth: 'Callable[[], dict] | None' = None,
+                 on_auth_expired: 'Callable[[], None] | None' = None):
         self.source_id = source_id
         self.url = url
         self.connect_timeout = connect_timeout
@@ -42,6 +51,8 @@ class RemoteStreamSession(StreamingSession):
         self.stop_wait = stop_wait
         self._clock = clock
         self._connect = connect
+        self._auth = auth
+        self._on_auth_expired = on_auth_expired
         self._conn = None
         self._ctx = None
         self._send_lock = threading.Lock()
@@ -50,6 +61,8 @@ class RemoteStreamSession(StreamingSession):
         self._dead = False
         self._stopped_reply = threading.Event()
         self._error: str | None = None
+        self._error_code: str | None = None
+        self.started: dict | None = None
 
     @property
     def failed(self) -> bool:
@@ -59,9 +72,49 @@ class RemoteStreamSession(StreamingSession):
     def error(self) -> str | None:
         return self._error
 
+    @property
+    def error_code(self) -> str | None:
+        return self._error_code
+
     # -- lifecycle -----------------------------------------------------------
 
     def start(self) -> None:
+        retries = (self._auth is not None and self._on_auth_expired is not None)
+        attempts = 2 if retries else 1
+        for attempt in range(attempts):
+            self._open()
+            payload = {'type': 'start', 'protocol': 2,
+                       'source_id': self.source_id,
+                       'rate': RATE, 'channels': 1}
+            if self._auth is not None:
+                payload['auth'] = self._auth()
+            self._send(payload)
+            deadline = self._clock() + self.connect_timeout
+            expired = False
+            while True:
+                message = self._recv(deadline)
+                if message.get('type') == 'started':
+                    self.started = message
+                    break
+                if message.get('type') == 'error':
+                    self._error_code = message.get('code')
+                    if (attempt + 1 < attempts
+                            and message.get('code') == 'auth_expired'):
+                        expired = True
+                        break
+                    self._fail(f'server rejected start: {message}')
+                # ignore other early events
+            if not expired:
+                break
+            refresh = self._on_auth_expired
+            assert refresh is not None  # retries require a refresh hook
+            self._close_conn()
+            refresh()  # provider refreshes its stored token
+        self._reader = threading.Thread(target=self._read_loop, daemon=True,
+                                        name=f'{self.source_id}-stt-recv')
+        self._reader.start()
+
+    def _open(self) -> None:
         if self._connect is not None:
             self._conn = self._connect()
         else:
@@ -70,19 +123,6 @@ class RemoteStreamSession(StreamingSession):
             self._ctx = connect(self.url, open_timeout=self.connect_timeout,
                                 max_size=1 << 20, proxy=None)
             self._conn = self._ctx.__enter__()
-        self._send({'type': 'start', 'protocol': 1, 'source_id': self.source_id,
-                    'rate': RATE, 'channels': 1})
-        deadline = self._clock() + self.connect_timeout
-        while True:
-            message = self._recv(deadline)
-            if message.get('type') == 'started':
-                break
-            if message.get('type') == 'error':
-                self._fail(f'server rejected start: {message}')
-            # ignore other early events
-        self._reader = threading.Thread(target=self._read_loop, daemon=True,
-                                        name=f'{self.source_id}-stt-recv')
-        self._reader.start()
 
     def _read_loop(self) -> None:
         conn = self._conn
@@ -102,6 +142,7 @@ class RemoteStreamSession(StreamingSession):
                         self._stopped_reply.set()
                         return
                     elif kind == 'error':
+                        self._error_code = message.get('code')
                         self._error = message.get('message', 'server error')
                         self._dead = True
                         self._events.put(None)

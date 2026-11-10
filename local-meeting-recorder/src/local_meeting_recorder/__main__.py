@@ -46,6 +46,10 @@ def parser():
                            '(default: $LMR_STT_URL)')
     real.add_argument('--stt-model-dir', type=Path,
                       help='sherpa model directory (default: $LMR_STT_MODEL_DIR)')
+    real.add_argument('--event',
+                      help='bound Feishu calendar event id (<calendar_id>/<event_id>) '
+                           'from the organizer-authorized meeting selection; written '
+                           'as stream metadata and sent as STT auth when configured')
     return root
 
 
@@ -97,7 +101,8 @@ def main(argv=None):
                                     mic_speaker=args.mic_speaker,
                                     stt_mode=args.stt,
                                     stt_model_dir=args.stt_model_dir,
-                                    stt_url=args.stt_url)
+                                    stt_url=args.stt_url,
+                                    calendar_event_id=args.event)
             stop = threading.Event()
             previous = _install_interrupt(stop)
             try:

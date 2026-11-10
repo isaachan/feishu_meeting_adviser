@@ -53,7 +53,7 @@ class FakeConnection:
 
 
 def started_reply():
-    return ('text', json.dumps({'type': 'started', 'protocol': 1,
+    return ('text', json.dumps({'type': 'started', 'protocol': 2,
                                 'model': 'fake'}))
 
 
@@ -74,7 +74,8 @@ class RemoteStreamSessionTests(unittest.TestCase):
         self.assertEqual(len(payload), 3200)  # 1600 samples int16
         first = conn.sent[0]
         self.assertEqual(first[1]['type'], 'start')
-        self.assertEqual(first[1]['protocol'], 1)
+        self.assertEqual(first[1]['protocol'], 2)
+        self.assertNotIn('auth', first[1])
 
     def test_partial_and_final_events_parsed_with_offsets(self):
         session, conn = self.make([
@@ -131,6 +132,89 @@ class RemoteStreamSessionTests(unittest.TestCase):
         self.assertIn('boom', session.error)
         self.assertEqual(session.feed(frame(0, 1600)), [])  # dead: no-op
         session.close()
+
+
+def error_reply(code, message='rejected'):
+    return ('text', json.dumps({'type': 'error', 'code': code,
+                                'message': message}))
+
+
+class RemoteAuthTests(unittest.TestCase):
+    """v2 start.auth and the auth_expired refresh-retry (contract §2.1/§3.5)."""
+
+    def test_start_carries_auth_payload(self):
+        conn = FakeConnection([started_reply()])
+        auth = {'user_access_token': 'token-1',
+                'calendar_event_id': 'cal_a/evt_b'}
+        session = RemoteStreamSession('mic', url='ws://ignored',
+                                      connect=lambda: conn,
+                                      auth=lambda: dict(auth),
+                                      on_auth_expired=lambda: None,
+                                      clock=time.monotonic)
+        session.start()
+        sent = conn.sent[0][1]
+        self.assertEqual(sent['auth'], auth)
+        self.assertIsNotNone(session.started)
+        assert session.started is not None
+        self.assertEqual(session.started['type'], 'started')
+
+    def test_auth_expired_refreshes_once_and_reconnects(self):
+        expired_conn = FakeConnection([
+            error_reply('auth_expired', 'token expired')])
+        fresh_conn = FakeConnection([(
+            'text', json.dumps({'type': 'started', 'protocol': 2,
+                                'model': 'fake', 'user_id': 'u_1',
+                                'calendar_event_id': 'cal_a/evt_b'}))])
+        conns = [expired_conn, fresh_conn]
+        tokens = iter(['stale-token', 'fresh-token'])
+        refreshed = []
+
+        def auth():
+            return {'user_access_token': next(tokens),
+                    'calendar_event_id': 'cal_a/evt_b'}
+
+        def on_expired():
+            refreshed.append(True)
+
+        session = RemoteStreamSession('mic', url='ws://ignored',
+                                      connect=lambda: conns.pop(0),
+                                      auth=auth, on_auth_expired=on_expired,
+                                      clock=time.monotonic)
+        session.start()
+        self.assertEqual(refreshed, [True])
+        self.assertEqual(expired_conn.sent[0][1]['auth']['user_access_token'],
+                         'stale-token')
+        self.assertEqual(fresh_conn.sent[0][1]['auth']['user_access_token'],
+                         'fresh-token')
+        self.assertIsNotNone(session.started)
+        assert session.started is not None
+        self.assertEqual(session.started['user_id'], 'u_1')
+        self.assertTrue(expired_conn.closed.is_set())
+
+    def test_auth_expired_twice_fails_with_code(self):
+        conns = [FakeConnection([error_reply('auth_expired')]),
+                 FakeConnection([error_reply('auth_expired')])]
+        session = RemoteStreamSession(
+            'mic', url='ws://ignored', connect=lambda: conns.pop(0),
+            auth=lambda: {'user_access_token': 't',
+                          'calendar_event_id': 'cal/evt'},
+            on_auth_expired=lambda: None, clock=time.monotonic)
+        with self.assertRaises(Exception):
+            session.start()
+        self.assertEqual(session.error_code, 'auth_expired')
+
+    def test_unauthorized_fails_without_retry(self):
+        conns = [FakeConnection([error_reply('unauthorized',
+                                             'not organizer')])]
+        session = RemoteStreamSession(
+            'mic', url='ws://ignored', connect=lambda: conns.pop(0),
+            auth=lambda: {'user_access_token': 't',
+                          'calendar_event_id': 'cal/evt'},
+            on_auth_expired=lambda: None, clock=time.monotonic)
+        with self.assertRaises(Exception):
+            session.start()
+        self.assertEqual(session.error_code, 'unauthorized')
+        self.assertEqual(conns, [])  # only one connection was opened
 
 
 class ProtocolRoundTripTests(unittest.TestCase):

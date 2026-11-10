@@ -52,11 +52,11 @@ class RealRecorderTests(unittest.TestCase):
             source.push_frames(RATE // 10, 0.0)
 
     def run_recorder(self, transcriber, *, mic_enabled=True, duration=2.0,
-                     stop_after=None):
+                     stop_after=None, **extra):
         recorder = RealRecorder(session_id=SESSION, data_root=self.root,
                                 mic_enabled=mic_enabled,
                                 stt_mode='zhipu', transcriber=transcriber,
-                                sources=[self.loop, self.mic])
+                                sources=[self.loop, self.mic], **extra)
         result: dict = {}
         done = threading.Event()
 
@@ -89,6 +89,16 @@ class RealRecorderTests(unittest.TestCase):
             rows += [json.loads(line) for line in
                      segment.read_text().splitlines()]
         return rows
+
+    def test_calendar_event_metadata_written_to_stream(self):
+        result = self.run_recorder(FakeTranscriber(),
+                                   calendar_event_id='cal_a/evt_b')
+        stream_id = result['summary']['stream_id']
+        meta = json.loads((self.root / 'recorder' / 'spool' / SESSION
+                           / stream_id / 'meta.json').read_text())
+        self.assertEqual(meta['calendar_event_id'], 'cal_a/evt_b')
+        self.assertEqual(meta['session_id'], SESSION)
+        self.assertEqual(meta['stream_id'], stream_id)
 
     def test_clean_stop_produces_contract_events_and_retention(self):
         result = self.run_recorder(FakeTranscriber())
@@ -161,6 +171,13 @@ class RealCLITests(unittest.TestCase):
         with self.assertRaises(SystemExit) as ctx:
             main(['real'])
         self.assertEqual(ctx.exception.code, 2)
+
+    def test_real_accepts_event_option(self):
+        from local_meeting_recorder.__main__ import parser
+
+        args = parser().parse_args(
+            ['real', '--session', SESSION, '--event', 'cal_a/evt_b'])
+        self.assertEqual(args.event, 'cal_a/evt_b')
 
 
 if __name__ == '__main__':

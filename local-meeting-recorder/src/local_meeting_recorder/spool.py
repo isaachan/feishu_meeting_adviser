@@ -82,6 +82,24 @@ class SpoolWriter:
                     or self.clock() - self._segment_opened_at >= self.roll_seconds):
                 self._roll()
 
+    def write_meta(self, meta: dict) -> None:
+        """Stream-level metadata (contract §6, e.g. calendar_event_id).
+
+        Written once, atomically, before any caption event of this stream so
+        consumers can read it ahead of the stream's first event.
+        """
+        path = self.stream_dir / 'meta.json'
+        if path.exists():
+            return
+        raw = (json.dumps(meta, ensure_ascii=False,
+                          separators=(',', ':')) + '\n').encode('utf-8')
+        tmp = self.stream_dir / 'meta.tmp'
+        with tmp.open('wb') as handle:
+            handle.write(raw)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+
     def finish(self) -> None:
         self._roller_stop.set()
         if self._roller is not None:

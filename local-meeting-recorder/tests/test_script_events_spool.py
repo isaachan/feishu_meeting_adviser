@@ -64,6 +64,20 @@ class SpoolWriterTests(unittest.TestCase):
                               wall_clock_at='2026-11-08T10:00:00+00:00')
                 for number in range(1, count + 1)]
 
+    def test_write_meta_persists_once_and_not_a_segment(self):
+        writer = self.writer()
+        writer.write_meta({'calendar_event_id': 'cal_a/evt_b'})
+        writer.write_meta({'calendar_event_id': 'cal_c/evt_d'})  # ignored
+        meta = json.loads((writer.stream_dir / 'meta.json').read_text())
+        self.assertEqual(meta['calendar_event_id'], 'cal_a/evt_b')
+        for event in self.events(1):
+            writer.append(event)
+        writer.finish()
+        segments = [path.name for path in writer.stream_dir.glob('*.jsonl')]
+        self.assertEqual(segments, ['000001.jsonl'])  # meta.json never matches
+        writer.cleanup()
+        self.assertTrue((writer.stream_dir / 'meta.json').exists())
+
     def test_segments_are_append_only_and_renamed_atomically(self):
         writer = self.writer()
         for event in self.events(3):
