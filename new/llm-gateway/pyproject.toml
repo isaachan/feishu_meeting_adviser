@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "llm-gateway"
 version = "0.1.0"
-description = "Model execution gateway (OpenCode/GLM sandbox) per plan C"
+description = "Local inference gateway executing OpenCode-backed meeting decisions"
 requires-python = ">=3.11"
 dependencies = []
 
@@ -34,4 +34,4 @@ branch = true
 source = ["llm_gateway"]
 
 [tool.coverage.report]
-excludeAlso = ["if __name__ == .__main__.:", "if TYPE_CHECKING:", '\.\.\.']
+exclude_also = ["if __name__ == .__main__.:", "if TYPE_CHECKING:", '\.\.\.']

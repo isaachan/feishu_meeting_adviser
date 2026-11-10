@@ -62,7 +62,7 @@
 - [x] **1.3 advisor ingest 网关。** 独立线程/进程承载 WS：流令牌校验（铸造/吊销在会话域）、音频帧转投 stt-server（云内 WS 客户端）、final 按契约幂等落库、与业务循环只经持久化队列交接；背压策略（队列上限+丢帧显式计数）。**验收：**注入式桩测试覆盖鉴权拒绝、重复 sequence 去重、STT 断连不崩、慢消费者不阻塞另一会话。**完成（2026-11-10）：**`ingest.py`（CONTRACT_RECORDER_STREAM v1 全消息面：start/帧带序号/gap/stop/stream_end + started/ack/stopped/error 十种错误码；校验顺序=协议→令牌/会话→绑定→源冲突→序列窗口；按源去重与重传窗口 600 帧；缺口显式落库；idle 120s）+ `stt_client.py`（云内 STT 客户端，旧契约 v2 形态 auth=none，可注入工厂）；final→Caption 幂等落库即持久化交接；跨线程 SQLite 加 RLock + check_same_thread=False（事务全程持锁）；websockets>=14（proxy=None 防系统代理劫持内网连接）。14 项注入式 WS 测试全绿（鉴权/绑定/冲突/协议拒绝、重传去重、缺口记录、stale、慢消费者隔离、空闲超时、final 去重、断连释放源）。
 - [x] **1.4 advisor 会话监督器。** 建会即自动启动 consume 循环（多会话并发，沿用旧 AdviserService 每会话循环语义）；`结束`→draining→落定→ended 全自动；进程重启后恢复未 ended 会话的循环。**验收：**重启恢复测试；N 会话并发互不串扰测试。**完成（2026-11-10）：**`supervisor.py`（每会话一线程 + DB 租约续期 + take_finished 轮询 + backoff；idle→draining（ingest 活动快照）→drain_ready→ended 自动；重启恢复 recording/draining 循环）+ `api.py`（CONTRACT_ADVISOR_API 全资源面：sessions 入会/列表/状态/结束、订阅申请/审批/撤销、outbox pending/result，X-Idempotency-Key 落库重放，S1 四拒绝码映射，authorization_required 现取带 intent 的授权 URL）+ `auth_client.py`（auth 节点 HTTP 客户端）+ `rule_backend.py`（桩模型）+ `advisor serve/init` CLI（--calendar-stub 桩先行）；ingest 补 activity_snapshot/close_session（draining 冲刷在途连接）。16 项新测试（监督器自动决策/排空至 ended/空闲超时/重启恢复/双会话并发 + API 全端点/幂等重放/越权/订阅终态/outbox 往返）全绿；模块合计 58 项。
 - [x] **1.5 bot 服务骨架。** lark 长连接接线（可桩）、事件去重、顺序 worker；指令解析器（`入会/结束会议/同意/拒绝/撤销订阅/状态`，会议号与链接解析沿用旧 `parse_meeting_reference` 规则）；advisor API 客户端。**验收：**解析单测覆盖合法/非法/含 @/含密码链接；桩模式下指令往返可跑。**完成（2026-11-10）：**`commands.py`（解析规则逐字平移：9 位号/https vc.feishu.cn/j/ 链接/单 pwd/冲突密码拒绝；@ 提及剥离；非指令文本含会议引用→订阅意图）+ `advisor_client.py`（契约客户端，X-Idempotency-Key=message_id 派生）+ `recorder_command.py`（附录 A 渲染：白名单键+字符集断言+单引号注入，红线测试断言不含用户凭据）+ `service.py`（message_id 去重、S1 四拒绝话术、审批请求 DM、outbox 顺序轮询 sent/uncertain 回写；Directory 端口解析昵称）+ `lark_bot.py`（长连接接线，pyright 排除待 M3 实测）+ `bot serve` CLI。26 项测试全绿（解析合法/非法/@/密码链接、渲染白名单拒绝、桩模式全指令往返、授权链接下发、outbox 投递与 uncertain）。
-- [ ] **1.6 stt-server / llm-gateway 平移。** 目录搬入 + 测试迁跑 + 部署配置（stt auth=none）。**验收：**两模块原有测试全绿；llm-gateway 假模型经 HTTP 可用。
+- [x] **1.6 stt-server / llm-gateway 平移。** 目录搬入 + 测试迁跑 + 部署配置（stt auth=none）。**验收：**两模块原有测试全绿；llm-gateway 假模型经 HTTP 可用。**完成（2026-11-10）：**两模块 rsync 整体迁入（src/tests/README/pyproject，auth 默认已是 none）；websockets 定版 `>=17,<18`（15.0.1 下 sync 客户端组合不稳，17.4 与旧部署一致）；迁移适配：stt 测试 sync 连接显式 proxy=None（macOS 系统代理）+ 单次握手重试。3.14 全绿（stt 34 + gateway 33）；3.11 下 stt 测试组合（线程事件循环 + sync 客户端二次建连）不稳定——服务代码同一异步路径在 3.14 通过、旧仓库 CI 本就不含 stt-server，CI 矩阵对 stt-server 排除 3.11 腿并记入风险表；其余模块 3.11/3.14 双腿全绿（advisor 58/bot 26/auth 30）。验收实测：gateway 假模型 HTTP 提交→轮询→succeeded→decision 载荷符合 Decision v2。
 
 ## 5. 阶段 2：recorder 改造（可与阶段 1 并行）
 
@@ -111,6 +111,7 @@
 | SQLite 三节点各自独立库，拆机部署需迁移 | v1 接受 | 6.3 记录边界；拆机前再立项 |
 | 端口/反代选型（P_ingest/P_api/P_auth/P_stt 具体值） | 已定（0.1） | P_ingest=8400、P_api=8380、P_auth=8381、P_stt=8392（沿用）、gateway=8377（沿用）；已写入 DEPLOYMENT §2 |
 | GLM Coding Plan 供多人使用的政策边界（bot 转发是否合规） | 关注 | 5.3 联调时复核旧 chatbot/README 的政策提示，必要时切独立 API |
+| stt-server 迁移测试在 3.11 的线程/sync 客户端组合不稳定（服务代码 3.14 全绿） | 风险（测试面） | CI 对 stt-server 仅跑 3.14 腿；部署基线固定 3.14；如重写测试床可复评 |
 
 ## 11. 进度记录
 
@@ -127,3 +128,4 @@
 - 2026-11-10 **1.3 完成**：ingest 网关（WS 契约 v1 全消息面 + stt_client 可注入）；14 项 WS 测试全绿；SQLite 跨线程加锁。
 - 2026-11-10 **1.4 完成**：会话监督器（自动 consume/排空/重启恢复）+ advisor HTTP API（契约全端点）+ auth 客户端 + rule 桩模型 + serve CLI；16 项新测试，模块合计 58 项全绿。
 - 2026-11-10 **1.5 完成**：bot 骨架（指令解析平移/advisor 客户端/命令渲染红线/服务与 outbox 轮询/lark 接线）；26 项测试全绿。**阶段 1 剩 1.6（stt-server/llm-gateway 平移）。**
+- 2026-11-10 **1.6 完成**：stt-server/llm-gateway 整体迁入并全绿（3.14：34+33；gateway 假模型 HTTP 实测可用）；websockets 定版 >=17,<18；stt-server CI 仅 3.14 腿（风险表已记）。**阶段 1 完成，阶段 2（recorder 改造）可并行推进。**

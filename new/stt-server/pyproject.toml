@@ -5,9 +5,9 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "stt-server"
 version = "0.1.0"
-description = "Streaming STT service (sherpa-onnx), intranet mode per plan C"
+description = "Streaming STT service (sherpa-onnx) per CONTRACT_STT_STREAM v1"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["websockets>=17,<18", "sherpa-onnx>=1.13.8,<2", "numpy>=2,<3"]
 
 [project.optional-dependencies]
 dev = ["coverage==7.16.2", "pyright==1.1.414", "ruff==0.17.0"]
@@ -34,4 +34,4 @@ branch = true
 source = ["stt_server"]
 
 [tool.coverage.report]
-excludeAlso = ["if __name__ == .__main__.:", "if TYPE_CHECKING:", '\.\.\.']
+exclude_also = ["if __name__ == .__main__.:", "if TYPE_CHECKING:", '\\.\\.\\.']
