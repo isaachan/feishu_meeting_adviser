@@ -77,7 +77,7 @@
 - [x] **3.2 S1 主链路。** 假小A 发"入会"→ 校验（桩日历可控组织者/时间窗）→ 建会+流令牌 → bot 下发命令 → 假粘贴执行 recorder（fake 音频源，沿用旧 fake 台词回放思路）→ ingest → STT（真 sherpa 或桩）→ 字幕落库。**验收：**四种拒绝路径各有用例；命令文本断言不含用户凭据。**完成（2026-11-10）：**`test_m1_s1.py` e2e：无凭据→授权链接（red line：命令文本不含 stub/user token）→假 OAuth→重发入会→建会+令牌→raw WS 推 12 帧→ack/stream_end→桩 STT final→字幕落库（pending_model_inputs≥1、材料 present、源 drained）；含密码链接入会+重复入会幂等。四种拒绝路径用例已在 advisor/bot 模块单测逐条覆盖（test_api 四拒绝码 + bot 话术映射），e2e 补了 authorization_required 真链路。实现期修复：auth 客户端 404 not_authorized 误归类为不可达（应触发授权链接）。三连跑全绿。
 - [x] **3.3 S2 决策与通知。** 假模型产生决策 → outbox `local`+`im` 行 → bot 拉取发送（假 IM）→ 小A 收到；`结束会议` 排空至 ended。**验收：**e2e 断言决策幂等（重跑不重复）；ended 后迟到结果不应用。**完成（2026-11-10）：**`test_m1_s2.py` e2e：字幕→监督器任务→gateway 假模型→决策→outbox 双行→bot 轮询→小A 收到"网关合成回答"且 2s 内无重复投递（幂等）；`结束会议`→draining→自动 ended；ended 后新 ingest 连接被拒（session_ended）；`状态` 指令列会话。实现期修复：draining 时无 stream_end 的 live 源不会终态化——supervisor 增加"已断开 live 源标记 lost"（STATE_MACHINES abandoned 语义落地）。两连跑全绿。
 - [x] **3.4 可靠性用例。** recorder 断线重连重传、advisor 重启恢复监督、bot 重启后 outbox 续发、重复事件去重。**验收：**四类用例全绿并留证据。**完成（2026-11-10）：**`test_m1_s4.py` 四类 e2e：断线后带重叠重传（重复帧幂等丢弃，源 drained 游标 12）；advisor 进程重启（新端口）后监督恢复、续流、回答送达；bot 轮询器停摆期 pending 积压、重启后积压送达；同 message_id 重复事件仅一次回复。实现期修复两处真实缺陷：①重启后旧 DB 租约未过期导致恢复循环被拒（lease busy）——supervisor 启动恢复时清租约（单机 v1 假设）；②测试床 FakeStt 文本表耗尽。两连跑全绿。
-- [ ] **3.5 时延测量。** 假链路各段计时（说完→字幕→决策→IM）。**验收：**给出分段时延表（真实预算待 M3 后修订）。
+- [x] **3.5 时延测量。** 假链路各段计时（说完→字幕→决策→IM）。**验收：**给出分段时延表（真实预算待 M3 后修订）。**完成（2026-11-10）：**`test_m1_s5_latency.py`：说完→字幕落库 0.12s / 字幕→决策 pending 0.5s（监督器 poll 0.5s 占大头）/ 决策→IM 送达 0.1s / 端到端 0.72s（100ms 轮询粒度，假链路基线；真实预算待 6.4）。integrations 全量 12 项全绿。**M1（S1+S2 假链路端到端）达成。**
 
 ## 7. 阶段 4：M2 —— S3 订阅场景（全桩）
 
@@ -131,3 +131,4 @@
 - 2026-11-10 **1.6 完成**：stt-server/llm-gateway 整体迁入并全绿（3.14：34+33；gateway 假模型 HTTP 实测可用）；websockets 定版 >=17,<18；stt-server CI 仅 3.14 腿（风险表已记）。**阶段 1 完成，阶段 2（recorder 改造）可并行推进。**
 - 2026-11-10 **2.1–2.4 完成**：recorder 改造全部落地——audio 层逐字平移（11 测试）、WS uplink 客户端（9 测试：重连/重传/退出码）、CLI real/replay（6 契约测试）、whl 打包+README+干净 venv 验收；模块合计 26 项全绿。**阶段 2 完成。下一步：阶段 3（M1 假链路集成）。**
 - 2026-11-10 **3.1–3.3 完成**：集成测试床（进程级三节点 + 假 OAuth/IM/STT）、S1 主链路 e2e（授权链接→建会→推流→字幕落库，红线断言）、S2 决策通知 e2e（回答送达/幂等/排空/ended 拒绝）；修复 auth 404 映射与 draining 源终态化两处真实缺陷。
+- 2026-11-10 **3.4–3.5 完成，M1 达成**：四类可靠性 e2e 全绿（修复重启租约残留缺陷）；假链路时延表：0.12/0.5/0.1s，端到端 0.72s。integrations 12 项全绿。**下一步：阶段 4（M2 订阅场景）。**
