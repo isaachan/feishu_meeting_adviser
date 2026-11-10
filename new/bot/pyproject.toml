@@ -7,7 +7,7 @@ name = "bot"
 version = "0.1.0"
 description = "Feishu IM control/notify node for the meeting adviser"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["lark-oapi>=1.4,<2"]
 
 [project.optional-dependencies]
 dev = ["coverage==7.16.2", "pyright==1.1.414", "ruff==0.17.0"]
@@ -26,6 +26,7 @@ select = ["E9", "F63", "F7", "F82"]
 
 [tool.pyright]
 include = ["src/bot"]
+exclude = ["src/bot/lark_bot.py"]
 pythonVersion = "3.11"
 typeCheckingMode = "basic"
 
