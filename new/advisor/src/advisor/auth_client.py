@@ -41,9 +41,10 @@ class HttpAuthClient:
             except ValueError:
                 pass
             code = payload.get('error', {}).get('code')
-            if code == 'reauthorization_required':
+            if code == 'reauthorization_required' or exc.code == 404:
+                # not_authorized / reauthorization_required both mean: send a link
                 raise AuthorizationRequired(self.authorize_url(open_id)) from None
-            if exc.code in (404, 503, 400):
+            if exc.code in (503, 400):
                 raise AuthUnavailable(code or exc.code) from None
             raise AuthUnavailable('internal') from None
         except (error.URLError, OSError, ValueError) as exc:

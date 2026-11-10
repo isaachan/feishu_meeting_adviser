@@ -74,7 +74,7 @@
 ## 6. 阶段 3：M1 —— S1/S2 端到端（全桩）
 
 - [x] **3.1 集成测试床。** `new/integrations/`：进程级拉起 advisor/bot/auth/stt-server/llm-gateway（假模型后端）；假飞书 IM 总线（模拟小A/小B 会话、事件重放）；假 OAuth（跳过浏览器直接发码）。**验收：**一键拉起/清场脚本。**完成（2026-11-10）：**`test_bed.py`（TestBed：进程级 auth --stub（StubTransport：code=open_id 换 stub token）+ llm-gateway 真 serve（fake backend）+ advisor 真 serve（--calendar-stub --remote-backend fake，三个 healthz 就绪门）+ FakeSttServer（契约 v2 形态桩，每 3 帧产一条 final）+ 进程内 BotService 挂 FakeImBus；ephemeral 端口、SIGTERM 有界清场、日志落临时目录）。`test_bed_up.py` 2 项全绿（一键拉起/healthz/gateway 假模型可达 + 假 OAuth 全流程取到 stub token）。
-- [ ] **3.2 S1 主链路。** 假小A 发"入会"→ 校验（桩日历可控组织者/时间窗）→ 建会+流令牌 → bot 下发命令 → 假粘贴执行 recorder（fake 音频源，沿用旧 fake 台词回放思路）→ ingest → STT（真 sherpa 或桩）→ 字幕落库。**验收：**四种拒绝路径各有用例；命令文本断言不含用户凭据。
+- [x] **3.2 S1 主链路。** 假小A 发"入会"→ 校验（桩日历可控组织者/时间窗）→ 建会+流令牌 → bot 下发命令 → 假粘贴执行 recorder（fake 音频源，沿用旧 fake 台词回放思路）→ ingest → STT（真 sherpa 或桩）→ 字幕落库。**验收：**四种拒绝路径各有用例；命令文本断言不含用户凭据。**完成（2026-11-10）：**`test_m1_s1.py` e2e：无凭据→授权链接（red line：命令文本不含 stub/user token）→假 OAuth→重发入会→建会+令牌→raw WS 推 12 帧→ack/stream_end→桩 STT final→字幕落库（pending_model_inputs≥1、材料 present、源 drained）；含密码链接入会+重复入会幂等。四种拒绝路径用例已在 advisor/bot 模块单测逐条覆盖（test_api 四拒绝码 + bot 话术映射），e2e 补了 authorization_required 真链路。实现期修复：auth 客户端 404 not_authorized 误归类为不可达（应触发授权链接）。三连跑全绿。
 - [ ] **3.3 S2 决策与通知。** 假模型产生决策 → outbox `local`+`im` 行 → bot 拉取发送（假 IM）→ 小A 收到；`结束会议` 排空至 ended。**验收：**e2e 断言决策幂等（重跑不重复）；ended 后迟到结果不应用。
 - [ ] **3.4 可靠性用例。** recorder 断线重连重传、advisor 重启恢复监督、bot 重启后 outbox 续发、重复事件去重。**验收：**四类用例全绿并留证据。
 - [ ] **3.5 时延测量。** 假链路各段计时（说完→字幕→决策→IM）。**验收：**给出分段时延表（真实预算待 M3 后修订）。
