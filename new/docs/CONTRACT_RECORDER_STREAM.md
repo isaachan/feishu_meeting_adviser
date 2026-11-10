@@ -202,3 +202,51 @@ S< {"type":"error","code":"session_ended","message":"session already ended"}
 ## 7. 版本
 
 `protocol=1`。不兼容变更递增版本号，并同时更新 recorder / advisor 两侧实现、测试与 `new/integrations/` 用例后方可切换。
+
+## 附录 A · recorder 启动命令格式（阶段 0.5 冻结）
+
+bot 下发给小A 的命令由 advisor 响应中的 `recorder_command_args`（CONTRACT_ADVISOR_API §2）按以下模板渲染；小A 复制整块到终端粘贴执行。
+
+### A.1 模板
+
+```sh
+recorder real --session <session_id> --event '<calendar_id>/<event_id>' \
+  --url ws://<host>:8400/ingest --token <stream_token> [--mic] [--mic-speaker <标签>] [--duration <秒>]
+```
+
+`--mic` 仅在组织者明确选择开启麦克风时由 bot 追加；`--duration` 可选（按时长干净停止，写 `stream_end`）。
+
+### A.2 参数表与校验规则
+
+| 参数 | 必填 | 格式/字符集 | 说明 |
+|---|---|---|---|
+| `--session` | 是 | `[A-Za-z0-9-]{6,64}`，云端分配 | 会话 id（advisor 命名空间，**无** `local:` 前缀） |
+| `--event` | 是 | `<cal_id>/<event_id>`，各 `[A-Za-z0-9_-]{1,128}` | 建会时绑定的日历事件，与 ingest 校验一致（`bad_binding`） |
+| `--url` | 是 | `ws://<host>:8400/ingest` | ingest 端点；v1 明文 ws |
+| `--token` | 是 | `[A-Za-z0-9_-]{16,128}` | 流令牌，仅绑定本会话，短期 |
+| `--mic` | 否 | 开关 | 显式开启本机麦克风；默认不采集（隐私优先） |
+| `--mic-speaker` | 否 | 字符串，默认 `本机` | 麦克风字幕的说话人标签（非组合开关） |
+| `--duration` | 否 | 正整数（秒） | 到时干净停止（发 `stream_end`）；缺省运行至 Ctrl-C |
+
+recorder 启动时逐项校验；任一不合法 → 打印原因并以退出码 2 退出，不建连。
+
+### A.3 bot 渲染与转义规则
+
+- 各参数值先按 A.2 字符集断言，再以**单引号包裹**注入模板；字符集已排除单引号/反斜杠/空白，无需嵌套转义。断言失败 = 渲染 bug，拒绝下发。
+- 反斜杠续行仅为可读性；粘贴执行等价单行。
+- 命令面向 POSIX sh（macOS 先行）；Windows 分发形式后续增强。
+
+### A.4 红线与验收用例（固化）
+
+- **user_access_token 及任何用户 OAuth 凭据禁止出现在命令文本**：bot 渲染白名单仅 A.2 参数（来源为 advisor `recorder_command_args`），实现不得引入其他来源。
+- 验收用例（进 `new/integrations/`）：断言生成的命令文本仅由白名单参数构成，且不包含 advisor 侧任何已知 token 值。
+
+### A.5 退出码（与 §2.5/阶段 2 任务 2.2 对应）
+
+| 码 | 含义 |
+|---|---|
+| 0 | 干净停止（`stream_end` 已确认） |
+| 2 | 参数/鉴权非法（`bad_token`/`bad_binding`/参数校验失败） |
+| 3 | 连接不可恢复（`session_ended`/`stale_sequence` 后未续/重试耗尽） |
+| 130 | Ctrl-C 中断（**不伪造** `stream_end`，缓冲保留待重连） |
+
