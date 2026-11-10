@@ -69,7 +69,7 @@
 - [x] **2.1 剥离与保留。** 保留 audio/ 采集、MuteGate 手动开关、整场本地音频留存、`--mic` 默认关；删除 spool writer、本地 OAuth、STT 客户端（remote-stream/sherpa/zhipu 全下线）。**验收：**采集层原有单测通过；无对旧 spool/oauth 模块的引用。**完成（2026-11-10）：**`audio/`（frames/sources/sck_capture+swift/session）逐字平移（MicSource 手动开关默认关、暂停=显式 gap 事件、CaptureSession 整场 wav 留存+订阅扇出、SCK helper 包数据随附）；`test_audio_session.py` 迁入改包名，11 项全绿；新模块从未引入 spool/oauth/stt（无需删除项）。
 - [x] **2.2 WS 推流客户端。** 按契约 0.2 实现：建连出示流令牌、双路音频帧上行、断线本地缓冲与重传窗口、`stream_end` 干净收尾、Ctrl-C 不伪造 end；连接失败显式退出码。**验收：**注入式假服务端覆盖重连/重传/令牌过期三场景单测。**完成（2026-11-10）：**`uplink.py`（每源一连接，sync 客户端 proxy=None；wire 序列=采集帧序，跨重连稳定支撑幂等去重；未 ack 帧入有界 deque 重传窗，溢出显式计数；gap 事件转发；重连退避 0.5→10s 上限 8 次；错误分类→退出码 2/3/130；stale_sequence 触发新纪元重置；float32→int16 转换）。9 项注入式假服务端测试全绿（happy/干净收尾/gap/Ctrl-C 无 stream_end/断线重连只重传未 ack/bad_token 退出码 2/stale 重置续传/重试耗尽退出码 3/转换钳位/CaptureSession 集成喂流）；模块合计 20 项；ruff/pyright 通过。
 - [x] **2.3 启动命令与诊断。** 参数解析、事件绑定回显、上行速率/丢帧计数本地打印。**验收：**命令行契约测试。**完成（2026-11-10）：**`recorder real|replay` CLI（附录 A 参数校验：session/token 字符集、event 斜杠形、ws:// ingest 形、duration 正数；real=SCK loopback+可选 mic，replay=假台词同链路回放；信号处理：Ctrl-C=130 不伪造 end、duration=干净收尾；stop 前排空等待避免 writer 线程 50ms 轮询窗口丢尾帧；每 5s 打印上行 stats 与退出码行）。6 项 CLI 契约测试全绿（参数合法/非法矩阵、红线"无任何凭据类参数"、replay 端到端退出码 0、bad_token 退出码 2、参数非法退出码 2）；模块合计 26 项；ruff/pyright 通过。
-- [ ] **2.4 打包与分发。** recorder 生成可分发安装形态（whl/zipapp + 依赖清单或安装脚本）与安装文档（Mac Gatekeeper 绕过指引，Windows 预留）；版本号与升级说明。**验收：**一台干净 Mac 按文档完成安装并跑通 `--help` 与 fake 采集。
+- [x] **2.4 打包与分发。** recorder 生成可分发安装形态（whl/zipapp + 依赖清单或安装脚本）与安装文档（Mac Gatekeeper 绕过指引，Windows 预留）；版本号与升级说明。**验收：**一台干净 Mac 按文档完成安装并跑通 `--help` 与 fake 采集。**完成（2026-11-10）：**`python -m build --wheel` 产物验证（含 SCK swift helper 包数据）；README 安装文档（venv+whl、swiftc/PortAudio 前置、Gatekeeper 与麦克风授权引导、升级说明）；模拟"干净 Mac"验收：全新 3.11 venv 从 whl 安装 → `--version`/`--help` OK → replay 假采集连真实假服务端全链路退出码 0、5 帧留存（真机干净 Mac 的最终取证随 6.4 一并做）。
 
 ## 6. 阶段 3：M1 —— S1/S2 端到端（全桩）
 
@@ -129,3 +129,4 @@
 - 2026-11-10 **1.4 完成**：会话监督器（自动 consume/排空/重启恢复）+ advisor HTTP API（契约全端点）+ auth 客户端 + rule 桩模型 + serve CLI；16 项新测试，模块合计 58 项全绿。
 - 2026-11-10 **1.5 完成**：bot 骨架（指令解析平移/advisor 客户端/命令渲染红线/服务与 outbox 轮询/lark 接线）；26 项测试全绿。**阶段 1 剩 1.6（stt-server/llm-gateway 平移）。**
 - 2026-11-10 **1.6 完成**：stt-server/llm-gateway 整体迁入并全绿（3.14：34+33；gateway 假模型 HTTP 实测可用）；websockets 定版 >=17,<18；stt-server CI 仅 3.14 腿（风险表已记）。**阶段 1 完成，阶段 2（recorder 改造）可并行推进。**
+- 2026-11-10 **2.1–2.4 完成**：recorder 改造全部落地——audio 层逐字平移（11 测试）、WS uplink 客户端（9 测试：重连/重传/退出码）、CLI real/replay（6 契约测试）、whl 打包+README+干净 venv 验收；模块合计 26 项全绿。**阶段 2 完成。下一步：阶段 3（M1 假链路集成）。**
