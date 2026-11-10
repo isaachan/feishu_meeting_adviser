@@ -14,7 +14,7 @@ FIXED_NOW = 1_000_000
 
 
 def _event(organizer='u_1', *, start=FIXED_NOW - 600, end=FIXED_NOW + 600):
-    return {'organizer': {'user_id': organizer},
+    return {'event_organizer': {'display_name': '组织者', 'user_id': organizer},
             'start_time': {'timestamp': str(start)},
             'end_time': {'timestamp': str(end)}}
 
@@ -83,6 +83,12 @@ class ValidatorTests(unittest.TestCase):
         validated = self.validate()
         self.assertEqual(validated.user_id, 'u_1')
 
+    def test_legacy_organizer_fields_still_accepted(self):
+        self.transport.event = {'organizer': {'user_id': 'u_1'},
+                                'start_time': {'timestamp': str(FIXED_NOW - 60)},
+                                'end_time': {'timestamp': str(FIXED_NOW + 60)}}
+        self.validate()
+
     def test_rejects_all_day_event_without_timestamps(self):
         self.transport.event = {'organizer': {'user_id': 'u_1'},
                                 'start_time': {'date': '2026-11-10'},
@@ -130,11 +136,16 @@ class ValidatorTests(unittest.TestCase):
 
 class EventParsingTests(unittest.TestCase):
     def test_organizer_variants(self):
+        self.assertEqual(_organizer_id({'event_organizer': {'user_id': 'ou1'}}),
+                         'ou1')
+        self.assertEqual(_organizer_id({'event_organizer': {
+            'display_name': '张三', 'user_id': 'ou1'}}), 'ou1')
         self.assertEqual(_organizer_id({'organizer': {'user_id': 'u1'}}), 'u1')
         self.assertEqual(_organizer_id({'organizer': {'open_id': 'ou1'}}), 'ou1')
         self.assertEqual(_organizer_id({'creator': {'user_id': 'u1'}}), 'u1')
         self.assertIsNone(_organizer_id({}))
-        self.assertIsNone(_organizer_id({'organizer': {'display_name': '张三'}}))
+        self.assertIsNone(_organizer_id(
+            {'event_organizer': {'display_name': '张三'}}))
 
     def test_timestamp_variants(self):
         self.assertEqual(_event_timestamp({'start_time': {'timestamp': '100'}},
@@ -224,7 +235,8 @@ class TransportTests(unittest.TestCase):
         transport, opener = self.make_transport(
             lambda req: _reply(200, {'code': 0, 'data': {'event': _event()}}))
         event = transport.calendar_event('token-1', 'cal a', 'evt/b')
-        self.assertEqual(event['organizer'], {'user_id': 'u_1'})
+        self.assertEqual(event['event_organizer'], {'display_name': '组织者',
+                                                    'user_id': 'u_1'})
         self.assertEqual(opener.requests[0].full_url,
                          'https://feishu.example/open-apis/calendar/v4/'
                          'calendars/cal%20a/events/evt%2Fb')

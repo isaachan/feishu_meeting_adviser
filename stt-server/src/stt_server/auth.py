@@ -110,14 +110,12 @@ class FeishuAuthTransport:
         code = result.get('code') if result else None
         if code == 0:
             data = result.get('data') if isinstance(result, dict) else None
-            candidates = data.get('user_id') if isinstance(data, dict) else None
-            identities = []
-            if isinstance(candidates, str) and _ID_TEXT.fullmatch(candidates):
-                identities.append(candidates)
+            identities: list[str] = []
             if isinstance(data, dict):
-                open_id = data.get('open_id')
-                if isinstance(open_id, str) and _ID_TEXT.fullmatch(open_id):
-                    identities.append(open_id)
+                for key in ('user_id', 'open_id', 'union_id'):
+                    value = data.get(key)
+                    if isinstance(value, str) and _ID_TEXT.fullmatch(value):
+                        identities.append(value)
             if identities:
                 return identities[0], frozenset(identities)
             raise AuthError('auth_unavailable', 'feishu user info had no usable identity')
@@ -146,12 +144,15 @@ class FeishuAuthTransport:
 
 
 def _organizer_id(event: dict) -> str | None:
-    for field in ('organizer', 'creator'):
+    # Real shapes (2026-11-10 probe): events carry ``event_organizer`` whose
+    # ``user_id`` key holds an open_id-domain value; ``organizer``/``creator``
+    # remain as tolerant fallbacks.
+    for field in ('event_organizer', 'organizer', 'creator'):
         value = event.get(field)
         if isinstance(value, str) and _ID_TEXT.fullmatch(value):
             return value
         if isinstance(value, dict):
-            for key in ('user_id', 'open_id'):
+            for key in ('user_id', 'open_id', 'union_id'):
                 candidate = value.get(key)
                 if isinstance(candidate, str) and _ID_TEXT.fullmatch(candidate):
                     return candidate

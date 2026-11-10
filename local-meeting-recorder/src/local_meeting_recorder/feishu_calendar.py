@@ -41,12 +41,15 @@ class _TokenRejected(Exception):
 
 
 def _organizer_id(event: dict) -> str | None:
-    for field in ('organizer', 'creator'):
+    # Real shapes (2026-11-10 probe): events list returns ``event_organizer``
+    # whose ``user_id`` key carries an open_id-domain value; ``organizer`` /
+    # ``creator`` are kept as tolerant fallbacks.
+    for field in ('event_organizer', 'organizer', 'creator'):
         value = event.get(field)
         if isinstance(value, str) and _ID_TEXT.fullmatch(value):
             return value
         if isinstance(value, dict):
-            for key in ('user_id', 'open_id'):
+            for key in ('user_id', 'open_id', 'union_id'):
                 candidate = value.get(key)
                 if isinstance(candidate, str) and _ID_TEXT.fullmatch(candidate):
                     return candidate
@@ -118,10 +121,12 @@ class MeetingCalendar:
             return self._request(path, query, token)
 
     def user_identities(self) -> frozenset[str]:
+        # user_id requires an extra permission most apps lack; open_id and
+        # union_id are always present (2026-11-10 probe).
         data = self._get(USER_INFO_PATH).get('data')
         identities = []
         if isinstance(data, dict):
-            for key in ('user_id', 'open_id'):
+            for key in ('user_id', 'open_id', 'union_id'):
                 value = data.get(key)
                 if isinstance(value, str) and _ID_TEXT.fullmatch(value):
                     identities.append(value)
@@ -170,6 +175,8 @@ class MeetingCalendar:
         end = now + LIST_RANGE_SECONDS
         meetings = []
         for item in self._events(calendar_id, start, end):
+            if item.get('status') == 'cancelled':
+                continue
             event_start = _event_timestamp(item, 'start_time')
             event_end = _event_timestamp(item, 'end_time')
             if event_start is None or event_end is None or event_end < event_start:

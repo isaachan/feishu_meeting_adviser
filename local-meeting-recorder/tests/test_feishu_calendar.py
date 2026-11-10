@@ -96,8 +96,8 @@ class MeetingCalendarTests(unittest.TestCase):
 
     def route_defaults(self, *, events_token='private-access'):
         self.opener.add('/open-apis/authen/v1/user_info', events_token,
-                        {'code': 0, 'data': {'user_id': 'u_1',
-                                             'open_id': 'ou_1'}})
+                        {'code': 0, 'data': {'open_id': 'ou_1',
+                                             'union_id': 'on_1'}})
         self.opener.add('/open-apis/calendar/v4/calendars', events_token,
                         {'code': 0, 'data': {'calendar_list': [
                             {'calendar_id': 'cal_shared', 'type': 'shared'},
@@ -112,12 +112,20 @@ class MeetingCalendarTests(unittest.TestCase):
         self.opener.add('/open-apis/calendar/v4/calendars/cal_primary/events',
                         'private-access', self.events_reply([
                             {'event_id': 'evt_own', 'summary': '我的周会',
-                             'organizer': {'user_id': 'u_1'},
+                             'status': 'confirmed',
+                             'event_organizer': {'display_name': '我',
+                                                 'user_id': 'ou_1'},
                              'start_time': {'timestamp': str(FIXED_NOW - 600)},
                              'end_time': {'timestamp': str(FIXED_NOW + 600)},
                              'vchat': {'meeting_url': 'https://vc.feishu.cn/j/123456789'}},
                             {'event_id': 'cal_other/evt_other', 'summary': '别人的会',
-                             'organizer': {'open_id': 'ou_9'},
+                             'status': 'confirmed',
+                             'event_organizer': {'user_id': 'ou_9'},
+                             'start_time': {'timestamp': str(FIXED_NOW - 60)},
+                             'end_time': {'timestamp': str(FIXED_NOW + 60)}},
+                            {'event_id': 'evt_cancelled', 'summary': '已取消的会',
+                             'status': 'cancelled',
+                             'event_organizer': {'user_id': 'ou_1'},
                              'start_time': {'timestamp': str(FIXED_NOW - 60)},
                              'end_time': {'timestamp': str(FIXED_NOW + 60)}},
                             {'event_id': 'evt_all_day', 'summary': '全天事件',
@@ -144,7 +152,8 @@ class MeetingCalendarTests(unittest.TestCase):
         self.opener.add(events_path, 'next-private-access',
                         self.events_reply([
                             {'event_id': 'evt_own', 'summary': '重试后的会',
-                             'organizer': {'user_id': 'u_1'},
+                             'status': 'confirmed',
+                             'event_organizer': {'user_id': 'ou_1'},
                              'start_time': {'timestamp': str(FIXED_NOW - 10)},
                              'end_time': {'timestamp': str(FIXED_NOW + 10)}},
                         ]))
