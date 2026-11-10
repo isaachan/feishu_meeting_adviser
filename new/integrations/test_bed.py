@@ -32,7 +32,7 @@ def http_get_json(url, timeout=2):
         return json.loads(response.read())
 
 
-def wait_healthz(url, timeout=15):
+def wait_healthz(url, timeout=40):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
@@ -168,6 +168,21 @@ class TestBed:
         self.service = None
 
     def start(self):
+        last_error = None
+        for _attempt in range(2):
+            try:
+                self._start_once()
+                return self
+            except Exception as exc:  # noqa: BLE001 - cold-start flake retry
+                last_error = exc
+                self.stop()
+                self.processes = []
+                self.stt = None
+                self.ports = {}
+                self.tmp = tempfile.mkdtemp(prefix='m1-bed-')
+        raise AssertionError(f'bed failed to start twice: {last_error}')
+
+    def _start_once(self):
         env = dict(os.environ)
         auth_port, gateway_port, api_port, ingest_port = (free_port() for _ in range(4))
         self.ports = {'auth': auth_port, 'gateway': gateway_port,

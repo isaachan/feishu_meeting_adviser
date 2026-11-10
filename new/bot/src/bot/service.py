@@ -107,6 +107,8 @@ class BotService:
         if exc.code == 'not_found':
             return '未找到该会议或会议已结束'
         if exc.code == 'invalid_state':
+            if 'revoked' in (exc.message or ''):
+                return '该订阅已被组织者撤销'
             return exc.message or '当前状态不允许该操作'
         if exc.code == 'not_owner':
             return '只有组织者可以执行该操作'

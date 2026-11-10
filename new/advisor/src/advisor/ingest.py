@@ -233,9 +233,11 @@ class _Connection:
         self.claimed = False
         raise IngestError(code, message)
 
-    def _on_final(self, text: str, start_offset: int, end_offset: int, tag: str):
+    def _on_final(self, text: str, start_offset: int, end_offset: int, _stt_tag: str):
+        # Dedup identity uses THIS connection's epoch tag: STT offsets restart
+        # at zero per session, so cross-connection offsets must never collide.
         now = self.server.clock()
-        sentence_key = f'{self.source}:{tag}:{start_offset}-{end_offset}'
+        sentence_key = f'{self.source}:{self.tag}:{start_offset}-{end_offset}'
         caption = Caption(
             meeting_id=self.session_id, sentence_key=sentence_key, text=text,
             received_at=_iso(now), event_time=int(now * 1000),
@@ -342,8 +344,12 @@ def serve_async(server: IngestServer):
 
 
 def start_ingest_thread(server: IngestServer):
-    """Run the ingest server on a dedicated event-loop thread; returns a stop()."""
+    """Run the ingest server on a dedicated event-loop thread; returns a stop().
+
+    Raises when the listener is not serving within 15s (hard failure: the API
+    healthz alone must never advertise a node whose ingest path is dead)."""
     started = threading.Event()
+    failure = []
     loop_holder = {}
 
     def runner():
@@ -356,13 +362,17 @@ def start_ingest_thread(server: IngestServer):
                 await asyncio.Event().wait()  # run until stopped
         try:
             loop.run_until_complete(main())
-        except Exception:
+        except Exception as exc:
+            failure.append(exc)
             if not started.is_set():
                 started.set()
 
     thread = threading.Thread(target=runner, name='ingest-ws', daemon=True)
     thread.start()
-    started.wait(timeout=5)
+    if not started.wait(timeout=15):
+        raise RuntimeError('ingest server failed to start within 5s')
+    if failure:
+        raise RuntimeError(f'ingest server failed: {failure[0]!r}')
 
     def stop():
         loop = loop_holder.get('loop')
