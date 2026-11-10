@@ -54,6 +54,27 @@ python3 -m venv .venv
 - `--duration N` 到期后干净停止并写 `stream_end`；Ctrl-C 中断不写（语义与 fake 一致）。
 - 首次运行会用 `swiftc` 编译采集助手（缓存于临时目录）；打包版本通过 `LOCAL_MEETING_RECORDER_SCK_BIN` 使用预编译二进制。
 
+## 飞书组织者授权与会议选择（契约 v2）
+
+stt-server 以 `--auth feishu` 运行时，只有所选日历会议**组织者**的 user_access_token 能建立识别会话（契约见 [流式 STT 契约](../docs/CONTRACT_STT_STREAM.md) v2）。CLI 全流程：
+
+```bash
+# 1) 凭据：环境变量或模块 data 目录下的 config.json（{"app_id":…,"app_secret":…}，不进 Git）
+export LMR_FEISHU_APP_ID=cli_xxx LMR_FEISHU_APP_SECRET=xxx
+# 2) 用户授权（浏览器本地回调，redirect URI 需与飞书应用一致，默认 http://127.0.0.1:8765/oauth/callback）
+.venv/bin/recorder auth login
+.venv/bin/recorder auth status
+# 3) 列出当前时间窗（±30 分钟）内可录制的会议；仅 [组织者] 条目会被服务端接受
+.venv/bin/recorder meetings
+# 4) 绑定会议开始采集：--event 携带上面列出的 event_id
+.venv/bin/recorder real --session <session_id> --stt-url ws://host:8392 \
+  --event '<calendar_id>/<event_id>'
+```
+
+- `--event` 会随流写入 spool `meta.json`（契约 §6 会议绑定），并在 remote-stream 模式作为 `start.auth` 送 stt-server 核验；`auth_expired` 由客户端静默刷新重连，用户无感。
+- 即时会议（无日历事件）不支持；组织者/时间窗的最终判定在服务端（fail-closed），本列表只是客户端提示。
+- 注意：组织者字段、复合 event_id 的真实 API 形状尚待一次真实账号核验（当前全部为 stub 测试）；`auth login` 需要飞书应用开通日历读取权限与上述 redirect URI。
+
 ## 开发与测试
 
 ```bash

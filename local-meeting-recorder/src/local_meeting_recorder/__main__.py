@@ -5,6 +5,7 @@ from pathlib import Path
 import signal
 import sys
 import threading
+import time
 
 from . import __version__
 from .real import RealRecorder
@@ -50,11 +51,45 @@ def parser():
                       help='bound Feishu calendar event id (<calendar_id>/<event_id>) '
                            'from the organizer-authorized meeting selection; written '
                            'as stream metadata and sent as STT auth when configured')
+    real.add_argument('--oauth-dir', type=Path,
+                      help='recorder-private data dir with config.json/oauth tokens '
+                           '(default: module data/)')
+    auth = commands.add_parser(
+        'auth', help='Feishu user OAuth for meeting selection')
+    auth.add_argument('--oauth-dir', type=Path,
+                      help='recorder-private data dir (default: module data/)')
+    auth_commands = auth.add_subparsers(dest='auth_command')
+    login = auth_commands.add_parser('login', help='authorize via the local browser flow')
+    login.add_argument('--port', type=int, default=8765,
+                       help='local OAuth callback port; must match the redirect URI '
+                            'registered on the Feishu app (default 8765)')
+    login.add_argument('--timeout', type=int, choices=range(30, 1801), default=600,
+                       metavar='30..1800')
+    auth_commands.add_parser('status', help='show local authorization state')
+    auth_commands.add_parser('logout', help='forget local credentials')
+    meetings = commands.add_parser(
+        'meetings', help='list current-window Feishu meetings with organizer flags')
+    meetings.add_argument('--window', type=int, default=1800,
+                          help='slack in seconds at both ends of now (default 1800)')
+    meetings.add_argument('--json', action='store_true', help='print the raw report')
+    meetings.add_argument('--oauth-dir', type=Path,
+                          help='recorder-private data dir (default: module data/)')
     return root
 
 
 def _default_data_root() -> Path:
     return Path(__file__).resolve().parents[2].parent / 'data'
+
+
+def _default_oauth_dir() -> Path:
+    return Path(__file__).resolve().parents[2] / 'data'
+
+
+def _oauth_manager(oauth_dir: Path | None):
+    from .oauth import OAuthManager, load_credentials
+
+    directory = oauth_dir or _default_oauth_dir()
+    return OAuthManager(load_credentials(directory), directory)
 
 
 def _read_script(path: Path) -> str:
@@ -67,6 +102,49 @@ def _read_script(path: Path) -> str:
         return raw.decode('utf-8')
     except UnicodeDecodeError:
         raise ValueError('script must be UTF-8 encoded') from None
+
+
+def _format_meeting_line(index: int, meeting: dict) -> str:
+    role = '组织者' if meeting['is_organizer'] else '参会者'
+    start = time.strftime('%m-%d %H:%M', time.localtime(meeting['start_ts']))
+    end = time.strftime('%H:%M', time.localtime(meeting['end_ts']))
+    online = '' if meeting['online_meeting'] else '（无视频会议）'
+    return (f"{index}. [{role}] {start}-{end} {meeting['summary'] or '（无标题）'}"
+            f"{online}  event_id={meeting['event_id']}")
+
+
+def _auth_command(args) -> int:
+    from .oauth import login as oauth_login
+
+    manager = _oauth_manager(args.oauth_dir)
+    if args.auth_command == 'login':
+        result = oauth_login(manager, port=args.port, timeout=args.timeout,
+                             notify=lambda value: print(value, flush=True))
+    elif args.auth_command == 'status':
+        result = manager.status()
+    elif args.auth_command == 'logout':
+        result = manager.logout()
+    else:
+        print('Usage: recorder auth login|status|logout', file=sys.stderr)
+        return 2
+    print(json.dumps(result, ensure_ascii=False))
+    return 0
+
+
+def _meetings_command(args) -> int:
+    from .feishu_calendar import MeetingCalendar
+
+    report = MeetingCalendar(_oauth_manager(args.oauth_dir)).my_meetings(
+        window_seconds=args.window)
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+    else:
+        print(f"当前时间窗 ±{args.window // 60} 分钟，日历 {report['calendar_id'] or '未找到'}")
+        if not report['meetings']:
+            print('没有重叠的会议。')
+        for index, meeting in enumerate(report['meetings'], start=1):
+            print(_format_meeting_line(index, meeting))
+    return 0
 
 
 def _install_interrupt(stop: threading.Event):
@@ -83,6 +161,10 @@ def main(argv=None):
         parser().print_help()
         return 0
     try:
+        if args.command == 'auth':
+            return _auth_command(args)
+        if args.command == 'meetings':
+            return _meetings_command(args)
         if args.command == 'fake':
             lines = parse_script(_read_script(args.script))
             data_root = args.data_root or _default_data_root()
@@ -96,13 +178,22 @@ def main(argv=None):
                 signal.signal(signal.SIGINT, previous)
         else:
             data_root = args.data_root or _default_data_root()
+            stt_auth = stt_auth_refresh = None
+            if args.event and args.stt == 'remote-stream':
+                from .oauth import stt_auth_provider
+
+                payload, on_expired = stt_auth_provider(
+                    _oauth_manager(args.oauth_dir), args.event)
+                stt_auth, stt_auth_refresh = payload, on_expired
             recorder = RealRecorder(session_id=args.session, data_root=data_root,
                                     mic_enabled=args.mic,
                                     mic_speaker=args.mic_speaker,
                                     stt_mode=args.stt,
                                     stt_model_dir=args.stt_model_dir,
                                     stt_url=args.stt_url,
-                                    calendar_event_id=args.event)
+                                    calendar_event_id=args.event,
+                                    stt_auth=stt_auth,
+                                    stt_auth_refresh=stt_auth_refresh)
             stop = threading.Event()
             previous = _install_interrupt(stop)
             try:
@@ -113,7 +204,21 @@ def main(argv=None):
     except (ValueError, OSError) as exc:
         print('Operation stopped: ' + str(exc), file=sys.stderr)
         return 1
-    print(json.dumps(summary, ensure_ascii=False))
+    except Exception as exc:  # noqa: BLE001 - safe provider messages only
+        from .feishu_calendar import CalendarError
+        from .oauth import OAuthError
+
+        if isinstance(exc, (OAuthError, CalendarError)):
+            if isinstance(exc, OAuthError) and exc.reason == 'oauth_not_authorized':
+                print('Operation stopped: missing Feishu app credentials. '
+                      'Set LMR_FEISHU_APP_ID/LMR_FEISHU_APP_SECRET or create '
+                      'config.json in the recorder data dir.', file=sys.stderr)
+                return 1
+            print('Operation stopped: ' + str(exc), file=sys.stderr)
+            return 1
+        raise
+    if summary is not None:
+        print(json.dumps(summary, ensure_ascii=False))
     return 0
 
 
