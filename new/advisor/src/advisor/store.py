@@ -200,6 +200,13 @@ class SessionStore:
                 return False  # 同会话第二消费者被拒
         return True
 
+    def clear_leases(self):
+        """Startup-only: single-host v1 assumes prior holders are gone."""
+        with self.unit_of_work() as tx:
+            tx.connection.execute(
+                'UPDATE sessions SET lease_owner=NULL, lease_expires_at=NULL '
+                'WHERE lease_owner IS NOT NULL')
+
     def release_lease(self, session_id, owner):
         with self.unit_of_work() as tx:
             tx.connection.execute(

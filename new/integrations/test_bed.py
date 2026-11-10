@@ -49,6 +49,7 @@ class FakeSttServer:
     def __init__(self, texts=None):
         self.texts = texts or ['今天我们讨论预算方案', '第二句话讲进度', '最后一句总结']
         self.finals = []
+        self._utterance = 0
         self.loop = asyncio.new_event_loop()
         self.started = threading.Event()
 
@@ -78,8 +79,9 @@ class FakeSttServer:
                     continue  # gap: nothing to flush in the stub
                 samples = len(raw) // 2
                 fed += 1
-                if fed % 3 == 0 and index[0] < len(self.texts):
-                    text = self.texts[index[0]]
+                if fed % 3 == 0:
+                    text = self.texts[index[0]] if index[0] < len(self.texts) else (
+                        f'第{index[0] + 1}句会议内容')
                     index[0] += 1
                     end = offset + samples
                     self.finals.append({'text': text, 'start_offset': offset, 'end_offset': end})
@@ -101,7 +103,10 @@ class FakeSttServer:
                     await server.wait_closed()
         try:
             self.loop.run_until_complete(main())
-        except Exception:
+        except BaseException as exc:  # noqa: BLE001 - surface bed startup faults
+            import traceback
+            traceback.print_exc(file=sys.stderr)
+            self.start_error = exc
             self.started.set()
 
     def stop(self):
@@ -231,6 +236,46 @@ class TestBed:
                 with open(log.name) as fh:
                     return fh.read()
         return ''
+
+    def restart_advisor(self):
+        """Kill the advisor process and bring it back on fresh ports with the
+        same data directory (supervisor restart-recovery path). Rebuilds the
+        BotService against the new API port, preserving the fake IM bus."""
+        kept = [(name, proc, log) for name, proc, log in self.processes
+                if name != 'advisor']
+        for name, proc, log in self.processes:
+            if name == 'advisor' and proc.poll() is None:
+                proc.send_signal(signal.SIGTERM)
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                log.close()
+        self.processes = kept
+        api_port, ingest_port = free_port(), free_port()
+
+        def spawn():
+            self._spawn([sys.executable, '-m', 'advisor', 'serve',
+                         '--data-dir', os.path.join(self.tmp, 'advisor'),
+                         '--api-port', str(api_port), '--ingest-port', str(ingest_port),
+                         '--ingest-url', f'ws://127.0.0.1:{ingest_port}/ingest',
+                         '--stt-url', self.stt.url,
+                         '--gateway-url',
+                         f'http://127.0.0.1:{self.ports["gateway"]}',
+                         '--auth-url', f'http://127.0.0.1:{self.ports["auth"]}',
+                         '--model', 'remote', '--remote-backend', 'fake',
+                         '--calendar-stub', '--calendar-stub-description', '集成床日历材料'],
+                        dict(os.environ), 'advisor')
+        self.ports['api'], self.ports['ingest'] = api_port, ingest_port
+        spawn()
+        assert wait_healthz(f'http://127.0.0.1:{api_port}/healthz'), 'advisor restart healthz'
+
+        from bot.advisor_client import AdvisorClient
+        from bot.service import BotService
+        self.service.stop_polling()
+        self.service = BotService(AdvisorClient(f'http://127.0.0.1:{api_port}'),
+                                  self.bus, poll_interval=0.1)
+        self.service.start_polling()
 
     # conveniences for tests --------------------------------------------------
 
