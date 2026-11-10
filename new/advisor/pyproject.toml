@@ -7,7 +7,7 @@ name = "advisor"
 version = "0.1.0"
 description = "Cloud session core: ingest gateway, session domain, supervisor"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["websockets>=14"]
 
 [project.optional-dependencies]
 dev = ["coverage==7.16.2", "pyright==1.1.414", "ruff==0.17.0"]

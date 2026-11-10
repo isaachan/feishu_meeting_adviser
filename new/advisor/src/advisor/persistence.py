@@ -347,9 +347,10 @@ class UnitOfWork:
     """One transaction shared by repositories; repositories never commit."""
 
     def __init__(self, connection: sqlite3.Connection, *, capacity_check: Callable[[], None],
-                 fault: FaultHook | None = None):
+                 fault: FaultHook | None = None, lock=None):
         self.connection = connection
         self.capacity_check = capacity_check
+        self._lock = lock
         self._fault = fault or (lambda _stage: None)
         self.jobs = JobRepository(connection, self._fault)
         self.sessions = SessionRepository(connection, self._fault)
@@ -357,19 +358,30 @@ class UnitOfWork:
         self.subscriptions = SubscriptionRepository(connection, self._fault)
 
     def __enter__(self):
-        self.connection.execute('BEGIN IMMEDIATE')
+        if self._lock is not None:
+            self._lock.acquire()
+        try:
+            self.connection.execute('BEGIN IMMEDIATE')
+        except BaseException:
+            if self._lock is not None:
+                self._lock.release()
+            raise
         return self
 
     def __exit__(self, exc_type, exc, traceback):
-        if exc_type is not None:
-            if self.connection.in_transaction:
-                self.connection.execute('ROLLBACK')
-            return False
         try:
-            self.capacity_check()
-            self.connection.execute('COMMIT')
-        except (Exception, KeyboardInterrupt):
-            if self.connection.in_transaction:
-                self.connection.execute('ROLLBACK')
-            raise
-        return False
+            if exc_type is not None:
+                if self.connection.in_transaction:
+                    self.connection.execute('ROLLBACK')
+                return False
+            try:
+                self.capacity_check()
+                self.connection.execute('COMMIT')
+            except (Exception, KeyboardInterrupt):
+                if self.connection.in_transaction:
+                    self.connection.execute('ROLLBACK')
+                raise
+            return False
+        finally:
+            if self._lock is not None:
+                self._lock.release()

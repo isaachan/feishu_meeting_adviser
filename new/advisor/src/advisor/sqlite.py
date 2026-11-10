@@ -60,7 +60,8 @@ class SQLiteDatabase:
             _check_database_file(path, required=True)
             target = 'file:' + quote(str(path.absolute()), safe='/') + '?mode=rw'
             uri = True
-        db = sqlite3.connect(target, uri=uri, isolation_level=None, timeout=5)
+        db = sqlite3.connect(target, uri=uri, isolation_level=None, timeout=5,
+                             check_same_thread=False)
         try:
             db.row_factory = sqlite3.Row
             db.execute('PRAGMA busy_timeout=5000')

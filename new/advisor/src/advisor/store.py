@@ -4,8 +4,10 @@ Facade over persistence.py repositories; ports the legacy AdviserStore surface
 used by the supervisor, with STATE_MACHINES.md semantics (no paused phase,
 revoked terminal, draining/ended reject new subscriptions and late results).
 """
+import functools
 from pathlib import Path
 import secrets
+import threading
 import time
 from uuid import uuid4
 
@@ -45,11 +47,21 @@ def initialize_schema(database: SQLiteDatabase) -> None:
         require_schema(db)
 
 
+def _locked(method):
+    """Serialize store access across threads (ingest loop, supervisor, API)."""
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+    return wrapper
+
+
 class SessionStore:
     def __init__(self, path: Path, *, max_database_bytes=150_000_000,
                  max_payload_bytes=100_000_000):
         self.path = Path(path)
         self.max_payload_bytes = max_payload_bytes
+        self._lock = threading.RLock()
         database = SQLiteDatabase.open_current(self.path, max_database_bytes=max_database_bytes)
         self.db = database.connection
         try:
@@ -73,6 +85,7 @@ class SessionStore:
         if self.payload_bytes() > self.max_payload_bytes:
             raise StorageError('adviser content capacity exceeded')
 
+    @_locked
     def payload_bytes(self):
         return sum(self.db.execute(
             f'SELECT COALESCE(SUM(length(CAST({column} AS BLOB))),0) FROM {table}').fetchone()[0]
@@ -82,7 +95,8 @@ class SessionStore:
                                   ('session_materials', 'body')))
 
     def unit_of_work(self, *, fault=None) -> UnitOfWork:
-        return UnitOfWork(self.db, capacity_check=self._check_capacity, fault=fault)
+        return UnitOfWork(self.db, capacity_check=self._check_capacity, fault=fault,
+                          lock=self._lock)
 
     # -- sessions ---------------------------------------------------------
 
@@ -114,6 +128,7 @@ class SessionStore:
                 (session_id, encode(material), int(moment * 1_000_000_000)))
         return self.session(session_id)
 
+    @_locked
     def session(self, session_id):
         row = self.db.execute('SELECT * FROM sessions WHERE session_id=?', (session_id,)).fetchone()
         if row is None:
@@ -128,11 +143,13 @@ class SessionStore:
             raise StorageError('unknown adviser session')
         return value
 
+    @_locked
     def session_token(self, session_id):
         row = self.db.execute(
             'SELECT stream_token,phase FROM sessions WHERE session_id=?', (session_id,)).fetchone()
         return dict(row) if row else None
 
+    @_locked
     def list_sessions(self, owner_open_id=None):
         query = ("SELECT * FROM sessions WHERE phase IN ('recording','draining')"
                  " ORDER BY started_at DESC")
@@ -158,6 +175,7 @@ class SessionStore:
                 (phase, int(moment * 1_000_000_000) if phase == 'ended' else None, session_id))
         return self.session(session_id)
 
+    @_locked
     def active_by_meeting_no(self, meeting_no):
         """S3 注册表：正被服务中（recording）的会话。"""
         row = self.db.execute(
@@ -197,6 +215,7 @@ class SessionStore:
                 'INSERT OR IGNORE INTO sources(session_id,source,last_seen_ns) VALUES (?,?,?)',
                 (session_id, source, int(moment * 1_000_000_000)))
 
+    @_locked
     def source_row(self, session_id, source):
         row = self.db.execute(
             'SELECT * FROM sources WHERE session_id=? AND source=?', (session_id, source)).fetchone()
@@ -230,6 +249,22 @@ class SessionStore:
                 "UPDATE sources SET state='lost',lost_from=?,lost_to=? "
                 'WHERE session_id=? AND source=?', (lost_from, lost_to, session_id, source))
 
+    def source_reset(self, session_id, source, acked_sequence):
+        """New capture epoch (resume:false after stale): reset cursor, keep live."""
+        with self.unit_of_work() as tx:
+            tx.connection.execute(
+                "UPDATE sources SET state='live',acked_sequence=?,lost_from=NULL,"
+                'lost_to=NULL WHERE session_id=? AND source=?',
+                (acked_sequence, session_id, source))
+
+    def record_source_gap(self, session_id, source, lost_from, lost_to):
+        """Explicit missing range (resume with first_sequence > cursor+1)."""
+        with self.unit_of_work() as tx:
+            tx.connection.execute(
+                "UPDATE sources SET lost_from=?,lost_to=? "
+                'WHERE session_id=? AND source=?', (lost_from, lost_to, session_id, source))
+
+    @_locked
     def sources_ready_for_drain(self, session_id):
         rows = self.db.execute(
             'SELECT state FROM sources WHERE session_id=?', (session_id,)).fetchall()
@@ -267,21 +302,25 @@ class SessionStore:
                 'UPDATE sessions SET generation=? WHERE session_id=?', (generation, session_id))
         return True
 
+    @_locked
     def context_rows(self, session_id, *, limit):
         return [dict(row) for row in self.db.execute(
             'SELECT * FROM context WHERE session_id=? ORDER BY generation DESC LIMIT ?',
             (session_id, limit))]
 
+    @_locked
     def context_count(self, session_id):
         return self.db.execute(
             'SELECT count(*) FROM context WHERE session_id=?', (session_id,)).fetchone()[0]
 
+    @_locked
     def context_row(self, session_id, sentence_key):
         row = self.db.execute(
             'SELECT body,suppressed FROM context WHERE session_id=? AND sentence_key=?',
             (session_id, sentence_key)).fetchone()
         return dict(row) if row else None
 
+    @_locked
     def materials(self, session_id):
         row = self.db.execute(
             'SELECT body FROM session_materials WHERE session_id=?', (session_id,)).fetchone()
@@ -294,18 +333,21 @@ class SessionStore:
         return SnapshotBuilder(self).build(session_id, settings, now=now,
                                            joined_at=session['started_at'])
 
+    @_locked
     def pending_reply_row(self, session_id):
         row = self.db.execute(
             "SELECT * FROM outbox WHERE session_id=? AND kind='reply' AND state='pending' "
             "AND channel='im' ORDER BY created_ns DESC LIMIT 1", (session_id,)).fetchone()
         return dict(row) if row else None
 
+    @_locked
     def recent_reply_rows(self, session_id, *, limit):
         return [dict(row) for row in self.db.execute(
             "SELECT content,state FROM outbox WHERE session_id=? "
             "AND state IN ('sent','uncertain') GROUP BY answer_uuid "
             'ORDER BY created_ns DESC LIMIT ?', (session_id, limit))]
 
+    @_locked
     def prepare_job(self, session_id, settings, role_version, *, now):
         session = self.require_session(session_id)
         if (session['generation'] <= session['decided_generation']
@@ -368,6 +410,7 @@ class SessionStore:
             tx.outbox.recover_sending()
             tx.jobs.recover_running()
 
+    @_locked
     def inflight_jobs(self, session_id):
         return self.db.execute(
             "SELECT count(*) FROM jobs WHERE session_id=? AND state IN ('pending','running')",
@@ -375,6 +418,7 @@ class SessionStore:
 
     # -- outbox transport surface -------------------------------------------
 
+    @_locked
     def next_reply(self, session_id, *, now):
         session = self.require_session(session_id)
         row = self.db.execute(
@@ -388,6 +432,7 @@ class SessionStore:
             (session_id, now, session['cooldown_until'])).fetchone()
         return dict(row) if row else None
 
+    @_locked
     def pending_im_rows(self, *, limit=10):
         return [dict(row) for row in self.db.execute(
             "SELECT uuid,session_id,kind,content,channel,recipient_id,created_ns,"
@@ -443,6 +488,7 @@ class SessionStore:
                     cancelled += 1
         return cancelled
 
+    @_locked
     def reply_statistics(self, session_id):
         counts = {r['state']: r['n'] for r in self.db.execute(
             'SELECT state,count(*) n FROM outbox WHERE session_id=? GROUP BY state', (session_id,))}
@@ -450,6 +496,7 @@ class SessionStore:
                 'uncertain_replies': counts.get('uncertain', 0) + counts.get('sending', 0),
                 'rejected_replies': counts.get('rejected', 0)}
 
+    @_locked
     def drain_ready(self, session_id):
         """STATE_MACHINES S3 排空条件。"""
         session = self.require_session(session_id)
@@ -520,11 +567,13 @@ class SessionStore:
             tx.outbox.cancel_pending_recipients(row['session_id'], keep)
         return {'request_no': request_no, 'state': settled['state']}
 
+    @_locked
     def subscriptions_for(self, session_id):
         return [dict(row) for row in self.db.execute(
             'SELECT request_no,subscriber_open_id,state FROM subscriptions '
             'WHERE session_id=? ORDER BY request_no', (session_id,))]
 
+    @_locked
     def status(self, session_id, *, now=None):
         session = self.require_session(session_id)
         now = time.time() if now is None else now
