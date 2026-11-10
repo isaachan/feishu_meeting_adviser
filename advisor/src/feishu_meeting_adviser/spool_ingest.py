@@ -9,7 +9,7 @@ import json
 import os
 from pathlib import Path
 
-from .models import Caption, IngestMode, digest
+from .models import Caption, IngestMode, digest, epoch_ns
 from .storage import StorageError, Store
 
 SCHEMA_VERSION = 1
@@ -109,7 +109,14 @@ class SpoolIngester:
             raise StorageError('recorder spool speaker label is invalid')
         wall = event.get('wall_clock_at')
         wall_clock = wall if isinstance(wall, str) and wall else ''
-        started_ms = int(round(self.started_at * 1000))
+        # Contract §5: the stream's own start is the timeline origin, so anchor
+        # offsets to the event's wall clock (real utterance end), never to the
+        # session creation time — a stream recorded long after session-new must
+        # still land in the freshness window when it is actually consumed.
+        end_ms = epoch_ns(wall_clock)
+        if end_ms is None:
+            raise StorageError('recorder spool caption wall clock is invalid')
+        end_ms = end_ms // 1_000_000
         return Caption(
             self.session_id, utterance, text, wall_clock,
             mode=IngestMode.LIVE,
@@ -117,8 +124,8 @@ class SpoolIngester:
             speaker_name=speaker,
             event_id=event.get('event_id'),
             event_time=wall_clock or None,
-            start_time=started_ms + start,
-            end_time=started_ms + end,
+            start_time=end_ms - (end - start),
+            end_time=end_ms,
         )
 
     def poll(self) -> int:

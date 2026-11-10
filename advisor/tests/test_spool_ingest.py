@@ -5,6 +5,7 @@ import unittest
 
 from feishu_meeting_adviser.adapters.persistence.factory import StorageFactory
 from feishu_meeting_adviser.config import load_config
+from feishu_meeting_adviser.models import epoch_ns
 from feishu_meeting_adviser.spool_ingest import SpoolIngester
 from feishu_meeting_adviser.storage import StorageError, Store
 
@@ -70,7 +71,10 @@ class SpoolIngesterTests(unittest.TestCase):
         first = self.source.caption(SESSION, 'u-1')
         self.assertEqual((first.text, first.speaker_name, first.received_at),
                          ('合成台词', '张三', '2026-11-08T10:00:00+00:00'))
-        self.assertEqual(first.end_ns, int(round((NOW - 30) * 1000 + 30500) * 1_000_000))
+        # Offsets are anchored to the stream's wall clock, not the session start.
+        self.assertEqual(first.end_ns, epoch_ns('2026-11-08T10:00:00+00:00'))
+        self.assertEqual(first.start_time,
+                         epoch_ns('2026-11-08T10:00:00+00:00') // 1_000_000 - 500)
         self.assertEqual(self.source.backlog(SESSION, 'adviser'), 2)
         self.assertTrue(self.ingester.drained())
 

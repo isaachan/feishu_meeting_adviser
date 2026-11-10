@@ -203,19 +203,20 @@ class LocalAdviserTests(unittest.TestCase):
         stream = f'{mid}:st1'
         spool = self.config.data_directory / 'recorder' / 'spool' / mid / stream
         spool.mkdir(mode=0o700, parents=True)
-        # Offsets land inside the freshness window relative to the session origin.
+        # The stream started long after session-new; wall_clock_at anchors the
+        # caption into the freshness window of the service clock (NOW).
         spool.joinpath('000001.jsonl').write_text(
             json.dumps({'schema_version': 1, 'session_id': mid, 'stream_id': stream,
                         'sequence': 1, 'event_id': f'{stream}:1', 'kind': 'caption',
                         'utterance_id': 'u-000001', 'revision': 1,
                         'text': 'spool 来的提问', 'speaker_label': '张三',
                         'start_offset_ms': 30000, 'end_offset_ms': 30500,
-                        'wall_clock_at': '2026-11-08T10:00:00+00:00'}, ensure_ascii=False)
+                        'wall_clock_at': '2026-10-13T00:00:00+00:00'}, ensure_ascii=False)
             + '\n'
             + json.dumps({'schema_version': 1, 'session_id': mid, 'stream_id': stream,
                           'sequence': 2, 'event_id': f'{stream}:2', 'kind': 'stream_end',
                           'last_sequence': 1,
-                          'wall_clock_at': '2026-11-08T10:00:01+00:00'}, ensure_ascii=False)
+                          'wall_clock_at': '2026-10-13T00:00:01+00:00'}, ensure_ascii=False)
             + '\n', encoding='utf-8')
         backend = FakeBackend()
         backend.reply = Decision('none', (), 'spool 回答', ('u-000001',))
