@@ -36,6 +36,11 @@ def parser():
     real.add_argument('--duration', type=float,
                       help='clean stop after N seconds (writes stream_end); '
                            'without it run until Ctrl-C (interrupt keeps the stream open)')
+    real.add_argument('--stt', choices=['sherpa', 'zhipu'], default='sherpa',
+                      help='STT backend: sherpa local streaming (default) or '
+                           'zhipu file upload (needs GLM_ASR_API_KEY/GLM_API_KEY)')
+    real.add_argument('--stt-model-dir', type=Path,
+                      help='sherpa model directory (default: $LMR_STT_MODEL_DIR)')
     return root
 
 
@@ -84,7 +89,9 @@ def main(argv=None):
             data_root = args.data_root or _default_data_root()
             recorder = RealRecorder(session_id=args.session, data_root=data_root,
                                     mic_enabled=args.mic,
-                                    mic_speaker=args.mic_speaker)
+                                    mic_speaker=args.mic_speaker,
+                                    stt_mode=args.stt,
+                                    stt_model_dir=args.stt_model_dir)
             stop = threading.Event()
             previous = _install_interrupt(stop)
             try:

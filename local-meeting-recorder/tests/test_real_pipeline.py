@@ -55,7 +55,7 @@ class RealRecorderTests(unittest.TestCase):
                      stop_after=None):
         recorder = RealRecorder(session_id=SESSION, data_root=self.root,
                                 mic_enabled=mic_enabled,
-                                transcriber=transcriber,
+                                stt_mode='zhipu', transcriber=transcriber,
                                 sources=[self.loop, self.mic])
         result: dict = {}
         done = threading.Event()
@@ -129,6 +129,16 @@ class RealRecorderTests(unittest.TestCase):
         self.assertEqual(len(result['diagnostics']['errors']), 1)
         self.assertEqual(result['diagnostics']['errors'][0]['reason'],
                          'unavailable')
+
+    def test_latency_diagnostics_recorded_per_caption(self):
+        result = self.run_recorder(FakeTranscriber())
+        latencies = result['diagnostics']['latencies']
+        self.assertGreaterEqual(len(latencies), 2)
+        sources = {entry['source'] for entry in latencies}
+        self.assertEqual(sources, {'mic', 'loopback'})
+        for entry in latencies:
+            self.assertGreaterEqual(entry['after_segment_end_ms'], 0)
+            self.assertGreaterEqual(entry['stt_ms'], 0)
 
     def test_prompt_chaining_per_source(self):
         transcriber = FakeTranscriber()

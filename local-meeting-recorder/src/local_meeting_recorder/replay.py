@@ -29,6 +29,8 @@ class FakeReplay:
         stop_event = stop_event or threading.Event()
         writer = SpoolWriter(self.data_root, self.session_id, self.stream_id,
                              clock=self.clock)
+        # utterance ids must stay unique across streams of one session
+        nonce = self.stream_id.rsplit(':', 1)[-1][:8]
         sequence = 0
         offset_ms = 0
         reason = 'completed'
@@ -51,7 +53,7 @@ class FakeReplay:
                 duration_ms = max(1, min(len(line.text), 5_000))
                 writer.append(caption_event(
                     self.session_id, self.stream_id, sequence,
-                    f'u-{sequence:06d}', line.text, line.speaker,
+                    f'u-{nonce}-{sequence:06d}', line.text, line.speaker,
                     offset_ms, offset_ms + duration_ms,
                     datetime.now(timezone.utc).isoformat()))
         finally:

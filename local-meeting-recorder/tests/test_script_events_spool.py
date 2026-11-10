@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 import tempfile
+import time
 import unittest
 
 from local_meeting_recorder.events import caption_event, stream_end_event
@@ -84,6 +85,24 @@ class SpoolWriterTests(unittest.TestCase):
         writer.finish()
         self.assertEqual([path.name for path in sorted(writer.stream_dir.glob('*.jsonl'))],
                          ['000001.jsonl', '000003.jsonl', '000005.jsonl'])
+
+    def test_sparse_event_becomes_visible_without_next_append(self):
+        writer = SpoolWriter(self.root, 'local:s', 'local:s:sparse',
+                             roll_seconds=0.3)
+        try:
+            writer.append(self.events(1)[0])
+            deadline = time.monotonic() + 3.0
+            visible = []
+            while time.monotonic() < deadline:
+                visible = list(writer.stream_dir.glob('*.jsonl'))
+                if visible:
+                    break
+                time.sleep(0.05)
+            self.assertEqual(len(visible), 1, 'age roller must publish sparse events')
+            rows = [json.loads(row) for row in visible[0].read_text().splitlines()]
+            self.assertEqual([row['sequence'] for row in rows], [1])
+        finally:
+            writer.finish()
 
     def test_cleanup_removes_only_fully_acked_segments(self):
         writer = SpoolWriter(self.root, 'local:s', 'local:s:t', roll_events=2,

@@ -3,17 +3,23 @@
 Segments are append-only JSONL files named by their first sequence. Writes go
 to a ``.tmp`` file first and are renamed atomically, so the advisor never
 observes partial segments. Segments covered by the ack cursor may be removed.
+
+A sparse stream (real captions arrive every few seconds) must not wait for
+the NEXT event to become visible: an age-roller thread closes the open
+segment once it has been idle for ``roll_seconds``, so consumers see each
+event at most ~roll_seconds after it was appended.
 """
 import json
 import os
 from pathlib import Path
+import threading
 import time
 
 
 class SpoolWriter:
     def __init__(self, data_root: Path, session_id: str, stream_id: str, *,
                  roll_events: int = 200, roll_seconds: float = 2.0,
-                 clock=time.time):
+                 clock=time.time, age_roller: bool = True):
         recorder_root = Path(data_root) / 'recorder'
         self.stream_dir = recorder_root / 'spool' / session_id / stream_id
         self.ack_path = recorder_root / 'ack' / session_id / (stream_id + '.json')
@@ -26,6 +32,13 @@ class SpoolWriter:
         self._first_sequence = None
         self._events_in_segment = 0
         self._segment_opened_at = clock()
+        self._lock = threading.Lock()
+        self._roller_stop = threading.Event()
+        self._roller = None
+        if age_roller:
+            self._roller = threading.Thread(target=self._age_roll_loop,
+                                            daemon=True, name='spool-age-roll')
+            self._roller.start()
 
     def _open(self, event):
         self.stream_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -45,20 +58,36 @@ class SpoolWriter:
         self._handle = None
         self._first_sequence = None
 
+    def _age_roll_loop(self) -> None:
+        """Close the open segment once it has been idle past roll_seconds."""
+        while not self._roller_stop.wait(0.25):
+            if (self._handle is not None
+                    and self.clock() - self._segment_opened_at >= self.roll_seconds):
+                with self._lock:
+                    if (self._handle is not None
+                            and self.clock() - self._segment_opened_at
+                            >= self.roll_seconds):
+                        self._roll()
+
     def append(self, event: dict) -> None:
-        if self._handle is None:
-            self._open(event)
-        handle = self._handle
-        if handle is None:
-            raise RuntimeError('spool segment is not open')
-        handle.write(json.dumps(event, ensure_ascii=False) + '\n')
-        self._events_in_segment += 1
-        if (self._events_in_segment >= self.roll_events
-                or self.clock() - self._segment_opened_at >= self.roll_seconds):
-            self._roll()
+        with self._lock:
+            if self._handle is None:
+                self._open(event)
+            handle = self._handle
+            if handle is None:
+                raise RuntimeError('spool segment is not open')
+            handle.write(json.dumps(event, ensure_ascii=False) + '\n')
+            self._events_in_segment += 1
+            if (self._events_in_segment >= self.roll_events
+                    or self.clock() - self._segment_opened_at >= self.roll_seconds):
+                self._roll()
 
     def finish(self) -> None:
-        self._roll()
+        self._roller_stop.set()
+        if self._roller is not None:
+            self._roller.join(timeout=2.0)
+        with self._lock:
+            self._roll()
 
     def acked_sequence(self) -> int:
         try:

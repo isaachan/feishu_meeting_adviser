@@ -11,13 +11,17 @@ Contract:
 - Speaker routing stays out of STT: segments carry their source_id and the
   contract writer (stage 5.5) maps mic -> local user, loopback -> remote or
   unknown.
-- Configuration switch ``stt: remote|local``; the first remote provider is
-  Zhipu GLM-ASR (glm-asr-2512, file upload <= 30 s). A local implementation
-  (e.g. whisper family) is an optional extra and does not block Mac
-  acceptance.
+- Configuration switch ``stt``: ``sherpa`` (default since 2026-11-10; local
+  streaming via sherpa-onnx), ``zhipu`` (optional file-upload provider; the
+  GLM Coding Plan carries no ASR quota, error 1113) and later
+  ``remote-stream`` (server-side sessions, task 5.11).
+- Streaming extension (2026-11-10): StreamingSession.feed(frame) returns
+  partial/final SttEvent items carrying source-timeline offsets; partials
+  never reach the caption contract; gaps close utterances explicitly.
 """
 from .base import Transcriber, TranscriptionResult, TranscriberError
 from .segmenter import Segment, VadSegmenter
+from .streaming import FINAL, PARTIAL, LocalSherpaSession, SttEvent, StreamingSession
 from .zhipu import ZhipuASR
 
 
@@ -38,7 +42,12 @@ def create_transcriber(config: dict) -> Transcriber:
 
 
 __all__ = [
+    'FINAL',
+    'PARTIAL',
     'Segment',
+    'LocalSherpaSession',
+    'StreamingSession',
+    'SttEvent',
     'Transcriber',
     'TranscriberError',
     'TranscriptionResult',

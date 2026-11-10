@@ -63,8 +63,9 @@ class RecorderHandoffTests(unittest.TestCase):
 
             def decide(self, snapshot, role):
                 Backend.snapshot = snapshot
+                nonce = stream.rsplit(':', 1)[-1][:8]
                 return Decision('none', (), '主要风险是回滚路径，建议先补一次演练。',
-                                ('u-000001',))
+                                (f'u-{nonce}-000001',))
 
             def diagnostic_metadata(self):
                 return {}
