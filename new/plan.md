@@ -66,7 +66,7 @@
 
 ## 5. 阶段 2：recorder 改造（可与阶段 1 并行）
 
-- [ ] **2.1 剥离与保留。** 保留 audio/ 采集、MuteGate 手动开关、整场本地音频留存、`--mic` 默认关；删除 spool writer、本地 OAuth、STT 客户端（remote-stream/sherpa/zhipu 全下线）。**验收：**采集层原有单测通过；无对旧 spool/oauth 模块的引用。
+- [x] **2.1 剥离与保留。** 保留 audio/ 采集、MuteGate 手动开关、整场本地音频留存、`--mic` 默认关；删除 spool writer、本地 OAuth、STT 客户端（remote-stream/sherpa/zhipu 全下线）。**验收：**采集层原有单测通过；无对旧 spool/oauth 模块的引用。**完成（2026-11-10）：**`audio/`（frames/sources/sck_capture+swift/session）逐字平移（MicSource 手动开关默认关、暂停=显式 gap 事件、CaptureSession 整场 wav 留存+订阅扇出、SCK helper 包数据随附）；`test_audio_session.py` 迁入改包名，11 项全绿；新模块从未引入 spool/oauth/stt（无需删除项）。
 - [ ] **2.2 WS 推流客户端。** 按契约 0.2 实现：建连出示流令牌、双路音频帧上行、断线本地缓冲与重传窗口、`stream_end` 干净收尾、Ctrl-C 不伪造 end；连接失败显式退出码。**验收：**注入式假服务端覆盖重连/重传/令牌过期三场景单测。
 - [ ] **2.3 启动命令与诊断。** 参数解析、事件绑定回显、上行速率/丢帧计数本地打印。**验收：**命令行契约测试。
 - [ ] **2.4 打包与分发。** recorder 生成可分发安装形态（whl/zipapp + 依赖清单或安装脚本）与安装文档（Mac Gatekeeper 绕过指引，Windows 预留）；版本号与升级说明。**验收：**一台干净 Mac 按文档完成安装并跑通 `--help` 与 fake 采集。
