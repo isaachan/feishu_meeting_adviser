@@ -13,9 +13,10 @@ rejections on the event read (not visible / not found) and organizer or
 window mismatches map to ``unauthorized``.
 
 The HTTP client is stdlib-only. Compound calendar event ids
-(``<calendar_id>/<event_id>``) come from Feishu list endpoints; organizer
-and timestamp field names follow the calendar v4 event shape and still
-need one real-API acceptance pass (stub-verified in tests until then).
+(``<calendar_id>/<event_id>``) come from Feishu list endpoints; shapes were
+verified against the production API on 2026-11-10 (event_organizer.user_id
+carrying an open_id; user_info returning open_id/union_id only; code 20005
+for rejected tokens) - see data/acceptance-auth/.
 """
 from __future__ import annotations
 
@@ -38,8 +39,10 @@ _TIMEOUT_SECONDS = 10.0
 _MAX_RESPONSE_BYTES = 1 << 18
 _TOKEN_TEXT = re.compile(r'[A-Za-z0-9_.=-]{1,4096}\Z')
 _ID_TEXT = re.compile(r'[A-Za-z0-9_.@~-]{1,256}\Z')
-# Provider codes meaning the presented user token is invalid or expired.
-_TOKEN_INVALID_CODES = frozenset({99991661, 99991663, 99991668, 99991677})
+# Provider codes meaning the presented user token is invalid or expired
+# (20005 = invalid access token on authen v1 user_info, seen in production).
+_TOKEN_INVALID_CODES = frozenset({20005, 99991661, 99991663, 99991668,
+                                   99991677})
 
 
 class AuthError(Exception):

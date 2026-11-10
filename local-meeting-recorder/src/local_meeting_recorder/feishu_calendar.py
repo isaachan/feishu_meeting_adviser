@@ -6,8 +6,9 @@ half of "only the organizer may record". The server still enforces the
 same check; this listing is UX, not the security boundary.
 
 Read-only stdlib client; token-invalid provider codes trigger one silent
-refresh + retry through OAuthManager. Calendar/organizer field shapes
-follow the calendar v4 API and need one real-API acceptance pass.
+refresh + retry through OAuthManager. Calendar/organizer field shapes were
+verified against the production API on 2026-11-10 (see
+data/acceptance-auth/).
 """
 from __future__ import annotations
 
@@ -27,7 +28,9 @@ EVENTS_PATH = '/open-apis/calendar/v4/calendars/{calendar_id}/events'
 DEFAULT_WINDOW_SECONDS = 30 * 60
 LIST_RANGE_SECONDS = 12 * 3600
 _MAX_RESPONSE_BYTES = 1 << 18
-_TOKEN_INVALID_CODES = frozenset({99991661, 99991663, 99991668, 99991677})
+# 20005 = invalid access token on authen v1 user_info (seen in production).
+_TOKEN_INVALID_CODES = frozenset({20005, 99991661, 99991663, 99991668,
+                                  99991677})
 _ID_TEXT = re.compile(r'[A-Za-z0-9_.@~-]{1,256}\Z')
 _EVENT_ID_TEXT = re.compile(r'[A-Za-z0-9_.@~-]{1,256}(?:/[A-Za-z0-9_.@~-]{1,256})?\Z')
 

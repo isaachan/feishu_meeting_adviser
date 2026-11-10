@@ -73,7 +73,7 @@ export LMR_FEISHU_APP_ID=cli_xxx LMR_FEISHU_APP_SECRET=xxx
 
 - `--event` 会随流写入 spool `meta.json`（契约 §6 会议绑定），并在 remote-stream 模式作为 `start.auth` 送 stt-server 核验；`auth_expired` 由客户端静默刷新重连，用户无感。
 - 即时会议（无日历事件）不支持；组织者/时间窗的最终判定在服务端（fail-closed），本列表只是客户端提示。
-- 注意：组织者字段、复合 event_id 的真实 API 形状尚待一次真实账号核验（当前全部为 stub 测试）；`auth login` 需要飞书应用开通日历读取权限与上述 redirect URI。
+- 真实 API 形状已于 2026-11-10 核验（`event_organizer.user_id` 值域 open_id、`user_info` 返回 open_id/union_id、`event_id` 纯 UUID 客户端复合、无效 token code 20005→`auth_expired`），证据 `data/acceptance-auth/`；`auth login` 需要飞书应用开通日历读取权限与上述 redirect URI。
 
 ## 开发与测试
 

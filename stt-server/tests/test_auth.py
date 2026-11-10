@@ -214,6 +214,11 @@ class TransportTests(unittest.TestCase):
             transport.user_info('token-1')
         self.assertEqual(caught.exception.code, 'auth_expired')
         transport, _ = self.make_transport(
+            lambda req: _reply(200, {'code': 20005, 'msg': 'invalid token'}))
+        with self.assertRaises(AuthError) as caught:
+            transport.user_info('token-1')
+        self.assertEqual(caught.exception.code, 'auth_expired')
+        transport, _ = self.make_transport(
             lambda req: _reply(200, {'code': 230001, 'msg': 'other'}))
         with self.assertRaises(AuthError) as caught:
             transport.user_info('token-1')
