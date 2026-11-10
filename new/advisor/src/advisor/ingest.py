@@ -13,7 +13,7 @@ import json
 import struct
 import threading
 import time
-from typing import Awaitable, Callable
+from typing import Callable, Protocol
 
 import websockets
 
@@ -31,13 +31,13 @@ class IngestError(Exception):
         super().__init__(message)
 
 
-class SttSession:
+class SttSession(Protocol):
     async def feed(self, pcm: bytes) -> None: ...
     async def gap(self) -> None: ...
     async def close(self) -> None: ...
 
 
-class SttSessionFactory:
+class SttSessionFactory(Protocol):
     """open() returns a per-connection STT session; on_final(text, start_offset,
     end_offset, tag) is invoked for each final utterance."""
 
@@ -62,6 +62,9 @@ class IngestServer:
         self._live: set[tuple[str, str]] = set()
         self._live_guard = threading.Lock()
         self.dropped_frames = 0  # explicit slow-consumer accounting
+        self._activity: dict[str, float] = {}
+        self._connections: set = set()
+        self.loop = None
 
     def _claim_source(self, session_id: str, source: str) -> bool:
         with self._live_guard:
@@ -75,11 +78,41 @@ class IngestServer:
         with self._live_guard:
             self._live.discard((session_id, source))
 
+    def _touch(self, session_id: str) -> None:
+        with self._live_guard:
+            self._activity[session_id] = time.monotonic()
+
+    def activity_snapshot(self) -> dict:
+        """session_id -> monotonic last-activity (for the supervisor idle rule)."""
+        with self._live_guard:
+            return dict(self._activity)
+
+    def close_session(self, session_id: str) -> None:
+        """Close all live connections of a session (draining sweep)."""
+        loop = self.loop
+        if loop is None:
+            return
+        targets = [connection.ws for connection in list(self._connections)
+                   if connection.session_id == session_id]
+        for websocket in targets:
+            future = asyncio.run_coroutine_threadsafe(
+                websocket.close(1000, 'session_draining'), loop)
+            try:
+                future.result(timeout=2)
+            except Exception:
+                pass
+
     async def handler(self, websocket):
+        if self.loop is None:
+            self.loop = asyncio.get_running_loop()
         connection = _Connection(self, websocket)
+        with self._live_guard:
+            self._connections.add(connection)
         try:
             await connection.run()
         finally:
+            with self._live_guard:
+                self._connections.discard(connection)
             if connection.claimed:
                 self._release_source(connection.session_id, connection.source)
 
@@ -217,6 +250,7 @@ class _Connection:
         try:
             async for raw in self.ws:
                 self.last_activity = time.monotonic()
+                self.server._touch(self.session_id)
                 try:
                     if isinstance(raw, bytes):
                         await self._frame(raw)
