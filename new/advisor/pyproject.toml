@@ -18,6 +18,9 @@ advisor = "advisor.__main__:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+advisor = ["meeting_adviser.md"]
+
 [tool.ruff]
 target-version = "py311"
 
