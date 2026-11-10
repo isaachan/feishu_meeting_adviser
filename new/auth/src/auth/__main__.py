@@ -7,7 +7,7 @@ from pathlib import Path
 
 from . import __version__
 from .api import build_server
-from .config import load_credentials, load_config
+from .config import FeishuAppCredentials, Config, load_credentials, load_config
 from .service import AuthService
 
 LOG = logging.getLogger(__name__)
@@ -28,6 +28,8 @@ def main() -> None:
                        help='externally reachable base, e.g. https://auth.example.internal')
     serve.add_argument('--state-ttl', type=int, default=600)
     serve.add_argument('--host', default='127.0.0.1')
+    serve.add_argument('--stub', action='store_true',
+                       help='stub OAuth transport (integration bed only; code=open_id)')
 
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
@@ -38,13 +40,25 @@ def main() -> None:
                           'data_dir': str(args.data_dir)}))
         return
 
-    config = load_config(args.data_dir, port=args.port, base_url=args.base_url,
-                         state_ttl_s=args.state_ttl)
+    try:
+        config = load_config(args.data_dir, port=args.port, base_url=args.base_url,
+                             state_ttl_s=args.state_ttl)
+    except Exception:
+        if not args.stub:
+            raise
+        config = Config(credentials=FeishuAppCredentials('stub-app', 'stub-secret'),
+                        data_dir=args.data_dir, port=args.port,
+                        base_url=args.base_url, state_ttl_s=args.state_ttl)
+    transport = None
+    if args.stub:
+        from .stub_transport import StubTransport
+        transport = StubTransport()
     service = AuthService(config.credentials, config.data_dir, base_url=config.base_url,
-                          state_ttl_s=config.state_ttl_s)
+                          state_ttl_s=config.state_ttl_s, transport=transport)
     server = build_server(service, host=args.host, port=args.port)
-    LOG.info('auth %s listening on %s (redirect %s)', __version__,
-             server.server_address, service.redirect_uri)
+    LOG.info('auth %s listening on %s (redirect %s)%s', __version__,
+             server.server_address, service.redirect_uri,
+             ' [STUB TRANSPORT]' if args.stub else '')
     try:
         server.serve_forever()
     except KeyboardInterrupt:

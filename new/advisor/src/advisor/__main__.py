@@ -36,6 +36,8 @@ def main() -> None:
     serve.add_argument('--gateway-url', default='http://127.0.0.1:8377')
     serve.add_argument('--auth-url', default='http://127.0.0.1:8381')
     serve.add_argument('--model', choices=['remote', 'rule'], default='remote')
+    serve.add_argument('--remote-backend', choices=['fake', 'opencode'], default='opencode',
+                       help='gateway backend tag sent with inference jobs')
     serve.add_argument('--calendar-stub', action='store_true',
                        help='stub calendar validation (stub-first stages only)')
     serve.add_argument('--calendar-stub-description', default='')
@@ -51,7 +53,8 @@ def main() -> None:
     database = args.data_dir / 'adviser.sqlite3'
     if not database.exists():
         SessionStore.initialize(database)
-    settings = AdviserSettings(remote_url=args.gateway_url)
+    settings = AdviserSettings(remote_url=args.gateway_url,
+                               remote_backend=args.remote_backend)
     store = SessionStore(database)
 
     if args.model == 'rule':
