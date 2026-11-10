@@ -11,7 +11,7 @@
 | | 方案 B（旧，已停止维护） | 方案 C（本目录） |
 |---|---|---|
 | 会议业务状态（会话/字幕/材料/决策） | laptop 本地 SQLite | 云端 advisor，集中多用户 |
-| 通知 bot | 搁置（本地架构下无法闭环） | 云端，与 advisor 同库，一等公民 |
+| 通知 bot | 搁置（本地架构下无法闭环） | 云端独立部署节点（bot 服务），一等公民 |
 | laptop 上跑什么 | recorder + advisor | 只跑飞书客户端 + local-recorder（音频上行） |
 | 参会者获得信息 | 不支持 | 飞书 IM 订阅，经组织者审批 |
 
@@ -27,7 +27,9 @@
 new/
 ├── docs/                  # 本设计文档
 ├── recorder/              # laptop 端采集器（自旧 local-meeting-recorder 瘦身移植）
-├── advisor/               # 云端会话服务（自旧 advisor 服务化改造 + bot 子系统）
+├── advisor/               # 云端会话核心（自旧 advisor 服务化改造：会话域/ingest/监督器）
+├── bot/                   # 会参谋 bot 独立节点（IM 控制面/通知面）
+├── auth/                  # OAuth 鉴权服务独立节点（用户凭据托管）
 ├── stt-server/            # 流式 STT 服务（自旧 stt-server 平移，退化纯内网）
 └── llm-gateway/           # 模型执行网关（自旧 llm-gateway 平移）
 ```
@@ -38,9 +40,11 @@ new/
 
 | 旧资产 | 去向 |
 |---|---|
-| recorder 双路采集（SCK loopback + mic）、MuteGate、OAuth 登录/选会议、本地音频留存 | `recorder/`，去 spool，改 WS 上行 |
-| advisor 的 snapshot / decision / jobs / outbox / 会话状态机 | `advisor/` 核心域，基本平移，加多租户外壳 |
+| recorder 双路采集（SCK loopback + mic）、MuteGate、本地音频留存 | `recorder/`，去 spool 与本地 OAuth，改 WS 上行（流令牌） |
+| 旧 recorder 的 OAuth 凭据管理（oauth.py：授权/换取/刷新/存储） | `auth/`，redirect URI 云端化，凭据按 open_id 云端保管 |
+| 旧 recorder 的选会/组织者校验（feishu_calendar.py） | `advisor/`（用 auth 提供的 token 执行校验） |
+| advisor 的 snapshot / decision / jobs / outbox / 会话状态机 | `advisor/` 核心域，基本平移，加多租户外壳与 ingest 网关 |
 | 旧 spool/ack 契约的幂等语义（event_id/sequence/stream_end） | 演化为 recorder↔advisor 的网络契约 |
 | stt-server（sherpa 流式 + v2 组织者授权） | `stt-server/`；鉴权前移到 advisor 后转内网模式 |
 | llm-gateway（OpenCode/GLM 沙箱执行） | `llm-gateway/`，原样平移 |
-| chatbot 的飞书长连接接线 | 吸收进 `advisor/` 的 bot 子系统 |
+| chatbot 的飞书长连接接线 | `bot/`（独立节点，经 advisor 内部 API 交互） |

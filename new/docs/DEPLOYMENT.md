@@ -1,57 +1,75 @@
-# 部署 · 节点与基线（v0.1 草案）
+# 部署 · 节点与基线（v0.3 草案）
 
 状态：设计基线。组件职责见 [ARCHITECTURE](ARCHITECTURE.md)。
+修订：v0.3 将 bot 与 OAuth 鉴权服务从 advisor 拆出，连同 advisor 共三个**独立部署节点**（v0.2 曾为 advisor 子系统）。
 
 ## 1. 部署节点总览
 
 | 节点 | 数量（v1） | 承载 | 说明 |
 |---|---|---|---|
-| 云端服务器 | 1（单机） | advisor（含 bot）、stt-server、llm-gateway | Linux（Ubuntu，沿用旧 stt-server/llm-gateway 的部署经验与 systemd 单元形态）；CPU 即可（STT int8 模型已在旧部署验证） |
-| 组织者 laptop | 每组织者一台 | 飞书客户端、recorder | Mac 先行、Windows 跟进（沿用旧阶段 5 的双平台采集基线）；安装包不签名/公证，文档引导绕过 Gatekeeper/SmartScreen |
+| 云端服务器 | 1（单机） | **五个独立部署节点**：`advisor`（会话核心）、`bot`（IM 控制面/通知面）、`auth`（OAuth 鉴权服务），及 `stt-server`、`llm-gateway` | Linux（Ubuntu）；CPU 即可（STT int8 模型已在旧部署验证）。三节点单机同驻但**进程/配置/数据/升级完全独立**，未来可拆机部署 |
+| 组织者 laptop | 每组织者一台 | 飞书客户端、recorder | Mac 先行、Windows 跟进；安装包不签名/公证，文档引导绕过 Gatekeeper/SmartScreen；**零配置零凭据**，按 IM 下发的命令启动 |
 | 参会者设备 | 任意 | 飞书客户端 | 零安装、零配置 |
-| 飞书云（外部） | — | 自建应用（IM 长连接、日历/OAuth） | SaaS，无部署动作 |
+| 飞书云（外部） | — | 自建应用（IM 长连接、日历/OAuth 授权页） | SaaS；应用后台需预先注册 OAuth 回调 URI（见 §2） |
 
-## 2. 云端组件与端口基线
+三个核心节点的职责切分：
+
+| 节点 | 职责 | 不承担 |
+|---|---|---|
+| `advisor` | ingest 网关（音频/事件上行）、会话域（字幕/材料/任务/outbox/订阅）、会话监督器、组织者/时间窗校验 | 不持有用户 OAuth 凭据（经 auth API 取）；不碰飞书 IM |
+| `bot` | 飞书长连接收发、指令解析、订阅审批交互、outbox 待发 IM 的拉取与回写 | 不落业务状态（仅 IM 去重等运行时态）；业务操作全经 advisor 内部 API |
+| `auth` | 授权链接/回调/换取/刷新/吊销、用户 OAuth 凭据保管（按 open_id 隔离） | 不做业务校验（组织者/时间窗校验在 advisor，用 auth 提供的 token 读日历） |
+
+## 2. 组件与端口基线
 
 | 组件 | 监听 | 暴露范围 | 说明 |
 |---|---|---|---|
-| advisor ingest（WS） | `0.0.0.0:<P_ingest>`（待定） | 受信网络 | recorder 音频/事件上行唯一入口；user_access_token 鉴权 |
-| advisor API（HTTP） | 同机 | localhost | 管理/查询面（CLI、状态、订阅管理）；bot 同库直读不走走 API |
-| advisor bot | 出站长连接 | — | 主动外连飞书（`lark.ws.Client`），不监听端口 |
+| auth OAuth 回调（HTTPS） | `https://<域名>/oauth/callback`（反代 → `127.0.0.1:<P_auth>`） | 浏览器可达（**含手机**点开 IM 里的授权链接） | 首次授权/重新授权；redirect URI 必须与飞书应用后台注册值**精确匹配** |
+| auth API（HTTP） | `127.0.0.1:<P_auth>` | 仅 localhost | advisor/bot 获取有效用户凭据（`get_valid_token(open_id)` 类接口） |
+| advisor ingest（WS） | `0.0.0.0:<P_ingest>`（待定） | 受信网络 | recorder 音频/事件上行唯一入口；**流令牌**鉴权（非用户凭据） |
+| advisor API（HTTP） | `127.0.0.1:<P_api>` | 仅 localhost | bot 调用（指令触发会话操作、订阅读写、待发 IM 拉取/回写）+ 运维 CLI |
+| bot | 出站长连接 | — | 主动外连飞书（`lark.ws.Client`），不监听端口 |
 | stt-server（WS） | `127.0.0.1:<P_stt>` | 仅 localhost | auth 固定 `none`（准入已由 advisor 完成） |
 | llm-gateway（HTTP） | `127.0.0.1:8377`（沿用） | 仅 localhost | 与旧部署一致 |
 
-网络边界一句话：**对受信网络只暴露 advisor ingest 一个端口，其余全部 localhost**。
+网络边界一句话：**对外两个入口——auth 的 OAuth 回调（浏览器可达，HTTPS 域名经反代）与 advisor 的 ingest WS（受信网络）；云内互调全部 localhost**：bot→advisor、advisor→auth、advisor→stt-server、advisor→llm-gateway。
 
 ## 3. 凭据与配置
 
 | 凭据 | 存放 | 用途 |
 |---|---|---|
-| 飞书自建应用 app_id/secret | 云端 advisor 配置（600 权限） | bot 收发 IM、tenant token |
-| 组织者 user_access_token/refresh_token | laptop recorder（沿用旧 OAuth 本地存储：0700 目录、原子写、只存散列身份） | 上行鉴权；advisor 侧校验后不留存 |
-| GLM 凭据 | 云端 llm-gateway 运行环境（沿用旧 OpenCode 登录注入） | 模型执行 |
-| 服务器间 | 无 | stt/gateway 内网无认证（沿用旧基线） |
+| 飞书自建应用 app_id/secret | `bot` 与 `auth` 各持一份所需配置（同一自建应用；bot 用于 IM 收发/tenant token，auth 用于 OAuth 换取），600 权限 | 两节点各自所需的最小能力 |
+| 组织者 user_access_token/refresh_token | **`auth` 节点**（按 open_id 隔离存储；0600+独立数据目录，静态加密可选） | 凭据生命周期由 auth 管理；advisor/bot 经 auth API 取有效 token 用后不留存 |
+| 会话流令牌 | `advisor` 铸造 → bot 经 IM 命令下发 → laptop 内存 | 仅绑定单一 session、短期、会话结束即吊销；**任何用户凭据不落 laptop** |
+| GLM 凭据 | `llm-gateway` 运行环境（沿用旧 OpenCode 登录注入） | 模型执行 |
+| 节点间（云内） | 无 | localhost 互调无认证（同机受信边界；拆机部署时补 mTLS/服务间凭据） |
 
-v1 运营在受信网络（内网/VPN）；接入公网前必须补：ingest 通道 TLS、按用户配额与隔离审计（旧仓库根 TODO 的同款条目在此继承并扩大到 advisor）。
+v1 运营在受信网络（内网/VPN）；接入公网或三节点拆机前必须补：ingest 与回调通道 TLS、服务间认证、用户凭据静态加密、按用户配额与隔离审计。
 
 ## 4. 数据落点
 
 | 数据 | 位置 | 保留 |
 |---|---|---|
-| 会议字幕/材料/决策/订阅 | 云端 advisor 数据库（按用户隔离） | 按策略（v1 默认 7 天沿用旧 retention，到期清字幕保决策摘要） |
-| 模型任务明细 | 云端 llm-gateway | 终态 24h 过期清除（沿用旧契约） |
+| 会议字幕/材料/决策/订阅/outbox | `advisor` 数据库（按用户隔离） | 按策略（v1 默认 7 天沿用旧 retention，到期清字幕保决策摘要） |
+| 用户 OAuth 凭据 | `auth` 数据目录（按 open_id 隔离） | refresh 失效→要求重新授权；删除用户=连凭据一并删 |
+| 模型任务明细 | `llm-gateway` | 终态 24h 过期清除（沿用旧契约） |
 | 整场原始音频 | **laptop 本地**（不上传） | 不自动删除，手动清理 |
-| OAuth 凭据 | laptop 本地 | refresh 失效即要求重新授权 |
 | 断线音频缓冲 | laptop 本地（内存/临时文件） | 重传成功即清 |
+| 流令牌 | laptop 内存 | 进程退出即失；会话结束 advisor 即吊销 |
+
+bot 无业务持久状态（重启丢失的仅 IM 去重缓存，飞书事件重投由 message_id 幂等吸收）。
 
 ## 5. 运维基线（v1）
 
-- 进程管理：systemd 单元（`advisor`、`advisor-bot` 可并入同单元、`stt-server`、`llm-gateway`），有界停机（draining 会话排空后再退出）。
-- 健康检查：各组件 healthz；ingest 连接数/上行速率/积压、STT 会话数、gateway 队列深度四项最小指标。
+- 部署前置：飞书应用后台注册 OAuth 回调 URI（与 §2 精确一致，指向 auth 节点）、开通 IM 三权限与长连接事件（沿用旧 docs/APP_PERMISSIONS_EVENTS.md 清单）。
+- 进程管理：systemd 五个独立单元（`advisor`、`bot`、`auth`、`stt-server`、`llm-gateway`），各自有界停机（advisor 需 draining 会话排空后再退出；bot/auth 可直接重启）。
+- 独立升级：三核心节点互不牵连——bot 短暂下线仅审批/通知延迟，字幕与模型链路不受影响；auth 短暂下线仅影响新授权/校验，进行中会话不受影响；advisor 升级前确认无 draining 会话。
+- 健康检查：各节点 healthz；最小指标：ingest 连接数/上行速率/积压、STT 会话数、gateway 队列深度、活跃会话数、bot 长连接状态。
+- 凭据运维：auth 凭据存储的访问审计；备份包含凭据时需加密。
 - 单机单点：服务器宕机 = 所有进行中会议的辅助中断（音频本地留存仍在）；不做高可用（v1 明确接受）。
-- 升级：组件独立升级；advisor 升级前确认无 draining 会话；契约变更需 bump 版本并保证一版向前兼容。
-- 备份：advisor 数据库按用户可导出/删除（合规要求预留，v1 手工脚本）。
+- 契约变更需 bump 版本并保证一版向前兼容（含三节点间的内部 API）。
+- 备份：advisor 数据库与 auth 凭据目录按用户可导出/删除（合规预留，v1 手工脚本）。
 
 ## 6. 首版验收环境
 
-单台 Ubuntu 服务器 + 一台 Mac laptop + 两个飞书账号（小A/小B），覆盖 REQUIREMENTS S1–S5 全场景与断网/合盖/撤销/拒绝路径；模型先用 gateway 假模型打通，再切真实 GLM（沿用旧仓库"假模型先行"验收方法）。
+单台 Ubuntu 服务器（含域名/TLS 反代，五个 systemd 单元）+ 一台 Mac laptop + 两个飞书账号（小A/小B），覆盖 REQUIREMENTS S1–S5 全场景：含首次授权全流程（电脑与手机各点一次授权链接，回调落在 auth 节点）、四种拒绝路径（未授权/非组织者/超窗/会议不存在）、断网/合盖/撤销/拒绝、bot 与 auth 各自重启不影响进行中会话；模型先用 gateway 假模型打通，再切真实 GLM（沿用旧仓库"假模型先行"验收方法）。
