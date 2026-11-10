@@ -23,12 +23,13 @@ LOG = logging.getLogger(__name__)
 class SessionSupervisor:
     def __init__(self, store: SessionStore, settings: AdviserSettings, *,
                  backend_factory, ingest_activity=None, close_ingest=None,
-                 clock=time.time, monotonic=time.monotonic):
+                 source_connected=None, clock=time.time, monotonic=time.monotonic):
         self.store = store
         self.settings = settings
         self.backend_factory = backend_factory
         self.ingest_activity = ingest_activity or (lambda: {})
         self.close_ingest = close_ingest or (lambda _sid: None)
+        self.source_connected = source_connected
         self.clock = clock
         self.monotonic = monotonic
         self._stop = threading.Event()
@@ -95,6 +96,7 @@ class SessionSupervisor:
                     backoff_until = now + self.settings.poll_interval * 5
                 if phase == 'draining':
                     self.close_ingest(session_id)
+                    self._reap_disconnected_sources(session_id)
                     if not executor.running and self.store.drain_ready(session_id):
                         self.store.set_phase(session_id, 'ended', now=now)
                         LOG.info('session %s drained to ended', session_id)
@@ -127,6 +129,15 @@ class SessionSupervisor:
         else:
             self.store.fail_job(result.job, result.error or 'model_failed',
                                 retry_at=now + 5, now=now)
+
+    def _reap_disconnected_sources(self, session_id):
+        """Live sources with no ingest connection left are terminal (lost)."""
+        connected = self.source_connected
+        if not callable(connected):
+            return
+        for source in self.store.live_sources(session_id):
+            if not connected(session_id, source):
+                self.store.mark_source_lost(session_id, source)
 
     def _idle_expired(self, session_id):
         activity = self.ingest_activity()

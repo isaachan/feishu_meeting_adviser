@@ -216,6 +216,11 @@ class SessionStore:
                 (session_id, source, int(moment * 1_000_000_000)))
 
     @_locked
+    def live_sources(self, session_id):
+        return [row['source'] for row in self.db.execute(
+            "SELECT source FROM sources WHERE session_id=? AND state='live'",
+            (session_id,))]
+
     def source_row(self, session_id, source):
         row = self.db.execute(
             'SELECT * FROM sources WHERE session_id=? AND source=?', (session_id, source)).fetchone()

@@ -66,7 +66,8 @@ def main() -> None:
                           port=args.ingest_port)
     supervisor = SessionSupervisor(store, settings, backend_factory=backend_factory,
                                    ingest_activity=ingest.activity_snapshot,
-                                   close_ingest=ingest.close_session)
+                                   close_ingest=ingest.close_session,
+                                   source_connected=ingest.source_connected)
     api = AdvisorApi(store, supervisor, auth_client=HttpAuthClient(args.auth_url),
                      calendar_validator=(StubCalendarValidator(args.calendar_stub_description)
                                          if args.calendar_stub else _real_calendar()),

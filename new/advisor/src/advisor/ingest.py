@@ -87,6 +87,10 @@ class IngestServer:
         with self._live_guard:
             return dict(self._activity)
 
+    def source_connected(self, session_id: str, source: str) -> bool:
+        with self._live_guard:
+            return (session_id, source) in self._live
+
     def close_session(self, session_id: str) -> None:
         """Close all live connections of a session (draining sweep)."""
         loop = self.loop
