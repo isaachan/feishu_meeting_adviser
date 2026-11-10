@@ -1,7 +1,7 @@
-# 部署 · 节点与基线（v0.3 草案）
+# 部署 · 节点与基线（v0.4 草案）
 
 状态：设计基线。组件职责见 [ARCHITECTURE](ARCHITECTURE.md)。
-修订：v0.3 将 bot 与 OAuth 鉴权服务从 advisor 拆出，连同 advisor 共三个**独立部署节点**（v0.2 曾为 advisor 子系统）。
+修订：v0.3 将 bot 与 OAuth 鉴权服务从 advisor 拆出，连同 advisor 共三个**独立部署节点**（v0.2 曾为 advisor 子系统）；v0.4 评审修订：v1 最简网络基线——后端不接公网，ingest 走受信网络明文 ws，auth 内部 API 仅 advisor 调用（bot 不直连）。
 
 ## 1. 部署节点总览
 
@@ -24,9 +24,9 @@
 
 | 组件 | 监听 | 暴露范围 | 说明 |
 |---|---|---|---|
-| auth OAuth 回调（HTTPS） | `https://<域名>/oauth/callback`（反代 → `127.0.0.1:<P_auth>`） | 浏览器可达（**含手机**点开 IM 里的授权链接） | 首次授权/重新授权；redirect URI 必须与飞书应用后台注册值**精确匹配** |
-| auth API（HTTP） | `127.0.0.1:<P_auth>` | 仅 localhost | advisor/bot 获取有效用户凭据（`get_valid_token(open_id)` 类接口） |
-| advisor ingest（WS） | `0.0.0.0:<P_ingest>`（待定） | 受信网络 | recorder 音频/事件上行唯一入口；**流令牌**鉴权（非用户凭据） |
+| auth OAuth 回调（HTTPS） | `https://<域名>/oauth/callback`（反代 → `127.0.0.1:<P_auth>`） | 浏览器可达（部署网络内，**含手机**点开 IM 里的授权链接；域名可仅内网/VPN 解析） | 首次授权/重新授权；redirect URI 必须与飞书应用后台注册值**精确匹配** |
+| auth API（HTTP） | `127.0.0.1:<P_auth>` | 仅 localhost | advisor 获取有效用户凭据（`get_valid_token(open_id)` 类接口）与授权 URL；bot 不直连 auth |
+| advisor ingest（WS） | `0.0.0.0:<P_ingest>`（待定） | 受信网络 | recorder 音频/事件上行唯一入口；**流令牌**鉴权（非用户凭据）；每条音频源一条连接；v1 受信网络**明文 ws**（最简基线，公网/拆机前补 TLS） |
 | advisor API（HTTP） | `127.0.0.1:<P_api>` | 仅 localhost | bot 调用（指令触发会话操作、订阅读写、待发 IM 拉取/回写）+ 运维 CLI |
 | bot | 出站长连接 | — | 主动外连飞书（`lark.ws.Client`），不监听端口 |
 | stt-server（WS） | `127.0.0.1:<P_stt>` | 仅 localhost | auth 固定 `none`（准入已由 advisor 完成） |
@@ -39,12 +39,12 @@
 | 凭据 | 存放 | 用途 |
 |---|---|---|
 | 飞书自建应用 app_id/secret | `bot` 与 `auth` 各持一份所需配置（同一自建应用；bot 用于 IM 收发/tenant token，auth 用于 OAuth 换取），600 权限 | 两节点各自所需的最小能力 |
-| 组织者 user_access_token/refresh_token | **`auth` 节点**（按 open_id 隔离存储；0600+独立数据目录，静态加密可选） | 凭据生命周期由 auth 管理；advisor/bot 经 auth API 取有效 token 用后不留存 |
+| 组织者 user_access_token/refresh_token | **`auth` 节点**（按 open_id 隔离存储；0600+独立数据目录，静态加密可选） | 凭据生命周期由 auth 管理；advisor 经 auth API 取有效 token 用后不留存（bot 不直连 auth） |
 | 会话流令牌 | `advisor` 铸造 → bot 经 IM 命令下发 → laptop 内存 | 仅绑定单一 session、短期、会话结束即吊销；**任何用户凭据不落 laptop** |
 | GLM 凭据 | `llm-gateway` 运行环境（沿用旧 OpenCode 登录注入） | 模型执行 |
 | 节点间（云内） | 无 | localhost 互调无认证（同机受信边界；拆机部署时补 mTLS/服务间凭据） |
 
-v1 运营在受信网络（内网/VPN）；接入公网或三节点拆机前必须补：ingest 与回调通道 TLS、服务间认证、用户凭据静态加密、按用户配额与隔离审计。
+v1 运营在受信网络（内网/VPN），后端不接公网：ingest 走明文 ws（v1 接受），OAuth 回调经 TLS 反代（域名只需在部署网络内解析）。接入公网或三节点拆机前必须补：ingest TLS、服务间认证、用户凭据静态加密、按用户配额与隔离审计。
 
 ## 4. 数据落点
 
@@ -72,4 +72,4 @@ bot 无业务持久状态（重启丢失的仅 IM 去重缓存，飞书事件重
 
 ## 6. 首版验收环境
 
-单台 Ubuntu 服务器（含域名/TLS 反代，五个 systemd 单元）+ 一台 Mac laptop + 两个飞书账号（小A/小B），覆盖 REQUIREMENTS S1–S5 全场景：含首次授权全流程（电脑与手机各点一次授权链接，回调落在 auth 节点）、四种拒绝路径（未授权/非组织者/超窗/会议不存在）、断网/合盖/撤销/拒绝、bot 与 auth 各自重启不影响进行中会话；模型先用 gateway 假模型打通，再切真实 GLM（沿用旧仓库"假模型先行"验收方法）。
+单台 Ubuntu 服务器（OAuth 回调域名 + TLS 反代，域名可仅内网/VPN 解析；五个 systemd 单元）+ 一台 Mac laptop + 两个飞书账号（小A/小B），覆盖 REQUIREMENTS S1–S5 全场景：含首次授权全流程（电脑与手机各点一次授权链接，回调落在 auth 节点）、四种拒绝路径（未授权/非组织者/超窗/会议不存在）、断网/合盖/撤销/拒绝、bot 与 auth 各自重启不影响进行中会话；模型先用 gateway 假模型打通，再切真实 GLM（沿用旧仓库"假模型先行"验收方法）。
