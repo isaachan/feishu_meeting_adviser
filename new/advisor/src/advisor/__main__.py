@@ -38,8 +38,10 @@ def main() -> None:
     serve.add_argument('--model', choices=['remote', 'rule'], default='remote')
     serve.add_argument('--remote-backend', choices=['fake', 'opencode'], default='opencode',
                        help='gateway backend tag sent with inference jobs')
+    serve.add_argument('--calendar', choices=['stub', 'feishu'], default='feishu',
+                       help='calendar validation mode (default: real Feishu reads)')
     serve.add_argument('--calendar-stub', action='store_true',
-                       help='stub calendar validation (stub-first stages only)')
+                       help='[deprecated] same as --calendar stub')
     serve.add_argument('--calendar-stub-description', default='')
 
     args = parser.parse_args()
@@ -68,9 +70,13 @@ def main() -> None:
                                    ingest_activity=ingest.activity_snapshot,
                                    close_ingest=ingest.close_session,
                                    source_connected=ingest.source_connected)
+    if args.calendar == 'stub' or args.calendar_stub:
+        calendar_validator = StubCalendarValidator(args.calendar_stub_description)
+    else:
+        from .calendar import FeishuCalendarValidator
+        calendar_validator = FeishuCalendarValidator(HttpAuthClient(args.auth_url))
     api = AdvisorApi(store, supervisor, auth_client=HttpAuthClient(args.auth_url),
-                     calendar_validator=(StubCalendarValidator(args.calendar_stub_description)
-                                         if args.calendar_stub else _real_calendar()),
+                     calendar_validator=calendar_validator,
                      ingest_url=args.ingest_url)
     stop_ingest = start_ingest_thread(ingest)
     supervisor.start()
@@ -86,11 +92,6 @@ def main() -> None:
         supervisor.stop()
         stop_ingest()
         store.close()
-
-
-def _real_calendar():
-    raise SystemExit('real calendar validation lands with stage 5 (M3); '
-                     'use --calendar-stub for stub-first stages')
 
 
 if __name__ == '__main__':

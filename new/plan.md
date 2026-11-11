@@ -87,7 +87,7 @@
 
 ## 8. 阶段 5：M3 —— 真实接入联调
 
-- [ ] **5.1 真实 OAuth + 日历校验。** 飞书应用后台注册回调（指向 auth）；真实账号授权（电脑+手机）；真实日历组织者/时间窗校验。**验收：**`data/acceptance-auth/` 同款取证（脱敏）。
+- [ ] **5.1 真实 OAuth + 日历校验。** 飞书应用后台注册回调（指向 auth）；真实账号授权（电脑+手机）；真实日历组织者/时间窗校验。**验收：**`data/acceptance-auth/` 同款取证（脱敏）。**进展（2026-11-10）：**代码侧就绪——真实 `FeishuCalendarValidator` 落地（旧 feishu_calendar.py 语义平移：vchat.meeting_url 提取 9 位会议号做事件映射、组织者= event_organizer.user_id ∈ 用户身份集合、时间窗 [start−30min, end+30min]、description 即材料、token 失效一次静默刷新；9 项注入式单测覆盖四拒绝路径/窗口松弛/取消与全天事件过滤/刷新/凭据中途丢失）；`advisor serve --calendar feishu|stub`（默认 feishu，--calendar-stub 兼容保留）。本地全栈脚本 `new/scripts/local-up.sh|local-down.sh` + `local.env.example` + `new/docs/LOCAL_TESTING.md`。待用户提供飞书应用凭据与真实会议进行实测取证。
 - [ ] **5.2 真实飞书 IM。** bot 上真应用（IM 三权限+长连接事件，沿用旧权限清单）；小A/小B 真账号跑 S1–S3。**验收：**真机全场景走查记录。
 - [ ] **5.3 真实 GLM。** gateway 切 OpenCode 后端，复用旧 M2 部署经验（`../docs/REMOTE_SERVER_DEVELOPMENT.md`）。**验收：**真实会议片段端到端，记录执行耗时。
 - [ ] **5.4 真实会议预验收。** 一场真实飞书会议全链路（双路采集、延迟、字幕质量、回答质量）。**验收：**证据存档；问题清单回填任务。
