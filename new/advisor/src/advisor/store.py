@@ -563,23 +563,37 @@ class SessionStore:
                 request_no, 'approved' if decision == 'approve' else 'denied', now=moment)
         return {'request_no': request_no, 'state': settled['state']}
 
-    def revoke_subscription(self, request_no, owner_open_id, *, now=None):
+    def revoke_subscription(self, request_no, caller_open_id, *, now=None):
+        """Approved -> revoked by the session owner OR the subscriber themself."""
         moment = time.time() if now is None else now
         with self.unit_of_work() as tx:
             row = tx.subscriptions.require(request_no)
             session = tx.sessions.require(row['session_id'])
-            if session['owner_open_id'] != owner_open_id:
+            caller_is_owner = session['owner_open_id'] == caller_open_id
+            caller_is_subscriber = row['subscriber_open_id'] == caller_open_id
+            if not (caller_is_owner or caller_is_subscriber):
                 raise StateError('not_owner')
             if row['state'] != 'approved':
                 raise StateError('invalid_state')
             settled = tx.subscriptions.settle(request_no, 'revoked', now=moment,
                                               expected='approved')
-            keep = set(tx.subscriptions.approved_recipients(row['session_id'], owner_open_id))
+            keep = set(tx.subscriptions.approved_recipients(row['session_id'],
+                                                            session['owner_open_id']))
             keep.discard(row['subscriber_open_id'])
             tx.outbox.cancel_pending_recipients(row['session_id'], keep)
         return {'request_no': request_no, 'state': settled['state']}
 
     @_locked
+    def subscriptions_for_subscriber(self, subscriber_open_id):
+        rows = self.db.execute(
+            'SELECT s.request_no, s.session_id, s.state, e.meeting_no, e.title '
+            'FROM subscriptions s JOIN sessions e ON e.session_id = s.session_id '
+            'WHERE s.subscriber_open_id=? ORDER BY s.request_no DESC',
+            (subscriber_open_id,)).fetchall()
+        return [{'request_no': row['request_no'], 'session_id': row['session_id'],
+                 'meeting_no': row['meeting_no'], 'title': row['title'],
+                 'state': row['state']} for row in rows]
+
     def subscriptions_for(self, session_id):
         return [dict(row) for row in self.db.execute(
             'SELECT request_no,subscriber_open_id,state FROM subscriptions '

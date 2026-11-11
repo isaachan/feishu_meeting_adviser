@@ -13,7 +13,7 @@
 | T1 | — | → `requested` | `POST /subscription-requests`（小B 申请） | 目标会话 phase=`recording`；该 `(subscriber, session)` 无 `approved` 行；无 `revoked` 行 | `201 {request_no, state:requested}` |
 | T2 | `requested` | → `approved` | owner `decide=approve` | 决策者 = 会话 owner；即刻进入 fan-out 集合（仅前向） | `200 {state:approved}` |
 | T3 | `requested` | → `denied` | owner `decide=deny` | 同上 | `200 {state:denied}` |
-| T4 | `approved` | → `revoked` | owner `revoke` | 终态；同时 cancel 该收件人 pending IM 行 | `200 {state:revoked}` |
+| T4 | `approved` | → `revoked` | owner `revoke`；或 **subscriber 自退订**（T1 修订：调用者为该订阅 subscriber） | 终态；同时 cancel 该收件人 pending IM 行 | `200 {state:revoked}` |
 | T5 | `denied` | → `requested`（新行） | 小B 再申请 | 新 `request_no`，旧行保留 `denied` | `201 {request_no 新, previous}` |
 
 ### 1.2 幂等与拒绝（非迁移响应）

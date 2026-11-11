@@ -91,10 +91,11 @@ def parse_command(raw_text: str) -> Command | None:
         else:
             number = 0  # act on the newest pending request
         return Command('approve' if head == '同意' else 'deny', request_no=number)
-    if head == '撤销订阅' and len(parts) >= 3:
-        no, _ = parse_meeting_reference(parts[-1])
-        name = ' '.join(parts[1:-1])
-        return Command('revoke', no, subscriber_name=name)
+    if head in ('取消订阅', '退订'):
+        if len(parts) >= 2:
+            no, _ = parse_meeting_reference(parts[1])
+            return Command('unsubscribe', no)
+        return Command('unsubscribe')
     if head == '撤销' and len(parts) >= 2 and parts[1].startswith('#'):
         match = _REQUEST_NO.fullmatch(parts[1])
         if not match:

@@ -15,9 +15,9 @@ from .recorder_command import CommandRenderError, render
 
 LOG = logging.getLogger(__name__)
 
-HELP = ('可用指令：会议列表 / 入会 <会议号|链接> / 结束会议 [会议号] / 状态 / '
-        '同意 [编号] / 拒绝 [编号]（不带编号=最新一条待审批）/ '
-        '撤销 [编号]（不带编号=唯一一条已批准）')
+HELP = ('会参谋指令：会议列表 / 入会 <会议号|链接> / 结束会议 [会议号] / 状态 / '
+        '同意 [编号] / 拒绝 [编号]（不带编号=最新待审批）/ 撤销 [编号]（撤销已批准的订阅）。'
+        '参会者可发：我想收到会议 <会议号> 的信息 / 取消订阅 [会议号]')
 
 
 class ImTransport(Protocol):
@@ -25,35 +25,11 @@ class ImTransport(Protocol):
     def send_reply(self, message_id: str, text: str) -> str: ...
 
 
-class Directory(Protocol):
-    """Nickname -> open_id resolution (learned from events or contacts API)."""
-
-    def learn(self, open_id: str, name: str) -> None: ...
-    def resolve(self, nickname: str) -> str | None: ...
-
-
-class MemoryDirectory:
-    def __init__(self):
-        self.by_name = {}
-        self._lock = threading.Lock()
-
-    def learn(self, open_id, name):
-        if open_id and name:
-            with self._lock:
-                self.by_name[name] = open_id
-
-    def resolve(self, nickname):
-        with self._lock:
-            return self.by_name.get(nickname)
-
-
 class BotService:
     def __init__(self, advisor: AdvisorClient, transport: 'ImTransport | None' = None, *,
-                 directory: Directory | None = None, poll_interval=1.0,
-                 outbox_limit=10, clock=time.time):
+                 poll_interval=1.0, outbox_limit=10, clock=time.time):
         self.advisor = advisor
         self.transport = transport
-        self.directory = directory or MemoryDirectory()
         self.poll_interval = poll_interval
         self.outbox_limit = outbox_limit
         self.clock = clock
@@ -70,8 +46,6 @@ class BotService:
             if message_id in self.seen:
                 return
             self.seen[message_id] = None
-        if sender_name:
-            self.directory.learn(sender_open_id, sender_name)
         try:
             command = parse_command(text)
         except CommandError as exc:
@@ -180,7 +154,7 @@ class BotService:
         self._reply(message_id, f'已拒绝订阅 #{result["request_no"]}。')
 
     def _cmd_revoke(self, sender, command, message_id):
-        if not command.request_no and not command.subscriber_name:
+        if not command.request_no:
             approved = []
             for session in self.advisor.list_sessions(sender).get('sessions', []):
                 status = self.advisor.session_status(session['session_id'])
@@ -196,30 +170,28 @@ class BotService:
                             '有多条已批准订阅，请指明编号：' +
                             '、'.join(f'#{number}' for number in sorted(approved)))
                 return
-        if command.request_no:
-            request_no = command.request_no
-        else:
-            request_no = self._find_subscription(sender, command)
-            if request_no is None:
-                self._reply(message_id, '未找到该参会者的订阅，可发送"状态"查看订阅列表')
-                return
-        result = self.advisor.revoke_subscription(request_no, sender, message_id=message_id)
+        result = self.advisor.revoke_subscription(command.request_no, sender,
+                                                  message_id=message_id)
         self._reply(message_id, f'已撤销订阅 #{result["request_no"]}，对方将不再收到回答。')
 
-    def _find_subscription(self, owner, command):
-        name = command.subscriber_name
-        open_id = (name if name.startswith('ou_') and len(name) > 10
-                   else self.directory.resolve(name))
-        if open_id is None:
-            return None
-        for session in self.advisor.list_sessions(owner).get('sessions', []):
-            if session['meeting_no'] != command.meeting_no:
-                continue
-            status = self.advisor.session_status(session['session_id'])
-            for row in status.get('subscriptions', []):
-                if row['subscriber_open_id'] == open_id and row['state'] == 'approved':
-                    return row['request_no']
-        return None
+    def _cmd_unsubscribe(self, sender, command, message_id):
+        """Subscriber-side opt-out: cancel my own approved subscription."""
+        pending = self.advisor.my_subscriptions(sender).get('subscriptions', [])
+        if command.meeting_no:
+            pending = [row for row in pending if row['meeting_no'] == command.meeting_no]
+        approved = [row for row in pending if row['state'] == 'approved']
+        if not approved:
+            self._reply(message_id, '你没有可取消的订阅。')
+            return
+        if len(approved) > 1:
+            listing = '、'.join(f'#{row["request_no"]}（会议 {row["meeting_no"]}）'
+                               for row in approved)
+            self._reply(message_id, f'你有多条订阅，请指明会议号：{listing}')
+            return
+        row = approved[0]
+        result = self.advisor.revoke_subscription_by_subscriber(row['request_no'], sender,
+                                                                message_id=message_id)
+        self._reply(message_id, f'已取消订阅 #{result["request_no"]}，不再接收该会议的回答。')
 
     def _cmd_meetings(self, sender, command, message_id):
         result = self.advisor.list_meetings(sender)

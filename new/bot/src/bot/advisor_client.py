@@ -87,6 +87,15 @@ class AdvisorClient:
                           {'owner_open_id': owner_open_id},
                           idempotency_key=self.key_for(message_id, f'revoke-{request_no}'))
 
+    def revoke_subscription_by_subscriber(self, request_no, subscriber_open_id, *,
+                                          message_id='local'):
+        return self._call('POST', f'/subscriptions/{request_no}/revoke',
+                          {'subscriber_open_id': subscriber_open_id},
+                          idempotency_key=self.key_for(message_id, f'revoke-{request_no}'))
+
+    def my_subscriptions(self, subscriber_open_id):
+        return self._call('GET', f'/subscriptions?subscriber_open_id={subscriber_open_id}')
+
     # -- outbox ----------------------------------------------------------------
 
     def pending_outbox(self, limit=10):

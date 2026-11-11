@@ -46,13 +46,13 @@ class ParseCommandTests(unittest.TestCase):
         with self.assertRaises(CommandError):
             parse_command('同意 12')
 
-    def test_revoke_forms(self):
-        command = parse_command('撤销订阅 小B 123456789')
-        self.assertEqual((command.kind, command.subscriber_name, command.meeting_no),
-                         ('revoke', '小B', '123456789'))
-        command = parse_command('撤销订阅 张 三 123456789')
-        self.assertEqual(command.subscriber_name, '张 三')
+    def test_revoke_and_unsubscribe_forms(self):
         self.assertEqual(parse_command('撤销 #7').request_no, 7)
+        self.assertEqual(parse_command('撤销').kind, 'revoke')
+        self.assertEqual(parse_command('取消订阅').kind, 'unsubscribe')
+        command = parse_command('取消订阅 123456789')
+        self.assertEqual((command.kind, command.meeting_no), ('unsubscribe', '123456789'))
+        self.assertEqual(parse_command('退订 123456789').kind, 'unsubscribe')
 
     def test_status_and_mentions(self):
         self.assertEqual(parse_command('状态').kind, 'status')
@@ -128,6 +128,7 @@ class FakeAdvisor:
         self.subscriptions = []
         self.pending = []
         self.meetings = {'now': 0, 'meetings': []}
+        self.my_subs = []
 
     def create_session(self, owner, meeting_no, *, password='', mic=False, message_id=''):
         self.calls.append(('create_session', owner, meeting_no, message_id))
@@ -170,6 +171,15 @@ class FakeAdvisor:
     def list_meetings(self, owner_open_id):
         self.calls.append(('list_meetings', owner_open_id))
         return self.meetings
+
+    def my_subscriptions(self, subscriber_open_id):
+        self.calls.append(('my_subscriptions', subscriber_open_id))
+        return {'subscriptions': list(self.my_subs)}
+
+    def revoke_subscription_by_subscriber(self, request_no, subscriber_open_id, *,
+                                          message_id=''):
+        self.calls.append(('revoke_by_subscriber', request_no))
+        return {'request_no': request_no, 'state': 'revoked'}
 
     def pending_outbox(self, limit=10):
         self.calls.append(('pending', limit))
@@ -236,13 +246,19 @@ class BotServiceTests(unittest.TestCase):
         self.handle('同意 #7', message_id='om-5')
         self.assertIn('已批准', self.transport.replies[-1][1])
 
-    def test_revoke_by_nickname_via_directory(self):
-        self.handle('我想收到会议 123456789 的信息', sender='ou_B', message_id='om-6',
-                    name='小B')
-        self.advisor.subscriptions = [{'request_no': 7, 'subscriber_open_id': 'ou_B',
-                                       'state': 'approved'}]
-        reply = self.handle('撤销订阅 小B 123456789', message_id='om-7')
-        self.assertIn('已撤销', reply)
+    def test_subscriber_unsubscribes_self(self):
+        self.advisor.my_subs = [
+            {'request_no': 7, 'meeting_no': '123456789', 'state': 'approved'},
+            {'request_no': 4, 'meeting_no': '999888777', 'state': 'denied'}]
+        reply = self.handle('取消订阅', sender='ou_B', message_id='om-6')
+        self.assertIn('已取消订阅 #7', reply)
+        self.advisor.my_subs = [
+            {'request_no': 7, 'meeting_no': '123456789', 'state': 'approved'},
+            {'request_no': 9, 'meeting_no': '999888777', 'state': 'approved'}]
+        reply = self.handle('取消订阅', sender='ou_B', message_id='om-6c')
+        self.assertIn('请指明会议号', reply)
+        reply = self.handle('取消订阅 999888777', sender='ou_B', message_id='om-6d')
+        self.assertIn('已取消订阅 #9', reply)
 
     def test_meetings_listing(self):
         self.advisor.meetings = {'now': 0, 'meetings': [
@@ -284,7 +300,7 @@ class BotServiceTests(unittest.TestCase):
         self.assertIn('《周会》', reply)
 
     def test_help_on_unknown(self):
-        self.assertIn('可用指令', self.handle('随便聊聊', message_id='om-9'))
+        self.assertIn('会参谋指令', self.handle('随便聊聊', message_id='om-9'))
 
     def test_outbox_poll_delivers_and_acks(self):
         self.advisor.pending = [{'uuid': 'u-1', 'kind': 'reply', 'channel': 'im',

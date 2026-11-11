@@ -113,6 +113,23 @@ class StateMachineSpecTests(unittest.TestCase):
                                               now=self.now)
         self.assertEqual(echo['state'], 'approved')
 
+    def test_subscriber_may_revoke_own_subscription_only(self):
+        request = self.subscribe()
+        self.store.decide_subscription(request['request_no'], 'ou_A', 'approve', now=self.now)
+        # a third party cannot revoke
+        with self.assertRaises(StateError):
+            self.store.revoke_subscription(request['request_no'], 'ou_X', now=self.now)
+        # the subscriber themself can (opt-out)
+        result = self.store.revoke_subscription(request['request_no'], 'ou_B', now=self.now)
+        self.assertEqual(result['state'], 'revoked')
+
+    def test_subscriptions_for_subscriber_listing(self):
+        request = self.subscribe()
+        self.store.decide_subscription(request['request_no'], 'ou_A', 'approve', now=self.now)
+        rows = self.store.subscriptions_for_subscriber('ou_B')
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0]['meeting_no'], rows[0]['state']), ('123456789', 'approved'))
+
     def test_owner_gates_and_invalid_decisions(self):
         request = self.subscribe()
         with self.assertRaises(StateError):

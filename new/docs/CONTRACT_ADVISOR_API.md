@@ -135,6 +135,7 @@
 
 成功（200）：`{"request_no": 7, "state": "revoked"}`。
 
+- 调用者必须是**会话 owner 或该订阅的 subscriber 本人**（二选一字段：`owner_open_id` / `subscriber_open_id`；2026-11-11 T1 修订：参会者自退订）。
 - 仅 `approved` 可撤销（`requested`/`denied` 下撤销 → `invalid_state`）；**revoked 为终态**。
 - 撤销即刻止血：该收件人 pending 的 IM 行置 cancelled（沿用旧 `reconcile_destinations` 语义），后续决策不再 fan-out。
 
@@ -175,6 +176,15 @@
 bot 回小B："该订阅已被组织者撤销"。
 
 ## 7. outbox 拉取与回写（通知面）
+
+### 7.0 `GET /subscriptions?subscriber_open_id=ou_B` —— 参会者查询自己的订阅
+
+```json
+{"subscriptions": [{"request_no": 7, "session_id": "s-3f9c", "meeting_no": "123456789",
+  "title": "周会", "state": "approved"}]}
+```
+
+（T1 新增：供 bot 的「取消订阅 [会议号]」指令定位订阅。）
 
 ### 7.1 `GET /outbox/pending?limit=10&owner_open_id=ou_A`
 

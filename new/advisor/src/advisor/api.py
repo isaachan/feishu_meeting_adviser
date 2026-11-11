@@ -218,15 +218,21 @@ class AdvisorApi:
             raise ApiError(404, 'not_found', 'unknown request') from None
 
     def revoke_subscription(self, request_no, body):
+        caller = body.get('owner_open_id') or body.get('subscriber_open_id')
         try:
             return self.store.revoke_subscription(
-                request_no, body.get('owner_open_id'), now=self.clock())
+                request_no, caller, now=self.clock())
         except StateError as exc:
             raise _state_error(exc) from None
         except StorageError:
             raise ApiError(404, 'not_found', 'unknown request') from None
 
     # -- outbox ---------------------------------------------------------------
+
+    def list_subscriptions(self, subscriber):
+        if not isinstance(subscriber, str) or not subscriber:
+            raise ApiError(400, 'bad_message', 'subscriber_open_id required')
+        return {'subscriptions': self.store.subscriptions_for_subscriber(subscriber)}
 
     def pending_outbox(self, limit):
         try:
@@ -324,6 +330,9 @@ def build_api_server(api: AdvisorApi, host='127.0.0.1', port=8380):
             elif parsed.path.startswith('/sessions/') and parsed.path.endswith('/status'):
                 session_id = parsed.path[len('/sessions/'):-len('/status')]
                 self._run(lambda: (api.session_status(session_id), False))
+            elif parsed.path == '/subscriptions':
+                subscriber = query.get('subscriber_open_id', [None])[0]
+                self._run(lambda: (api.list_subscriptions(subscriber), False))
             elif parsed.path == '/outbox/pending':
                 limit = query.get('limit', ['10'])[0]
                 self._run(lambda: (api.pending_outbox(limit), False))
