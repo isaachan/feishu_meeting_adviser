@@ -17,12 +17,18 @@ AUTH_BASE_URL="${AUTH_BASE_URL:-http://127.0.0.1:8381}"
 
 VENV="$ROOT/new/.venv-local"
 if [ ! -x "$VENV/bin/python" ]; then
+  echo "[setup] 创建虚拟环境（首次运行约 2-5 分钟，取决于网络）"
   python3 -m venv "$VENV"
-  "$VENV/bin/pip" -q install --upgrade pip
-  for m in auth stt-server llm-gateway advisor bot recorder; do
-    "$VENV/bin/pip" -q install -e "$ROOT/new/$m"
-  done
+  "$VENV/bin/pip" install --quiet --timeout 60 --retries 2 --upgrade pip
 fi
+for m in auth stt-server llm-gateway advisor bot recorder; do
+  marker="$VENV/lib/"*"/site-packages/__editable__.${m//-/_}"*-*.pth
+  if ! ls $~marker >/dev/null 2>&1; then
+    echo "[setup] 安装模块 $m …"
+    "$VENV/bin/pip" install --timeout 60 --retries 2 -e "$ROOT/new/$m"
+  fi
+done
+echo "[setup] 依赖就绪"
 
 DATA="$ROOT/new/data/local"
 mkdir -p "$DATA"/{auth,advisor,logs}
