@@ -98,6 +98,8 @@ def parse_command(raw_text: str) -> Command | None:
         return Command('revoke', request_no=int(match.group(1)))
     if text == '状态':
         return Command('status')
+    if text in ('会议列表', '会议'):
+        return Command('meetings')
     # subscription intent: unmatched text that references a meeting
     for token in parts:
         if _MEETING_NO.fullmatch(token) or '://' in token:

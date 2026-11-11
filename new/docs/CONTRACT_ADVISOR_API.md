@@ -55,6 +55,18 @@
 
 ## 3. 会话查询与结束
 
+### 3.0 `GET /meetings?owner_open_id=ou_A` —— `会议列表` 指令的数据源（T1）
+
+```json
+{"now": 1762800000, "meetings": [{"meeting_no": "123456789", "title": "周会",
+  "start_ts": 1762801200, "end_ts": 1762804800,
+  "is_organizer": true, "in_progress": false}]}
+```
+
+- 时间窗：[now−30min, now+7d]，按 start 升序，至多 10 条；`meeting_no` 取自事件 `vchat.meeting_url`，无视频链接的事件为 `null`。
+- 凭据缺失/失效 → 409 `authorization_required`（附 `authorize_url`，intent=`list:meetings`），与入会同门。
+- 只读，不建会话、不进模型上下文。
+
 ### 3.1 `GET /sessions?owner_open_id=ou_A` —— `状态` 指令的数据源
 
 ```json

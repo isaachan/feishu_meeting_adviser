@@ -127,6 +127,7 @@ class FakeAdvisor:
         self.error = None
         self.subscriptions = []
         self.pending = []
+        self.meetings = {'now': 0, 'meetings': []}
 
     def create_session(self, owner, meeting_no, *, password='', mic=False, message_id=''):
         self.calls.append(('create_session', owner, meeting_no, message_id))
@@ -165,6 +166,10 @@ class FakeAdvisor:
     def revoke_subscription(self, request_no, owner, *, message_id=''):
         self.calls.append(('revoke', request_no, owner))
         return {'request_no': request_no, 'state': 'revoked'}
+
+    def list_meetings(self, owner_open_id):
+        self.calls.append(('list_meetings', owner_open_id))
+        return self.meetings
 
     def pending_outbox(self, limit=10):
         self.calls.append(('pending', limit))
@@ -238,6 +243,22 @@ class BotServiceTests(unittest.TestCase):
                                        'state': 'approved'}]
         reply = self.handle('撤销订阅 小B 123456789', message_id='om-7')
         self.assertIn('已撤销', reply)
+
+    def test_meetings_listing(self):
+        self.advisor.meetings = {'now': 0, 'meetings': [
+            {'meeting_no': '123456789', 'title': '周会', 'start_ts': 1790000000,
+             'end_ts': 1790003600, 'is_organizer': True, 'in_progress': False},
+            {'meeting_no': None, 'title': '无链接会', 'start_ts': 1790100000,
+             'end_ts': 1790103600, 'is_organizer': False, 'in_progress': False}]}
+        reply = self.handle('会议列表', message_id='om-m1')
+        self.assertIn('《周会》 会议号 123456789', reply)
+        self.assertIn('你是组织者', reply)
+        self.assertIn('无会议号', reply)
+        self.assertIn('非组织者', reply)
+
+    def test_meetings_parse_forms(self):
+        self.assertEqual(parse_command('会议列表').kind, 'meetings')
+        self.assertEqual(parse_command('会议').kind, 'meetings')
 
     def test_status_lists_sessions(self):
         reply = self.handle('状态', message_id='om-8')

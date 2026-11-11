@@ -55,6 +55,9 @@ class AdvisorClient:
                            'mic_enabled': mic},
                           idempotency_key=self.key_for(message_id, 'create-session'))
 
+    def list_meetings(self, owner_open_id):
+        return self._call('GET', f'/meetings?owner_open_id={owner_open_id}')
+
     def list_sessions(self, owner_open_id):
         return self._call('GET', f'/sessions?owner_open_id={owner_open_id}')
 

@@ -152,6 +152,30 @@ class FeishuCalendarValidator:
             raise CalendarError('auth_unavailable')
         return frozenset(identities)
 
+    def list_meetings(self, owner_open_id, *, days=7, limit=10):
+        """Upcoming meetings (plan-C T1): recent + next ``days`` days, with the
+        nine-digit meeting number extracted from vchat.meeting_url when present."""
+        now = int(self._clock())
+        identities = self._identities(owner_open_id)
+        events = self._window_events(now, owner_open_id)
+        meetings = []
+        for event in events:
+            start = _timestamp(event, 'start_time')
+            end = _timestamp(event, 'end_time')
+            if start is None or end is None or end < start:
+                continue
+            if end < now - WINDOW_SECONDS or start > now + days * 86400:
+                continue
+            meetings.append({
+                'meeting_no': _meeting_no(event),
+                'title': (event.get('summary') or '(无标题)')[:120],
+                'start_ts': start, 'end_ts': end,
+                'is_organizer': _organizer_id(event) in identities,
+                'in_progress': start <= now <= end,
+            })
+        meetings.sort(key=lambda item: item['start_ts'])
+        return {'now': now, 'meetings': meetings[:limit]}
+
     def _window_events(self, now, owner_open_id):
         data = self._get(CALENDARS_PATH, {'page_size': 50}, owner_open_id).get('data')
         items = data.get('calendar_list') if isinstance(data, dict) else None

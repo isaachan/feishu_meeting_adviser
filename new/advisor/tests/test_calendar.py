@@ -158,5 +158,38 @@ class ValidatorTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 'auth_unavailable')
 
 
+class ListMeetingsTests(unittest.TestCase):
+    def make(self, events):
+        auth = FakeAuth()
+        http = FakeHTTP(pages(events))
+        return FeishuCalendarValidator(auth, opener=http, clock=lambda: NOW)
+
+    def test_lists_windowed_meetings_with_numbers(self):
+        events = [event('evt_now', no='111111111', start=NOW - 600, end=NOW + 600),
+                  event('evt_later', '下周会', no='222222222',
+                        start=NOW + 2 * 86400, end=NOW + 2 * 86400 + 3600),
+                  event('evt_far', no='333333333', start=NOW + 20 * 86400,
+                        end=NOW + 20 * 86400 + 3600)]
+        result = self.make(events).list_meetings('ou_A')
+        numbers = [row['meeting_no'] for row in result['meetings']]
+        self.assertEqual(numbers, ['111111111', '222222222'])  # far event filtered
+        first = result['meetings'][0]
+        self.assertTrue(first['in_progress'])
+        self.assertTrue(first['is_organizer'])
+
+    def test_events_without_vchat_have_no_number(self):
+        events = [event('evt_no_vc', no=None)]
+        result = self.make(events).list_meetings('ou_A')
+        self.assertEqual(result['meetings'][0]['meeting_no'], None)
+
+    def test_non_organizer_flag_and_limit(self):
+        events = [event(f'evt_{i}', no=f'10000000{i}', start=NOW + i * 7200,
+                        end=NOW + i * 7200 + 600, organizer='ou_OTHER')
+                  for i in range(12)]
+        result = self.make(events).list_meetings('ou_A')
+        self.assertLessEqual(len(result['meetings']), 10)
+        self.assertFalse(result['meetings'][0]['is_organizer'])
+
+
 if __name__ == '__main__':
     unittest.main()

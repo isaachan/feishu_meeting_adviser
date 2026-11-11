@@ -184,6 +184,29 @@ class BotService:
                     return row['request_no']
         return None
 
+    def _cmd_meetings(self, sender, command, message_id):
+        result = self.advisor.list_meetings(sender)
+        rows = result.get('meetings', [])
+        if not rows:
+            self._reply(message_id, '近期没有查到带视频会议链接的日历会议。')
+            return
+        import datetime
+        lines = []
+        for row in rows:
+            start = datetime.datetime.fromtimestamp(row['start_ts'])
+            end = datetime.datetime.fromtimestamp(row['end_ts'])
+            span = (f'{start.strftime("%m-%d %H:%M")}-{end.strftime("%H:%M")}'
+                    if start.date() == end.date()
+                    else f'{start.strftime("%m-%d %H:%M")} ~ {end.strftime("%m-%d %H:%M")}')
+            no = row.get('meeting_no')
+            no_text = f'会议号 {no}' if no else '无会议号'
+            flags = []
+            if row.get('in_progress'):
+                flags.append('进行中')
+            flags.append('你是组织者' if row.get('is_organizer') else '非组织者')
+            lines.append(f'《{row["title"]}》 {no_text} · {span} · {" · ".join(flags)}')
+        self._reply(message_id, '近期会议（入会请直接发：入会 <会议号>）：\n' + '\n'.join(lines))
+
     def _cmd_status(self, sender, command, message_id):
         listing = self.advisor.list_sessions(sender).get('sessions', [])
         if not listing:

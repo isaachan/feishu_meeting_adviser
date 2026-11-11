@@ -211,6 +211,30 @@ class SubscriptionApiTests(ApiBase):
         self.assertEqual((status, body['error']['code']), (404, 'not_found'))
 
 
+class MeetingsApiTests(ApiBase):
+    def test_lists_meetings(self):
+        status, body = self.get('/meetings?owner_open_id=ou_A')
+        self.assertEqual(status, 200)
+        self.assertEqual(body['meetings'][0]['meeting_no'], '123456789')
+
+    def test_meetings_require_owner(self):
+        try:
+            self.get('/meetings')
+            self.fail('expected HTTPError')
+        except error.HTTPError as exc:
+            self.assertEqual(exc.code, 400)
+
+    def test_meetings_authorization_required(self):
+        self.auth.mode = 'missing'
+        try:
+            self.get('/meetings?owner_open_id=ou_A')
+            self.fail('expected HTTPError')
+        except error.HTTPError as exc:
+            self.assertEqual(exc.code, 409)
+            payload = json.loads(exc.read())
+            self.assertEqual(payload['error']['code'], 'authorization_required')
+
+
 class OutboxApiTests(ApiBase):
     def test_pending_and_result_roundtrip(self):
         _, session = self.join()

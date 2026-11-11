@@ -38,6 +38,12 @@ class StubCalendarValidator(CalendarValidator):
         return {'event_calendar_id': 'cal_stub', 'event_id': f'evt_{meeting_ref.get("no")}',
                 'title': f'会议 {meeting_ref.get("no")}', 'description': self.description}
 
+    def list_meetings(self, owner_open_id, *, days=7, limit=10):
+        now = int(time.time())
+        return {'now': now, 'meetings': [{
+            'meeting_no': '123456789', 'title': '桩会议', 'start_ts': now + 3600,
+            'end_ts': now + 7200, 'is_organizer': True, 'in_progress': False}]}
+
 
 class ApiError(Exception):
     def __init__(self, status, code, message, **extra):
@@ -131,6 +137,24 @@ class AdvisorApi:
                 'event': f"{session['event_calendar_id']}/{session['event_id']}",
                 'url': self.ingest_url, 'token': token_row['stream_token'],
             }}
+
+    # -- meetings (plan-C T1) ---------------------------------------------------
+
+    def list_meetings(self, owner):
+        if not isinstance(owner, str) or not owner:
+            raise ApiError(400, 'bad_message', 'owner_open_id required')
+        try:
+            self.auth.get_token(owner)  # credentials gate (same as join)
+        except AuthorizationRequired:
+            url = self.auth.authorize_url(owner, 'list:meetings')
+            raise ApiError(409, 'authorization_required', 'user token missing/expired',
+                           authorize_url=url) from None
+        except AuthUnavailable:
+            raise ApiError(409, 'auth_unavailable', 'auth node unreachable') from None
+        try:
+            return self.calendar.list_meetings(owner)
+        except CalendarError as exc:
+            raise ApiError(409, exc.code, 'calendar read failed') from None
 
     # -- sessions ------------------------------------------------------------
 
@@ -292,6 +316,9 @@ def build_api_server(api: AdvisorApi, host='127.0.0.1', port=8380):
             query = parse.parse_qs(parsed.query, keep_blank_values=True)
             if parsed.path == '/healthz':
                 self._reply(200, {'status': 'ok'})
+            elif parsed.path == '/meetings':
+                owner = query.get('owner_open_id', [None])[0]
+                self._run(lambda: (api.list_meetings(owner), False))
             elif parsed.path == '/sessions':
                 self._run(lambda: (api.list_sessions(query.get('owner_open_id', [None])[0]), False))
             elif parsed.path.startswith('/sessions/') and parsed.path.endswith('/status'):
