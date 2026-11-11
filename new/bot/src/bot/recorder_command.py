@@ -9,7 +9,9 @@ no source here.
 import re
 
 SESSION_ID = re.compile(r'[A-Za-z0-9-]{6,64}')
-EVENT_PART = re.compile(r'[A-Za-z0-9_-]{1,128}')
+# real Feishu calendar/event ids may carry . @ ~ and inner slashes
+# (legacy probe regex: [A-Za-z0-9_.@~-]); keep quoting safe regardless
+EVENT_PART = re.compile(r'[A-Za-z0-9_.@~-]{1,256}')
 TOKEN = re.compile(r'[A-Za-z0-9_-]{16,128}')
 URL = re.compile(r'ws://[A-Za-z0-9._:-]+(:[0-9]+)?/ingest')
 SPEAKER = re.compile(r'[^\x00-\x1f\x7f\'"\\]{1,64}')
@@ -32,7 +34,8 @@ def render(args: dict) -> str:
     token = args.get('token')
     if not (isinstance(session, str) and SESSION_ID.fullmatch(session)):
         raise CommandRenderError('session id charset rejected')
-    if not (isinstance(event, str) and event.count('/') == 1
+    if not (isinstance(event, str) and '/' in event
+            and event.split('/')[0] and event.split('/')[-1]
             and all(EVENT_PART.fullmatch(part) for part in event.split('/'))):
         raise CommandRenderError('event charset rejected')
     if not (isinstance(url, str) and URL.fullmatch(url)):

@@ -221,7 +221,7 @@ recorder real --session <session_id> --event '<calendar_id>/<event_id>' \
 | 参数 | 必填 | 格式/字符集 | 说明 |
 |---|---|---|---|
 | `--session` | 是 | `[A-Za-z0-9-]{6,64}`，云端分配 | 会话 id（advisor 命名空间，**无** `local:` 前缀） |
-| `--event` | 是 | `<cal_id>/<event_id>`，各 `[A-Za-z0-9_-]{1,128}` | 建会时绑定的日历事件，与 ingest 校验一致（`bad_binding`） |
+| `--event` | 是 | `<cal_id>/<event_id>`，各段 `[A-Za-z0-9_.@~-]{1,256}`，至少一段斜杠分隔（2026-11-11 本地实测修正：真实日历 ID 可含 `.@~`，事件 ID 可自带 `/`，段间以 `/` 分隔逐段校验） | 建会时绑定的日历事件，与 ingest 校验一致（`bad_binding`） |
 | `--url` | 是 | `ws://<host>:8400/ingest` | ingest 端点；v1 明文 ws |
 | `--token` | 是 | `[A-Za-z0-9_-]{16,128}` | 流令牌，仅绑定本会话，短期 |
 | `--mic` | 否 | 开关 | 显式开启本机麦克风；默认不采集（隐私优先） |

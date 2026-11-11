@@ -73,6 +73,13 @@ class RenderCommandTests(unittest.TestCase):
         self.assertIn("--url 'ws://127.0.0.1:8400/ingest'", text)
         self.assertNotIn('--mic', text)
 
+    def test_event_accepts_real_feishu_id_shapes(self):
+        # real calendar/event ids carry . @ ~ and inner slashes (2026-11-11 probe)
+        for event in ('cal_abc/evt_xyz', 'user@feishu.cn/evt.ics-1',
+                       'cal.primary/evt_outer/inner~part'):
+            text = render(ARGS | {'event': event})
+            self.assertIn(f"--event '{event}'", text)
+
     def test_mic_and_speaker(self):
         text = render(ARGS | {'mic': True})
         self.assertIn('--mic', text)

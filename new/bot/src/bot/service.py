@@ -84,8 +84,9 @@ class BotService:
             handler(sender_open_id, command, message_id)
         except AdvisorApiError as exc:
             self._reply(message_id, self._advisor_error_text(exc))
-        except CommandRenderError:
-            self._reply(message_id, '采集命令渲染失败，请联系管理员')
+        except CommandRenderError as exc:
+            LOG.warning('command render failed: %s', exc)
+            self._reply(message_id, f'采集命令渲染失败（{exc}）；请联系管理员')
 
     def _reply(self, message_id, text):
         try:
