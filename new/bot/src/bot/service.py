@@ -10,13 +10,14 @@ import time
 from typing import Protocol
 
 from .advisor_client import AdvisorApiError, AdvisorClient
-from .commands import CommandError, parse_command
+from .commands import Command, CommandError, parse_command
 from .recorder_command import CommandRenderError, render
 
 LOG = logging.getLogger(__name__)
 
 HELP = ('可用指令：会议列表 / 入会 <会议号|链接> / 结束会议 [会议号] / 状态 / '
-        '同意 #rN / 拒绝 #rN / 撤销订阅 <小B> <会议号>（或 撤销 #rN）')
+        '同意 [编号] / 拒绝 [编号]（不带编号=最新一条待审批）/ '
+        '撤销 [编号]（不带编号=唯一一条已批准）')
 
 
 class ImTransport(Protocol):
@@ -150,17 +151,51 @@ class BotService:
         text = '会话已结束。' if phase == 'ended' else '正在排空收尾（draining），在途回答发完即结束。'
         self._reply(message_id, text)
 
+    def _pending_request_no(self, owner, state='requested'):
+        newest = None
+        for session in self.advisor.list_sessions(owner).get('sessions', []):
+            status = self.advisor.session_status(session['session_id'])
+            for row in status.get('subscriptions', []):
+                if row['state'] == state and (newest is None
+                                              or row['request_no'] > newest):
+                    newest = row['request_no']
+        return newest
+
     def _cmd_approve(self, sender, command, message_id):
-        result = self.advisor.decide_subscription(command.request_no, sender, 'approve',
+        number = command.request_no or self._pending_request_no(sender)
+        if number is None:
+            self._reply(message_id, '当前没有待审批的订阅申请。')
+            return
+        result = self.advisor.decide_subscription(number, sender, 'approve',
                                                   message_id=message_id)
         self._reply(message_id, f'已批准订阅 #{result["request_no"]}，之后的回答将同时发送给对方。')
 
     def _cmd_deny(self, sender, command, message_id):
-        result = self.advisor.decide_subscription(command.request_no, sender, 'deny',
+        number = command.request_no or self._pending_request_no(sender)
+        if number is None:
+            self._reply(message_id, '当前没有待审批的订阅申请。')
+            return
+        result = self.advisor.decide_subscription(number, sender, 'deny',
                                                   message_id=message_id)
         self._reply(message_id, f'已拒绝订阅 #{result["request_no"]}。')
 
     def _cmd_revoke(self, sender, command, message_id):
+        if not command.request_no and not command.subscriber_name:
+            approved = []
+            for session in self.advisor.list_sessions(sender).get('sessions', []):
+                status = self.advisor.session_status(session['session_id'])
+                approved += [row['request_no'] for row in status.get('subscriptions', [])
+                             if row['state'] == 'approved']
+            if len(approved) == 1:
+                command = Command('revoke', request_no=approved[0])
+            elif not approved:
+                self._reply(message_id, '当前没有已批准的订阅。')
+                return
+            else:
+                self._reply(message_id,
+                            '有多条已批准订阅，请指明编号：' +
+                            '、'.join(f'#{number}' for number in sorted(approved)))
+                return
         if command.request_no:
             request_no = command.request_no
         else:
@@ -172,7 +207,9 @@ class BotService:
         self._reply(message_id, f'已撤销订阅 #{result["request_no"]}，对方将不再收到回答。')
 
     def _find_subscription(self, owner, command):
-        open_id = self.directory.resolve(command.subscriber_name)
+        name = command.subscriber_name
+        open_id = (name if name.startswith('ou_') and len(name) > 10
+                   else self.directory.resolve(name))
         if open_id is None:
             return None
         for session in self.advisor.list_sessions(owner).get('sessions', []):
@@ -215,7 +252,9 @@ class BotService:
         lines = []
         for session in listing:
             status = self.advisor.session_status(session['session_id'])
-            subs = [f'#{s["request_no"]}:{s["subscriber_open_id"][-4:]}({s["state"]})'
+            state_text = {'requested': '待审批', 'approved': '已批准',
+                          'denied': '已拒绝', 'revoked': '已撤销'}
+            subs = [f'#{s["request_no"]} {state_text.get(s["state"], s["state"])}'
                     for s in status.get('subscriptions', [])]
             lines.append(f'《{session["title"]}》 {session["phase"]} · '
                          f'模型 {status.get("model_state", "?")} · 订阅 {" ".join(subs) or "无"}')

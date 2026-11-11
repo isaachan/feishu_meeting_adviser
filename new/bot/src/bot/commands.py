@@ -82,11 +82,15 @@ def parse_command(raw_text: str) -> Command | None:
             return Command('end')
         no, _ = parse_meeting_reference(parts[1])
         return Command('end', no)
-    if head in ('同意', '拒绝') and len(parts) >= 2:
-        match = _REQUEST_NO.fullmatch(parts[1].strip())
-        if not match:
-            raise CommandError(f'{head}需要形如"同意 #rN"的审批编号')
-        return Command('approve' if head == '同意' else 'deny', request_no=int(match.group(1)))
+    if head in ('同意', '拒绝'):
+        if len(parts) >= 2:
+            match = _REQUEST_NO.fullmatch(parts[1].strip())
+            if not match:
+                raise CommandError(f'{head}需要形如"同意 #rN"的审批编号')
+            number = int(match.group(1))
+        else:
+            number = 0  # act on the newest pending request
+        return Command('approve' if head == '同意' else 'deny', request_no=number)
     if head == '撤销订阅' and len(parts) >= 3:
         no, _ = parse_meeting_reference(parts[-1])
         name = ' '.join(parts[1:-1])
@@ -96,6 +100,8 @@ def parse_command(raw_text: str) -> Command | None:
         if not match:
             raise CommandError('撤销需要形如"撤销 #rN"的审批编号')
         return Command('revoke', request_no=int(match.group(1)))
+    if head == '撤销' and len(parts) == 1:
+        return Command('revoke')  # unique approved subscription, else prompt
     if text == '状态':
         return Command('status')
     if text in ('会议列表', '会议'):

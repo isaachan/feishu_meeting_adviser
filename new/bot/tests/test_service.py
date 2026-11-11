@@ -260,6 +260,25 @@ class BotServiceTests(unittest.TestCase):
         self.assertEqual(parse_command('会议列表').kind, 'meetings')
         self.assertEqual(parse_command('会议').kind, 'meetings')
 
+    def test_approve_without_number_uses_newest_pending(self):
+        self.advisor.subscriptions = [
+            {'request_no': 3, 'subscriber_open_id': 'ou_C', 'state': 'requested'},
+            {'request_no': 9, 'subscriber_open_id': 'ou_B', 'state': 'requested'}]
+        reply = self.handle('同意', message_id='om-approve-plain')
+        self.assertIn('#9', reply)
+
+    def test_revoke_without_number_needs_unique_approved(self):
+        self.advisor.subscriptions = [
+            {'request_no': 5, 'subscriber_open_id': 'ou_B', 'state': 'approved'}]
+        reply = self.handle('撤销', message_id='om-revoke-plain')
+        self.assertIn('已撤销', reply)
+        self.advisor.subscriptions = [
+            {'request_no': 5, 'subscriber_open_id': 'ou_B', 'state': 'approved'},
+            {'request_no': 8, 'subscriber_open_id': 'ou_C', 'state': 'approved'}]
+        reply = self.handle('撤销', message_id='om-revoke-two')
+        self.assertIn('#5', reply)
+        self.assertIn('#8', reply)
+
     def test_status_lists_sessions(self):
         reply = self.handle('状态', message_id='om-8')
         self.assertIn('《周会》', reply)
