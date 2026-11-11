@@ -15,7 +15,7 @@ from .recorder_command import CommandRenderError, render
 
 LOG = logging.getLogger(__name__)
 
-HELP = ('可用指令：入会 <会议号|链接> / 结束会议 [会议号] / 状态 / '
+HELP = ('可用指令：会议列表 / 入会 <会议号|链接> / 结束会议 [会议号] / 状态 / '
         '同意 #rN / 拒绝 #rN / 撤销订阅 <小B> <会议号>（或 撤销 #rN）')
 
 
