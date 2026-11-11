@@ -85,7 +85,12 @@ def run(service: BotService, app_id: str, app_secret: str, *, queue_size=100,
         name = (getattr(getattr(event.event, 'sender', None), 'sender_id', None)
                 and '') or ''
         try:
-            queue.put_nowait((message.message_id, open_id, name, message.text))
+            body = json.loads(message.content or '{}')
+        except (ValueError, TypeError):
+            body = {}
+        text = body.get('text', '') if isinstance(body, dict) else ''
+        try:
+            queue.put_nowait((message.message_id, open_id, name, text))
             LOG.info('queued %s from %s', message.message_id, open_id)
         except Full:
             LOG.warning('message queue full; dropping %s', message.message_id)
