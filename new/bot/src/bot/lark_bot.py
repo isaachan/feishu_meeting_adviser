@@ -32,7 +32,7 @@ class LarkTransport:
         response = self.api.im.v1.message.create(request)
         if not response.success():
             raise RuntimeError(f'lark create failed: {response.code()}')
-        return response.data().message_id
+        return response.data.message_id
 
     def send_reply(self, message_id, text) -> str:
         uuid = str(uuid5(NAMESPACE_URL, message_id + text))
@@ -45,7 +45,7 @@ class LarkTransport:
         response = self.api.im.v1.message.reply(request)
         if not response.success():
             raise RuntimeError(f'lark reply failed: {response.code()}')
-        return response.data().message_id
+        return response.data.message_id
 
 
 def run(service: BotService, app_id: str, app_secret: str, *, queue_size=100,
