@@ -22,3 +22,4 @@ config.*.yaml
 local-meeting-recorder/data/
 local-meeting-recorder/config.json
 new/data/
+new/scripts/local.env
