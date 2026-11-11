@@ -70,6 +70,9 @@ def run(service: BotService, app_id: str, app_secret: str, *, queue_size=100,
 
     def on_message(event):
         message = getattr(getattr(event, 'event', None), 'message', None)
+        LOG.info('event received: type=%s chat=%s',
+                 getattr(message, 'message_type', None),
+                 getattr(message, 'chat_type', None))
         if message is None or message.message_type != 'text':
             return
         sender_type = getattr(getattr(event.event, 'sender', None), 'sender_type', None)
@@ -83,6 +86,7 @@ def run(service: BotService, app_id: str, app_secret: str, *, queue_size=100,
                 and '') or ''
         try:
             queue.put_nowait((message.message_id, open_id, name, message.text))
+            LOG.info('queued %s from %s', message.message_id, open_id)
         except Full:
             LOG.warning('message queue full; dropping %s', message.message_id)
 
