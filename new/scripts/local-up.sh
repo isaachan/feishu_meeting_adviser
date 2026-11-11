@@ -32,6 +32,7 @@ echo "[setup] 依赖就绪"
 
 DATA="$ROOT/new/data/local"
 mkdir -p "$DATA"/{auth,advisor,logs}
+chmod 700 "$DATA" "$DATA/auth" "$DATA/advisor"   # advisor/auth 数据目录安全基线(700)
 PIDS="$DATA/pids"
 : > "$PIDS"
 
