@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        module: [recorder, advisor, bot, auth, stt-server, llm-gateway]
+        module: [recorder, advisor, bot, auth, stt-server, llm-gateway, macos-gui]
         python-version: ["3.11", "3.14"]
         exclude:
           # stt-server's migrated sync-client WS test harness is flaky on 3.11
