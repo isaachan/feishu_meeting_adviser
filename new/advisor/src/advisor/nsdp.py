@@ -56,7 +56,7 @@ def _looks_unauthorized(stdout: str, stderr: str) -> bool:
 class NsdpClient:
     """Runs ``noam nsdp …`` with the user token in the environment only."""
 
-    def __init__(self, *, noam_bin='noam', timeout_s=15.0, per_call_chars=4000, run=None):
+    def __init__(self, *, noam_bin='noam', timeout_s=60.0, per_call_chars=4000, run=None):
         self.noam_bin = noam_bin
         self.timeout_s = timeout_s
         self.per_call_chars = per_call_chars
@@ -68,28 +68,43 @@ class NsdpClient:
                               stdin=subprocess.DEVNULL)
 
     def brief(self, token, clues_text='') -> str:
-        """Returns a bounded text digest of the version plan for this token."""
+        """Returns a bounded text digest of the version plan for this token.
+
+        With clues: targeted ``releases --release <clue>`` calls only — the
+        whole-catalog ``nsdp info`` measured 30s+ against the real NSDP
+        (2026-11-12), which used to blow the join-time budget; targeted calls
+        run in ~1.5s. ``info`` remains the no-clue fallback.
+        """
         env = dict(os.environ)
         env['NSDP_TOKEN'] = token
         clues = extract_clues(clues_text)
-        commands = [('nsdp', 'info')] + [
-            ('nsdp', 'releases', '--release', clue) for clue in clues]
+        commands = ([('nsdp', 'releases', '--release', clue) for clue in clues]
+                    or [('nsdp', 'info')])
         sections = []
         for args in commands:
             argv = [self.noam_bin, *args]
+            started = time.monotonic()
             try:
                 completed = self._run(argv, env)
             except subprocess.TimeoutExpired:
+                LOG.warning('noam timeout: args=%s budget=%.0fs', ' '.join(args),
+                            self.timeout_s)
                 raise NsdpUnavailable('timeout') from None
             except OSError:
                 raise NsdpUnavailable('spawn_failed') from None
+            elapsed = time.monotonic() - started
             stdout = completed.stdout or ''
             stderr = completed.stderr or ''
             if completed.returncode != 0:
                 if _looks_unauthorized(stdout, stderr):
                     raise NsdpUnauthorized()
+                LOG.warning('noam failed: args=%s exit=%s elapsed=%.1fs stderr=%s',
+                            ' '.join(args), completed.returncode, elapsed,
+                            stderr[:200])
                 raise NsdpUnavailable(f'exit={completed.returncode}')
             text = stdout.strip()
+            if elapsed > 5:
+                LOG.info('noam slow call: args=%s elapsed=%.1fs', ' '.join(args), elapsed)
             if text:
                 sections.append('$ noam ' + ' '.join(args) + '\n'
                                 + text[:self.per_call_chars])

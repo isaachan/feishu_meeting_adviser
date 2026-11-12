@@ -48,6 +48,9 @@ def main() -> None:
     serve.add_argument('--nsdp', choices=['off', 'noam', 'stub'], default='noam',
                        help='NSDP organizer token gate/fetch mode (default: noam CLI)')
     serve.add_argument('--noam-bin', default='noam', help='noam CLI path for --nsdp noam')
+    serve.add_argument('--nsdp-timeout-s', type=float, default=60,
+                       help='per-call noam timeout for --nsdp noam (default 60; '
+                            'nsdp info walks the whole catalog and can take 30s+)')
     serve.add_argument('--nsdp-refresh-s', type=float, default=900,
                        help='NSDP material refresh interval seconds')
     serve.add_argument('--nsdp-retry-s', type=float, default=60,
@@ -77,7 +80,8 @@ def main() -> None:
     if args.nsdp == 'noam':
         from .nsdp import NsdpClient, NsdpService
         nsdp_service = NsdpService(HttpAuthClient(args.auth_url),
-                                   NsdpClient(noam_bin=args.noam_bin), store)
+                                   NsdpClient(noam_bin=args.noam_bin,
+                                              timeout_s=args.nsdp_timeout_s), store)
     elif args.nsdp == 'stub':
         from .nsdp import NsdpService, StubNsdpClient
         nsdp_service = NsdpService(HttpAuthClient(args.auth_url), StubNsdpClient(), store)

@@ -377,5 +377,56 @@ class SupervisorHoldTests(unittest.TestCase):
         self.assertFalse(self.store.status(session_id)['nsdp_hold'])
 
 
+class NsdpClientTests(unittest.TestCase):
+    """brief() command selection: targeted releases beat the slow catalog walk."""
+
+    @staticmethod
+    def client_with(calls, *, rc=0, stdout='plan text', stderr=''):
+        import subprocess
+
+        from advisor.nsdp import NsdpClient
+
+        def fake_run(argv, env):
+            calls.append(tuple(argv[1:]))
+            assert 'NSDP_TOKEN' in env and 'token' not in ' '.join(argv)
+            return subprocess.CompletedProcess(argv, rc, stdout=stdout, stderr=stderr)
+        return NsdpClient(noam_bin='noam', run=fake_run)
+
+    def test_clues_skip_whole_catalog_info(self):
+        calls = []
+        client = NsdpClientTests.client_with(calls)
+        text = client.brief('tok', '版本 BL2.1.0 与平台 NT3')
+        self.assertEqual(calls, [('nsdp', 'releases', '--release', 'BL2.1.0'),
+                                 ('nsdp', 'releases', '--release', 'NT3')])
+        self.assertIn('BL2.1.0', text)
+        self.assertIn('$ noam nsdp releases', text)
+        self.assertNotIn('nsdp info', text)
+
+    def test_no_clues_fall_back_to_info(self):
+        calls = []
+        client = NsdpClientTests.client_with(calls)
+        client.brief('tok', '没有线索的描述')
+        self.assertEqual(calls, [('nsdp', 'info')])
+
+    def test_timeout_maps_to_unavailable(self):
+        import subprocess
+        from advisor.nsdp import NsdpClient
+
+        def fake_run(argv, env):
+            raise subprocess.TimeoutExpired(argv, 60)
+        client = NsdpClient(noam_bin='noam', run=fake_run)
+        with self.assertRaises(NsdpUnavailable) as ctx:
+            client.brief('tok')
+        self.assertIn('timeout', str(ctx.exception))
+
+    def test_exit_401_shape_maps_to_unauthorized(self):
+        import json as _json
+        calls = []
+        client = NsdpClientTests.client_with(
+            calls, rc=1, stdout='', stderr=_json.dumps({'status_code': 401}))
+        with self.assertRaises(NsdpUnauthorized):
+            client.brief('tok')
+
+
 if __name__ == '__main__':
     unittest.main()
