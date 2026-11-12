@@ -31,3 +31,8 @@ class StubTransport:
         if isinstance(token, str) and token.startswith('stub-'):
             return token[len('stub-'):]
         raise ValueError('stub subject decode failed')
+
+    def user_info(self, token):
+        open_id = self.subject(token)
+        return {'open_id': open_id, 'name': f'用户 {open_id}',
+                'en_name': f'Stub {open_id}', 'email': f'{open_id}@stub.local'}
