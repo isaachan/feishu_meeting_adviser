@@ -6,12 +6,15 @@ event organizer, and now is within [start-30min, end+30min]. The event
 description becomes the session material (plan-C decision).
 """
 import json
+import logging
 import re
 import time
 from urllib import error, parse, request
 
 from .api import CalendarError
 from .auth_client import AuthUnavailable, AuthorizationRequired, HttpAuthClient
+
+LOG = logging.getLogger(__name__)
 
 BASE_URL = 'https://open.feishu.cn'
 USER_INFO_PATH = '/open-apis/authen/v1/user_info'
@@ -81,16 +84,26 @@ class FeishuCalendarValidator:
                 status = getattr(response, 'status', getattr(response, 'code', 200))
                 raw = response.read(MAX_RESPONSE_BYTES + 1)
         except (error.URLError, TimeoutError, OSError):
+            LOG.warning('calendar transport failed: path=%s', path, exc_info=True)
             raise CalendarError('auth_unavailable') from None
         try:
             result = json.loads(raw[:MAX_RESPONSE_BYTES])
         except (ValueError, UnicodeDecodeError):
+            LOG.warning('calendar reply not json: path=%s status=%s len=%d',
+                        path, status, len(raw))
             raise CalendarError('auth_unavailable') from None
         code = result.get('code')
         if 200 <= status < 300 and code == 0:
             return result
         if isinstance(code, int) and code in TOKEN_INVALID_CODES:
             raise _TokenRejected(code)
+        # Real provider rejection (e.g. transient 99992402 right after a
+        # fresh OAuth grant): surface the code/log_id for diagnosis instead
+        # of swallowing it into a generic "unavailable".
+        LOG.warning('calendar api rejected: path=%s status=%s code=%s msg=%s log_id=%s',
+                    path, status, code, result.get('msg'),
+                    (result.get('error') or {}).get('log_id')
+                    if isinstance(result.get('error'), dict) else None)
         raise CalendarError('auth_unavailable')
 
     def _get(self, path, query, owner_open_id):
