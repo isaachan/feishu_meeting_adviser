@@ -45,6 +45,22 @@ new/scripts/local-down.sh        # 停止
 端口：auth 8381 · advisor API 8380 · ingest 8400 · stt 8392 · gateway 8377。
 日志：`new/data/local/logs/`；重置全部本地数据：`rm -rf new/data/local`。
 
+> **升级注意（2026-11-12，GUI/schema v3）**：advisor DB schema 升到 v3（新增 `gui_devices` 表），旧的 `new/data/local/advisor/` 会被 `advisor serve` 拒绝（"schema unsupported; reinitialize"）。本地重置：`rm -rf new/data/local/advisor`（丢历史会话，凭据不受影响——auth 数据独立）。
+
+## 3a. GUI 客户端（macos-gui，T5）
+
+`local-up.sh` 已顺带安装。启动：
+
+```bash
+new/.venv-local/bin/macos-gui        # 或 new/.venv-local/bin/python -m macos_gui
+```
+
+- 首启设置页填服务器地址：`http://127.0.0.1:8380`（本地无反代，直连 advisor API）。
+- **本地扫码限制**：GUI 显示的二维码指向飞书授权页，回调注册的是 `http://127.0.0.1:8381/oauth/callback`——手机扫码后无法访问你 Mac 的 127.0.0.1。本地请点「在浏览器打开」用**电脑浏览器**完成登录/授权（与 §1 授权链接同限制）；正式部署（域名 + 反代）后扫码才可用。
+- 登录成功后顶栏显示身份；飞书里发「入会 <会议号>」→ 列表 ≤10s 出现会话 → 选中「开始采集」→ 监控面板看上行计数 → 「停止采集」干净收尾。首次采集会弹屏幕录制（SCK 内录）TCC 授权。
+- `device_token` 存 macOS Keychain；「退出登录」即注销设备。
+
+
 ## 4. 走查清单（S1–S5）
 
 1. **首次授权（S1）**：飞书里小A 对 bot 发 `入会 <9位会议号>` → bot 回授权链接 → **电脑浏览器**打开完成飞书授权 → 回飞书**重发** `入会 <会议号>` → 收到 recorder 启动命令。

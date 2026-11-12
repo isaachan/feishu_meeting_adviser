@@ -34,6 +34,11 @@ for m in auth stt-server llm-gateway advisor bot recorder; do
     "$VENV/bin/pip" install --timeout 60 --retries 2 -e "$ROOT/new/$m"
   fi
 done
+# GUI 客户端（含 PySide6/segno，体积较大，首次安装慢）
+if ! ls "$VENV/lib/"*"/site-packages/__editable__.macos_gui"*-*.pth >/dev/null 2>&1; then
+  echo "[setup] 安装模块 macos-gui[ui] …"
+  "$VENV/bin/pip" install --timeout 60 --retries 2 -e "$ROOT/new/macos-gui[ui]"
+fi
 echo "[setup] 依赖就绪"
 
 DATA="$ROOT/new/data/local"
@@ -85,4 +90,5 @@ echo "  stt:     ws://$HOST_IP:8392   health http://$HOST_IP:8393"
 echo "  gateway: http://$HOST_IP:8377"
 echo "  advisor: http://$HOST_IP:8380  ingest $INGEST_URL"
 echo "  bot: 飞书长连接（无监听端口）"
+echo "  GUI:    $VENV/bin/macos-gui   （服务器地址填 http://127.0.0.1:8380）"
 echo "日志：$DATA/logs/   停止：new/scripts/local-down.sh"
