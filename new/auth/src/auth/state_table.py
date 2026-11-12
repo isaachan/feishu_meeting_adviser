@@ -36,7 +36,7 @@ class StateTable:
                       if not isinstance(entry, dict) or now >= entry.get('expires_at', 0)]:
             del states[state]
 
-    def issue(self, open_id, intent, redirect_uri, verifier):
+    def issue(self, open_id, intent, redirect_uri, verifier, *, discovery=False):
         state = secrets.token_urlsafe(32)
         now = self.clock()
         with self._lock:
@@ -45,7 +45,7 @@ class StateTable:
             entry = {'open_id': open_id, 'intent': intent,
                      'redirect_uri': redirect_uri, 'verifier': verifier,
                      'created_at': now, 'expires_at': now + self.ttl_s,
-                     'used': False}
+                     'used': False, 'discovery': discovery}
             value['states'][state] = entry
             self._save(value)
         return {'state': state, **entry}
@@ -83,6 +83,33 @@ class StateTable:
             if entry.get('used'):
                 raise AuthError('oauth_state_used')
             return dict(entry)
+
+    def lookup(self, state):
+        """Read an entry without consuming it; None when unknown/expired.
+
+        Unlike peek, a used-but-still-alive entry is returned (the login
+        status poll needs it until the TTL prunes it).
+        """
+        if not isinstance(state, str) or not state:
+            raise AuthError('oauth_invalid_callback')
+        now = self.clock()
+        with self._lock:
+            value = self._load()
+            self._prune(value['states'], now)
+            entry = value['states'].get(state)
+            return dict(entry) if entry is not None else None
+
+    def complete(self, state, user):
+        """Attach the identity summary to a (consumed) entry for status polls."""
+        if not isinstance(state, str) or not state:
+            raise AuthError('oauth_invalid_callback')
+        with self._lock:
+            value = self._load()
+            entry = value['states'].get(state)
+            if entry is None:
+                raise AuthError('oauth_unknown_state')
+            entry['user'] = dict(user)
+            self._save(value)
 
     def release(self, state):
         """Drop a state entry (user declined)."""

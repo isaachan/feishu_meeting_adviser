@@ -7,6 +7,7 @@ USER_INFO_URL = 'https://open.feishu.cn/open-apis/authen/v1/user_info'
 CALLBACK_PATH = '/oauth/callback'
 NSDP_SUBMIT_PATH = '/nsdp/submit'
 NSDP_INTENT = 'nsdp:token'
+GUI_LOGIN_INTENT = 'gui:login'
 SCOPES = ('calendar:calendar:read', 'calendar:calendar.event:read', 'offline_access')
 MAX_FILE_BYTES = 65_536
 DEFAULT_STATE_TTL_S = 600

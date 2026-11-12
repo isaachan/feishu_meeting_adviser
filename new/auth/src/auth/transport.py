@@ -75,12 +75,30 @@ class FeishuTransport:
 
     def subject(self, token):
         """Return the authorized user's open_id (identity check happens in service)."""
+        return self.user_info(token)['open_id']
+
+    def user_info(self, token):
+        """Return the identity summary {open_id, name, en_name, email}.
+
+        Used by the discovery login (CONTRACT_AUTH v1.2): the summary lands in
+        the state record for /authorize/status; tokens never leave this module.
+        """
         data = self._call(USER_INFO_URL, token=token).get('data')
-        open_id = data.get('open_id') if isinstance(data, dict) else None
+        if not isinstance(data, dict):
+            raise AuthError('oauth_invalid_response')
+        open_id = data.get('open_id')
         if not isinstance(open_id, str) or not _SECRET_TEXT.fullmatch(open_id) or len(open_id) > 256:
             raise AuthError('oauth_invalid_response')
-        # Discard names, email, phone and the raw provider response immediately.
-        return open_id
+
+        def text(key):
+            value = data.get(key)
+            if isinstance(value, str) and 0 < len(value.strip()) <= 256:
+                return value.strip()
+            return None
+
+        # Discard everything else from the raw provider response immediately.
+        return {'open_id': open_id, 'name': text('name'),
+                'en_name': text('en_name'), 'email': text('email')}
 
     def subject_hash(self, open_id: str) -> str:
         return digest([self.credentials.app_id, open_id])

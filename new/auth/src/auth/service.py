@@ -14,8 +14,8 @@ import time
 from pathlib import Path
 from urllib import parse
 
-from .constants import (AUTHORIZE_URL, CALLBACK_PATH, DEFAULT_STATE_TTL_S, NSDP_INTENT,
-                        NSDP_SUBMIT_PATH, SCOPES)
+from .constants import (AUTHORIZE_URL, CALLBACK_PATH, DEFAULT_STATE_TTL_S, GUI_LOGIN_INTENT,
+                        NSDP_INTENT, NSDP_SUBMIT_PATH, SCOPES)
 from .errors import AuthError
 from .state_table import StateTable
 from .storage import digest
@@ -52,12 +52,19 @@ class AuthService:
             return lock
 
     def authorize_start(self, open_id, intent):
-        if not valid_open_id(open_id) or not isinstance(intent, str) or len(intent) > 128:
+        """Issue an authorize URL. Discovery variant (v1.2): intent=gui:login
+        takes open_id=None; the subject is discovered at callback time."""
+        discovery = intent == GUI_LOGIN_INTENT
+        if discovery and open_id is not None:
+            raise AuthError('oauth_invalid_open_id')
+        if (not discovery and not valid_open_id(open_id)) or \
+                not isinstance(intent, str) or len(intent) > 128:
             raise AuthError('oauth_invalid_open_id')
         verifier = secrets.token_urlsafe(48)
         challenge = base64.urlsafe_b64encode(
             hashlib.sha256(verifier.encode('ascii')).digest()).decode().rstrip('=')
-        entry = self.states.issue(open_id, intent, self.redirect_uri, verifier)
+        entry = self.states.issue(open_id, intent, self.redirect_uri, verifier,
+                                  discovery=discovery)
         url = AUTHORIZE_URL + '?' + parse.urlencode({
             'client_id': self.credentials.app_id, 'response_type': 'code',
             'redirect_uri': self.redirect_uri, 'scope': ' '.join(SCOPES),
@@ -84,18 +91,38 @@ class AuthService:
         started = self.clock()
         try:
             result = self.transport.exchange(params['code'], entry['redirect_uri'], entry['verifier'])
-            open_id = entry['open_id']
+            info = self.transport.user_info(result['access_token'])
+            if entry.get('discovery') or entry['open_id'] is None:
+                open_id = info['open_id']  # discovery: adopt the scanned identity
+            else:
+                open_id = entry['open_id']
+                if info['open_id'] != open_id:
+                    return {'outcome': 'failed', 'stage': 'identity', 'open_id': open_id}
             record = self.store.token_record(result, started=started, open_id=open_id,
                                              subject_hash=None)
-            actual = self.transport.subject(record['access_token'])
-            if actual != open_id:
-                return {'outcome': 'failed', 'stage': 'identity', 'open_id': open_id}
-            record['subject_hash'] = digest([self.credentials.app_id, actual])
+            record['subject_hash'] = digest([self.credentials.app_id, info['open_id']])
             with self.store.locked(open_id):
                 self.store.write(open_id, record)
+            self.states.complete(state, info)
         except AuthError as exc:
             return {'outcome': 'failed', 'stage': exc.stage or 'validation', 'open_id': entry['open_id']}
         return {'outcome': 'success', 'open_id': open_id, 'intent': entry['intent']}
+
+    def authorize_status(self, state):
+        """Poll a login state (CONTRACT_AUTH v1.2 §2.3): pending/completed.
+
+        Never returns tokens; completed carries only the identity summary
+        persisted by the callback.
+        """
+        entry = self.states.lookup(state)
+        if entry is None:
+            raise AuthError('oauth_unknown_state')
+        user = entry.get('user')
+        if isinstance(user, dict) and valid_open_id(user.get('open_id')):
+            return {'status': 'completed', 'user': {
+                'open_id': user['open_id'], 'name': user.get('name'),
+                'en_name': user.get('en_name'), 'email': user.get('email')}}
+        return {'status': 'pending'}
 
     def _callback_params(self, query_string):
         if not isinstance(query_string, str) or len(query_string) > 8192:

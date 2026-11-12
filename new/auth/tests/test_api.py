@@ -36,6 +36,10 @@ class FakeTransport:
     def subject(self, token):
         return self.open_id
 
+    def user_info(self, token):
+        return {'open_id': self.open_id, 'name': 'Kai Han',
+                'en_name': 'Kai Han', 'email': 'kai.han@nio.com'}
+
 
 OPENER = request.build_opener(request.ProxyHandler({}))  # bypass macOS system proxy
 
@@ -142,6 +146,34 @@ class ApiTests(unittest.TestCase):
         except error.HTTPError as exc:
             self.assertEqual(exc.code, 400)
             self.assertIn('无效', exc.read().decode('utf-8'))
+
+    def test_gui_login_flow_over_http(self):
+        """v1.2 discovery：start(open_id=null) → 回调采纳 → status completed。"""
+        status, start = self.post('/authorize/start', {'open_id': None, 'intent': 'gui:login'})
+        self.assertEqual(status, 200)
+        state = parse.parse_qs(parse.urlsplit(start['authorize_url']).query)['state'][0]
+
+        status, payload, _ = self.get('/authorize/status?state=' + parse.quote(state))
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(payload), {'status': 'pending'})
+
+        _, page, _ = self.get('/oauth/callback?' + parse.urlencode({'code': 'c-1', 'state': state}))
+        self.assertIn('登录成功', page)
+        self.assertIn('采集应用', page)
+
+        status, payload, _ = self.get('/authorize/status?state=' + parse.quote(state))
+        result = json.loads(payload)
+        self.assertEqual(result['status'], 'completed')
+        self.assertEqual(result['user']['open_id'], 'ou_A')
+        self.assertNotIn('u-first', payload)  # no token material
+
+    def test_authorize_status_unknown_state_maps_404(self):
+        try:
+            self.get('/authorize/status?state=nope')
+            self.fail('expected HTTPError')
+        except error.HTTPError as exc:
+            self.assertEqual(exc.code, 404)
+            self.assertEqual(json.loads(exc.read())['error']['code'], 'not_found')
 
 
 class ConfigTests(unittest.TestCase):

@@ -10,6 +10,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib import parse
 
+from .constants import GUI_LOGIN_INTENT
 from .errors import AuthError
 from .service import AuthService
 
@@ -20,12 +21,15 @@ _ERROR_MAP = {
     'oauth_busy': (503, 'busy'),
     'oauth_invalid_open_id': (400, 'bad_message'),
     'oauth_invalid_callback': (400, 'bad_message'),
+    'oauth_unknown_state': (404, 'not_found'),
     'nsdp_invalid_token': (400, 'bad_message'),
     'nsdp_invalid_provider': (400, 'bad_message'),
 }
 
 _SUCCESS_PAGE = ('<!doctype html><meta charset="utf-8"><title>授权成功</title>'
                  '<p>授权成功。请回到飞书，重新发送刚才的指令{intent}。</p>')
+_GUI_SUCCESS_PAGE = ('<!doctype html><meta charset="utf-8"><title>登录成功</title>'
+                     '<p>登录成功。请回到采集应用，它会自动继续。</p>')
 _DENIED_PAGE = ('<!doctype html><meta charset="utf-8"><title>已取消</title>'
                 '<p>已取消授权，未保存任何凭据。可回到飞书重新发起。</p>')
 _INVALID_PAGE = ('<!doctype html><meta charset="utf-8"><title>链接无效</title>'
@@ -136,9 +140,12 @@ class _Handler(BaseHTTPRequestHandler):
             except AuthError:
                 outcome = {'outcome': 'invalid'}
             if outcome['outcome'] == 'success':
-                intent = outcome.get('intent') or ''
-                hint = f'（{intent}）' if intent else ''
-                self._reply_page(200, _SUCCESS_PAGE.format(intent=hint))
+                if outcome.get('intent') == GUI_LOGIN_INTENT:
+                    self._reply_page(200, _GUI_SUCCESS_PAGE)
+                else:
+                    intent = outcome.get('intent') or ''
+                    hint = f'（{intent}）' if intent else ''
+                    self._reply_page(200, _SUCCESS_PAGE.format(intent=hint))
             elif outcome['outcome'] == 'denied':
                 self._reply_page(403, _DENIED_PAGE)
             elif outcome['outcome'] == 'failed':
@@ -171,6 +178,19 @@ class _Handler(BaseHTTPRequestHandler):
             except AuthError as exc:
                 status, payload = _api_error(exc)
                 self._reply_json(status, payload)
+            return
+        if parsed.path == '/authorize/status':
+            query = parse.parse_qs(parsed.query, keep_blank_values=True, max_num_fields=4)
+            states = query.get('state', [])
+            try:
+                if len(states) != 1:
+                    raise AuthError('oauth_invalid_callback')
+                result = self._service().authorize_status(states[0])
+            except AuthError as exc:
+                status, payload = _api_error(exc)
+                self._reply_json(status, payload)
+                return
+            self._reply_json(200, result)
             return
         self._reply_json(404, {'error': {'code': 'not_found', 'message': 'unknown path'}})
 

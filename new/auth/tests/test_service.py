@@ -53,6 +53,11 @@ class FakeTransport:
         self.subject_calls += 1
         return self.open_id
 
+    def user_info(self, token):
+        self.subject_calls += 1
+        return {'open_id': self.open_id, 'name': 'Kai Han',
+                'en_name': 'Kai Han', 'email': 'kai.han@nio.com'}
+
 
 class ManualClock:
     def __init__(self, now=1_000_000.0):
@@ -172,6 +177,108 @@ class AuthorizeFlowTests(unittest.TestCase):
             from urllib import parse
             state = parse.parse_qs(parse.urlsplit(start['authorize_url']).query)['state'][0]
             self.assertEqual(service.callback(f'code=c&state={state}')['outcome'], 'invalid')
+
+
+class DiscoveryLoginTests(unittest.TestCase):
+    """GUI 扫码登录（CONTRACT_AUTH v1.2）：discovery start + 采纳 + status。"""
+
+    def gui_authorize(self, service, transport):
+        from urllib import parse
+        start = service.authorize_start(None, 'gui:login')
+        state = parse.parse_qs(parse.urlsplit(start['authorize_url']).query)['state'][0]
+        return start, state
+
+    def complete_login(self, service, transport, clock=None):
+        from urllib import parse
+        start, state = self.gui_authorize(service, transport)
+        outcome = service.callback(parse.urlencode({'code': 'c-gui', 'state': state}))
+        return start, state, outcome
+
+    def test_start_allows_null_open_id_only_for_gui_intent(self):
+        with TemporaryDirectory() as tmp:
+            service = make_service(tmp, FakeTransport())
+            result = service.authorize_start(None, 'gui:login')
+            self.assertTrue(result['authorize_url'].startswith('https://'))
+            # bound intents still require an open_id
+            with self.assertRaises(AuthError):
+                service.authorize_start(None, 'join:123')
+            # gui:login with a bound open_id is rejected (advisor sends null)
+            with self.assertRaises(AuthError):
+                service.authorize_start('ou_A', 'gui:login')
+
+    def test_callback_adopts_scanned_identity(self):
+        with TemporaryDirectory() as tmp:
+            transport = FakeTransport(open_id='ou_KAI')
+            service = make_service(tmp, transport)
+            _, _, outcome = self.complete_login(service, transport)
+            self.assertEqual(outcome['outcome'], 'success')
+            self.assertEqual(outcome['open_id'], 'ou_KAI')
+            record = service.store.read('ou_KAI')
+            self.assertEqual(record['state'], 'ready')
+            self.assertTrue(record['subject_hash'])
+
+    def test_status_pending_then_completed_with_summary(self):
+        clock = ManualClock()
+        with TemporaryDirectory() as tmp:
+            transport = FakeTransport(open_id='ou_KAI')
+            service = make_service(tmp, transport, clock)
+            _, state, outcome = self.complete_login(service, transport)
+            self.assertEqual(outcome['outcome'], 'success')
+            result = service.authorize_status(state)
+            self.assertEqual(result['status'], 'completed')
+            self.assertEqual(result['user']['open_id'], 'ou_KAI')
+            self.assertEqual(result['user']['email'], 'kai.han@nio.com')
+            # red line: no token material in the status payload
+            self.assertNotIn('access_token', result)
+            self.assertNotIn('refresh_token', str(result))
+
+    def test_status_pending_before_callback_and_after_failure(self):
+        with TemporaryDirectory() as tmp:
+            transport = FakeTransport()
+            service = make_service(tmp, transport)
+            _, state = self.gui_authorize(service, transport)
+            self.assertEqual(service.authorize_status(state), {'status': 'pending'})
+            # consumed-but-failed (exchange error) stays pending until TTL
+            transport.fail_exchange = True
+            from urllib import parse
+            outcome = service.callback(parse.urlencode({'code': 'c-bad', 'state': state}))
+            self.assertEqual(outcome['outcome'], 'failed')
+            self.assertEqual(service.authorize_status(state), {'status': 'pending'})
+
+    def test_status_unknown_or_expired_state_is_not_found(self):
+        clock = ManualClock()
+        with TemporaryDirectory() as tmp:
+            transport = FakeTransport()
+            service = make_service(tmp, transport, clock)
+            with self.assertRaises(AuthError) as ctx:
+                service.authorize_status('nope')
+            self.assertEqual(ctx.exception.reason, 'oauth_unknown_state')
+            _, state = self.gui_authorize(service, transport)
+            clock.advance(601)
+            with self.assertRaises(AuthError):
+                service.authorize_status(state)
+
+    def test_non_discovery_identity_mismatch_still_rejects(self):
+        with TemporaryDirectory() as tmp:
+            transport = FakeTransport(open_id='ou_SOMEONE_ELSE')
+            service = make_service(tmp, transport)
+            _, outcome = authorize(service, transport)
+            self.assertEqual(outcome['outcome'], 'failed')
+            self.assertEqual(outcome['stage'], 'identity')
+            self.assertFalse(service.store.exists('ou_A'))
+
+    def test_non_discovery_success_also_lands_summary(self):
+        with TemporaryDirectory() as tmp:
+            transport = FakeTransport()
+            service = make_service(tmp, transport)
+            from urllib import parse
+            start = service.authorize_start('ou_A', 'join:9')
+            state = parse.parse_qs(parse.urlsplit(start['authorize_url']).query)['state'][0]
+            self.assertEqual(service.callback(
+                parse.urlencode({'code': 'c-abc', 'state': state}))['outcome'], 'success')
+            result = service.authorize_status(state)
+            self.assertEqual(result['status'], 'completed')
+            self.assertEqual(result['user']['open_id'], 'ou_A')
 
 
 class TokenTests(unittest.TestCase):
