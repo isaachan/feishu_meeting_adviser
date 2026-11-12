@@ -28,6 +28,8 @@ def main() -> None:
 
     serve = sub.add_parser('serve', help='run the advisor node')
     serve.add_argument('--data-dir', type=Path, default=Path('data'))
+    serve.add_argument('--api-host', default='127.0.0.1',
+                       help='API bind address (default 127.0.0.1)')
     serve.add_argument('--api-port', type=int, default=8380)
     serve.add_argument('--ingest-port', type=int, default=8400)
     serve.add_argument('--ingest-url', default='ws://127.0.0.1:8400/ingest',
@@ -102,7 +104,7 @@ def main() -> None:
                      ingest_url=args.ingest_url, nsdp=nsdp_service)
     stop_ingest = start_ingest_thread(ingest)
     supervisor.start()
-    server = build_api_server(api, port=args.api_port)
+    server = build_api_server(api, host=args.api_host, port=args.api_port)
     LOG.info('advisor %s: api on %s, ingest on %s (model=%s)',
              __version__, server.server_address, args.ingest_port, args.model)
     try:

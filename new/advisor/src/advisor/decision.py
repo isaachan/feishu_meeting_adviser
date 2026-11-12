@@ -7,6 +7,7 @@ unit of work as the decision (仅前向：集合以决策落库时刻为准).
 """
 from typing import Any, Protocol
 import json
+import logging
 import time
 from uuid import NAMESPACE_URL, uuid5
 
@@ -14,6 +15,8 @@ from .errors import ModelError
 from .models import JobState, caption_from_json, digest
 from .snapshot import is_fresh_caption, is_reply_evidence_caption
 from .persistence import encode
+
+LOG = logging.getLogger(__name__)
 
 
 class DecisionData(Protocol):
@@ -57,13 +60,19 @@ class DecisionApplier:
         with self.data.unit_of_work(fault=fault) as tx:
             state = tx.jobs.decision_state(job['job_id'])
             if state in (JobState.COMPLETE, JobState.ABANDONED):
+                LOG.info('decision replay ignored: session=%s job=%s state=%s',
+                         job['session_id'], job['job_id'][:12], state.value)
                 return False  # 决策幂等：重放不重复落库
             session = tx.sessions.require(job['session_id'])
             if session['phase'] == 'ended':
                 tx.jobs.abandon(job['job_id'])
+                LOG.info('decision abandoned (session ended): session=%s job=%s',
+                         job['session_id'], job['job_id'][:12])
                 return False  # ended 拒绝迟到结果
             if (job.get('context_version') != session['material_version']):
                 tx.jobs.abandon(job['job_id'])
+                LOG.info('decision abandoned (material changed): session=%s job=%s',
+                         job['session_id'], job['job_id'][:12])
                 return False
             tx.outbox.cancel_pending(job['session_id'])
             if reply_valid and not (control_valid and decision.control == 'cancel'):
@@ -83,6 +92,9 @@ class DecisionApplier:
                     context_version=session['material_version'],
                     recipients=recipients,
                     now=now)
+                LOG.info('reply queued: session=%s uuid=%s recipients=%s reply="%s"',
+                         job['session_id'], message_uuid[:12], recipients,
+                         decision.reply[:120])
             brief = {
                 'generation': job['generation'],
                 'snapshot_hash': digest(snapshot),
@@ -95,4 +107,8 @@ class DecisionApplier:
             tx.jobs.complete(job['job_id'], result=encode(decision.to_dict()),
                              snapshot=encode(brief))
             tx.sessions.complete_decision(job['session_id'], generation=job['generation'])
+            if control_valid and decision.control == 'cancel':
+                LOG.info('control cancel applied: session=%s job=%s keys=%s',
+                         job['session_id'], job['job_id'][:12],
+                         list(decision.control_sentence_keys))
         return True

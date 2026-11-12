@@ -10,15 +10,20 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
 import struct
 import threading
+import time
 
 from .auth import AuthError, AuthValidate
 from .session import SessionConfigError, ServerSession
 
+LOG = logging.getLogger(__name__)
+
 PROTOCOL = 2
 MAX_MESSAGE_BYTES = 1 << 20
+PROGRESS_LOG_S = 5.0
 
 
 class ServiceState:
@@ -164,6 +169,10 @@ class SttService:
 
             info = {'source_id': str(start.get('source_id') or '')}
             stats_key = self._track(info)
+            LOG.info('stt session started: source_id=%s peer=%s active=%s',
+                     info['source_id'], getattr(websocket, 'remote_address', None),
+                     self.state.active)
+            last_progress = time.monotonic()
             while True:
                 try:
                     message = await asyncio.wait_for(websocket.recv(),
@@ -174,6 +183,8 @@ class SttService:
                         if event.status == 'final':
                             finals += 1
                         await self._send_event(websocket, event)
+                    LOG.warning('stt idle timeout: source_id=%s audio_s=%.1f',
+                                info['source_id'], session.fed / 16000.0)
                     await self._fail(websocket, 'idle_timeout',
                                      f'no data for {self.idle_timeout:.0f}s')
                     return
@@ -190,8 +201,16 @@ class SttService:
                         events = await asyncio.to_thread(
                             session.feed_samples, pcm)
                     except Exception as exc:  # noqa: BLE001 - map to internal
+                        LOG.warning('stt feed error: source_id=%s %s',
+                                    info['source_id'], exc)
                         await self._fail(websocket, 'internal', str(exc))
                         return
+                    if time.monotonic() - last_progress >= PROGRESS_LOG_S:
+                        last_progress = time.monotonic()
+                        LOG.info('stt progress: source_id=%s audio_s=%.1f '
+                                 'decode_ms=%.0f finals=%s rms_last=%s',
+                                 info['source_id'], session.fed / 16000.0,
+                                 session.decode_ms, finals, info['rms_last'])
                 else:
                     try:
                         control = json.loads(message)
@@ -211,6 +230,9 @@ class SttService:
                         for event in events:
                             if event.status == 'final':
                                 finals += 1
+                                LOG.info('stt final(stop): source_id=%s finals=%s '
+                                         'text="%s"', info['source_id'], finals,
+                                         event.text[:120])
                             await self._send_event(websocket, event)
                         await _send_json(websocket,
                                          {'type': 'stopped', 'finals': finals})
@@ -222,6 +244,10 @@ class SttService:
                 for event in events:
                     if event.status == 'final':
                         finals += 1
+                        LOG.info('stt final: source_id=%s finals=%s offsets=%s-%s '
+                                 'text="%s"', info['source_id'], finals,
+                                 event.start_offset, event.end_offset,
+                                 event.text[:120])
                     else:
                         info['partials'] += 1
                         info['last_partial'] = event.text[:80]
@@ -236,6 +262,8 @@ class SttService:
                 info['decode_ms'] = round(session.decode_ms, 0)
                 info['finals'] = finals
         except Exception:  # noqa: BLE001 - connection torn down
+            LOG.warning('stt connection aborted: source_id=%s',
+                        info.get('source_id', ''), exc_info=True)
             if session is not None:
                 session.cancel()
         finally:
@@ -244,12 +272,10 @@ class SttService:
             if stats_key is not None:
                 self._untrack(stats_key)
                 if session is not None:
-                    print(json.dumps({
-                        'event': 'session_closed', 'source_id': info['source_id'],
-                        'audio_s': round(session.fed / 16000.0, 1),
-                        'decode_ms': round(session.decode_ms, 0),
-                        'finals': finals, 'rms_max': round(info['rms_max'], 1),
-                    }, ensure_ascii=False), flush=True)
+                    LOG.info('stt session closed: source_id=%s audio_s=%.1f '
+                             'decode_ms=%.0f finals=%s rms_max=%s',
+                             info['source_id'], session.fed / 16000.0,
+                             session.decode_ms, finals, round(info['rms_max'], 1))
 
     @staticmethod
     async def _send_event(websocket, event) -> None:
@@ -262,6 +288,7 @@ class SttService:
 
     @staticmethod
     async def _fail(websocket, code: str, message: str) -> None:
+        LOG.warning('stt error sent: code=%s %s', code, message)
         try:
             await _send_json(websocket, {'type': 'error', 'code': code,
                                          'message': message})

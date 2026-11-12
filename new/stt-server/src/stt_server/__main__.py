@@ -2,6 +2,7 @@
 import argparse
 import asyncio
 import json
+import logging
 import signal
 import sys
 import threading
@@ -10,6 +11,8 @@ from pathlib import Path
 
 from . import __version__
 from .service import MAX_MESSAGE_BYTES, SttService
+
+LOG = logging.getLogger(__name__)
 
 
 def parser() -> argparse.ArgumentParser:
@@ -81,10 +84,9 @@ async def _run(args) -> None:
     async with websockets.serve(service.handle, args.host, args.port,
                                 max_size=MAX_MESSAGE_BYTES,
                                 ping_interval=20, ping_timeout=20):
-        print(json.dumps({'listening': f'{args.host}:{args.port}',
-                          'health_port': args.health_port,
-                          'auth': args.auth,
-                          'model_dir': str(args.model_dir)}), flush=True)
+        LOG.info('stt-server %s listening on %s:%s (health %s auth %s model %s)',
+                 __version__, args.host, args.port, args.health_port, args.auth,
+                 args.model_dir)
         await asyncio.Event().wait()  # until cancelled
 
 
@@ -99,6 +101,8 @@ def _build_auth(args):
 
 def main(argv=None) -> int:
     args = parser().parse_args(argv)
+    logging.basicConfig(level=logging.INFO,
+                        format='%(asctime)s %(levelname)s %(message)s')
     if not args.command:
         parser().print_help()
         return 0

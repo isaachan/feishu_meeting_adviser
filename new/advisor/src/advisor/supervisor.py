@@ -7,6 +7,7 @@ conditions hold. Restart recovery: every recording/draining session gets its
 loop back on boot.
 """
 import logging
+import json
 import os
 import threading
 import time
@@ -114,8 +115,11 @@ class SessionSupervisor:
                         self.store.set_phase(session_id, 'draining', now=now)
                         LOG.info('session %s idle -> draining', session_id)
                     else:
-                        self.store.discard_expired_replies(
+                        expired = self.store.discard_expired_replies(
                             session_id, self.settings, now=now)
+                        if expired:
+                            LOG.info('session %s expired replies cancelled: %s',
+                                     session_id, expired)
                         if not executor.running and now >= backoff_until:
                             self._launch(executor, session_id, role_version, now)
                 self._stop.wait(self.settings.poll_interval)
@@ -130,6 +134,12 @@ class SessionSupervisor:
         job = self.store.prepare_job(session_id, self.settings, role_version, now=now)
         if job is None:
             return
+        snapshot = json.loads(job['snapshot'])
+        LOG.info('model job start: session=%s job=%s generation=%s captions=%s '
+                 'fresh_keys=%s pending_reply=%s', session_id, job['job_id'][:12],
+                 job['generation'], len(snapshot.get('captions', [])),
+                 snapshot.get('fresh_input_keys'),
+                 bool(snapshot.get('pending_reply')))
         self.store.mark_job_running(job['job_id'])
         executor.start(job)
 
@@ -137,9 +147,19 @@ class SessionSupervisor:
         if result.error is None and result.decision is not None:
             self.store.finish_job(result.job, result.decision,
                                   now=now, settings=self.settings)
+            LOG.info('model decision applied: session=%s job=%s control=%s '
+                     'reply="%s" reply_keys=%s elapsed_ms=%.0f',
+                     result.job['session_id'], result.job['job_id'][:12],
+                     result.decision.control,
+                     (result.decision.reply or '')[:120],
+                     list(result.decision.reply_sentence_keys),
+                     result.elapsed_ms)
         else:
             self.store.fail_job(result.job, result.error or 'model_failed',
                                 retry_at=now + 5, now=now)
+            LOG.warning('model job failed: session=%s job=%s reason=%s '
+                        'elapsed_ms=%.0f', result.job['session_id'],
+                        result.job['job_id'][:12], result.error, result.elapsed_ms)
 
     def _reap_disconnected_sources(self, session_id):
         """Live sources with no ingest connection left are terminal (lost)."""

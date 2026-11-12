@@ -6,8 +6,11 @@ the on_final callback supplied by the ingest gateway.
 """
 import asyncio
 import json
+import logging
 
 import websockets
+
+LOG = logging.getLogger(__name__)
 
 
 class RemoteSttSession:
@@ -23,6 +26,7 @@ class RemoteSttSession:
         self.finals = 0
 
     async def _connect(self):
+        LOG.info('stt connecting: url=%s source_id=%s', self.url, self.source_id)
         self._ws = await asyncio.wait_for(
             websockets.connect(self.url, max_size=1_048_576, ping_interval=20,
                                proxy=None),
@@ -32,6 +36,7 @@ class RemoteSttSession:
             'type': 'start', 'protocol': 2, 'source_id': self.source_id,
             'rate': 16000, 'channels': 1}))
         self._reader = asyncio.get_event_loop().create_task(self._read(ws))
+        LOG.info('stt started: source_id=%s', self.source_id)
 
     async def _read(self, ws):
         try:
@@ -42,12 +47,17 @@ class RemoteSttSession:
                     continue
                 if isinstance(message, dict) and message.get('type') == 'final':
                     self.finals += 1
+                    LOG.info('stt final: source_id=%s finals=%s offsets=%s-%s text="%s"',
+                             self.source_id, self.finals,
+                             message.get('start_offset'), message.get('end_offset'),
+                             str(message.get('text') or '')[:120])
                     self.on_final(str(message.get('text') or ''),
                                   int(message.get('start_offset') or 0),
                                   int(message.get('end_offset') or 0),
                                   self.source_id)
         except websockets.ConnectionClosed:
-            pass
+            LOG.warning('stt connection closed: source_id=%s finals=%s',
+                        self.source_id, self.finals)
 
     async def feed(self, pcm: bytes) -> None:
         if self._ws is None:
@@ -64,6 +74,7 @@ class RemoteSttSession:
     async def close(self) -> None:
         if self._ws is None:
             return
+        LOG.info('stt closing: source_id=%s finals=%s', self.source_id, self.finals)
         try:
             await self._ws.send(json.dumps({'type': 'stop'}))
             await asyncio.wait_for(self._wait_stopped(), timeout=self.stop_timeout)

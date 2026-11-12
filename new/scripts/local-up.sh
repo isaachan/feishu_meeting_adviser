@@ -14,6 +14,12 @@ source "$ENV_FILE"
 [ -d "$STT_MODEL_DIR" ] || { echo "STT_MODEL_DIR 不存在: $STT_MODEL_DIR"; exit 1; }
 REMOTE_BACKEND="${REMOTE_BACKEND:-fake}"
 AUTH_BASE_URL="${AUTH_BASE_URL:-http://127.0.0.1:8381}"
+NOAM_BIN="${NOAM_BIN:-$HOME/.local/bin/noam}"   # NSDP 取数（--nsdp noam）
+
+# 对外可达地址：默认自动探测本机 IP（en0 -> en1），可用 HOST_IP 覆盖。
+# 服务全部绑定 0.0.0.0，录制器/调试可从局域网其它机器通过 ws://$HOST_IP:8400/ingest 连入。
+HOST_IP="${HOST_IP:-$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo 127.0.0.1)}"
+INGEST_URL="${INGEST_URL:-ws://$HOST_IP:8400/ingest}"
 
 VENV="$ROOT/new/.venv-local"
 if [ ! -x "$VENV/bin/python" ]; then
@@ -36,7 +42,7 @@ chmod 700 "$DATA" "$DATA/auth" "$DATA/advisor"   # advisor/auth 数据目录安�
 PIDS="$DATA/pids"
 : > "$PIDS"
 
-healthz() { curl -sf "http://127.0.0.1:$1/healthz" >/dev/null; }
+healthz() { curl --noproxy '*' -sf "http://127.0.0.1:$1/healthz" >/dev/null; }
 wait_up() { for _ in {1..60}; do healthz "$1" && return 0; sleep 0.5; done; return 1; }
 
 start() { # name port cmd...
@@ -52,25 +58,31 @@ start() { # name port cmd...
 }
 
 start auth    8381 env AUTH_FEISHU_APP_ID="$AUTH_FEISHU_APP_ID" \
-                    AUTH_FEISHU_APP_SECRET="$AUTH_FEISHU_APP_SECRET" \
-  "$VENV/bin/auth" serve --data-dir "$DATA/auth" --port 8381 --base-url "$AUTH_BASE_URL"
+                     AUTH_FEISHU_APP_SECRET="$AUTH_FEISHU_APP_SECRET" \
+  "$VENV/bin/auth" serve --data-dir "$DATA/auth" --host 0.0.0.0 --port 8381 \
+    --base-url "$AUTH_BASE_URL"
 
-start stt     8393 "$VENV/bin/stt-server" serve --port 8392 --health-port 8393 --auth none \
-  --model-dir "$STT_MODEL_DIR"
+start stt     8393 "$VENV/bin/stt-server" serve --host 0.0.0.0 --port 8392 \
+  --health-port 8393 --auth none --model-dir "$STT_MODEL_DIR"
 
-start gateway 8377 "$VENV/bin/llm-gateway" serve --port 8377 \
+start gateway 8377 "$VENV/bin/llm-gateway" serve --host 0.0.0.0 --port 8377 \
   --database "$DATA/gateway.sqlite3"
 
 start advisor 8380 "$VENV/bin/advisor" serve --data-dir "$DATA/advisor" \
-  --api-port 8380 --ingest-port 8400 \
-  --ingest-url ws://127.0.0.1:8400/ingest \
+  --api-host 0.0.0.0 --api-port 8380 --ingest-port 8400 \
+  --ingest-url "$INGEST_URL" \
   --stt-url ws://127.0.0.1:8392 --gateway-url http://127.0.0.1:8377 \
   --auth-url http://127.0.0.1:8381 --model remote --remote-backend "$REMOTE_BACKEND" \
-  --calendar feishu
+  --calendar feishu --nsdp noam --noam-bin "$NOAM_BIN"
 
 start bot     -    env BOT_APP_ID="$BOT_APP_ID" BOT_APP_SECRET="$BOT_APP_SECRET" \
   "$VENV/bin/bot" serve --advisor-url http://127.0.0.1:8380
 
 echo
-echo "全部就绪：auth:8381 stt:8392 gateway:8377 advisor:8380/8400 bot:长连接"
+echo "全部就绪（本机 IP: $HOST_IP）"
+echo "  auth:    http://$HOST_IP:8381  (回调基址 $AUTH_BASE_URL)"
+echo "  stt:     ws://$HOST_IP:8392   health http://$HOST_IP:8393"
+echo "  gateway: http://$HOST_IP:8377"
+echo "  advisor: http://$HOST_IP:8380  ingest $INGEST_URL"
+echo "  bot: 飞书长连接（无监听端口）"
 echo "日志：$DATA/logs/   停止：new/scripts/local-down.sh"

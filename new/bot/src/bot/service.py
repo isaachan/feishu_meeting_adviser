@@ -290,12 +290,17 @@ class BotService:
             text = (row.get('payload') or {}).get('text', '')
             if not open_id or not text:
                 continue
+            LOG.info('outbox delivering: uuid=%s -> %s text="%s"', row['uuid'],
+                     open_id, text[:120])
             try:
                 if self.transport is None:
                     raise RuntimeError('no im transport wired')
                 self.transport.send_dm(open_id, text)
             except Exception as exc:
+                LOG.warning('outbox delivery failed: uuid=%s -> %s (%s)',
+                            row['uuid'], open_id, exc.__class__.__name__)
                 self.advisor.outbox_result(row['uuid'], 'uncertain',
                                            error=exc.__class__.__name__)
                 continue
+            LOG.info('outbox delivered: uuid=%s -> %s', row['uuid'], open_id)
             self.advisor.outbox_result(row['uuid'], 'sent')

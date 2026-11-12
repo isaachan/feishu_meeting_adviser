@@ -121,6 +121,8 @@ class AdvisorApi:
             "SELECT * FROM sessions WHERE owner_open_id=? AND meeting_no=? "
             "AND phase IN ('recording','draining')", (owner, meeting_no)).fetchone()
         if active is not None:
+            LOG.info('session reuse: session=%s meeting=%s owner=%s',
+                     active['session_id'], meeting_no, owner)
             return self._session_response(dict(active), existing=True)
 
         self._gate_nsdp(owner)
@@ -157,6 +159,8 @@ class AdvisorApi:
             now=self.clock(), nsdp_text=nsdp_text)
         assert session is not None
         self.supervisor.start_session(session['session_id'])
+        LOG.info('session created: session=%s meeting=%s owner=%s title="%s"',
+                 session['session_id'], meeting_no, owner, session['title'])
         return self._session_response(session)
 
     def _session_response(self, session, existing=False):
@@ -222,6 +226,7 @@ class AdvisorApi:
             return {'session_id': session_id, 'phase': 'ended'}
         updated = self.store.set_phase(session_id, 'draining', now=self.clock())
         assert updated is not None
+        LOG.info('session ending: session=%s -> draining (owner=%s)', session_id, owner)
         return {'session_id': session_id, 'phase': updated['phase']}
 
     # -- subscriptions --------------------------------------------------------
@@ -309,6 +314,8 @@ class AdvisorApi:
             else:
                 self.store.mark_send_error(uuid, body.get('error') or 'uncertain',
                                            uncertain=True)
+            LOG.info('outbox result: uuid=%s status=%s session=%s', uuid, status,
+                     row['session_id'])
         return {'uuid': uuid, 'state': 'acknowledged'}
 
 
@@ -355,6 +362,11 @@ def build_api_server(api: AdvisorApi, host='127.0.0.1', port=8380):
                     payload, replay = payload
                 if replay:
                     status = 200
+                path = self.path.split('?')[0]
+                quiet = (self.command == 'GET'
+                         and (path == '/healthz' or path == '/outbox/pending'))
+                if not quiet:
+                    LOG.info('api %s %s -> %s', self.command, path, status)
                 self._reply(status, payload)
             except ApiError as exc:
                 LOG.warning('api error %s %s -> %s %s %s', self.command, self.path,

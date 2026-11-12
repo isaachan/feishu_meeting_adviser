@@ -8,12 +8,15 @@ poll-based recovery, exactly as the legacy advisor implementation.
 from dataclasses import dataclass
 import hashlib
 import json
+import logging
 import threading
 import time
 from urllib import error, request
 
 from .errors import ModelError
 from .settings import AdviserSettings
+
+LOG = logging.getLogger(__name__)
 
 DECISION_SCHEMA = {
     'type': 'object', 'additionalProperties': False,
@@ -150,8 +153,11 @@ class RemoteModelBackend:
                 'deadline_seconds': int(self.settings.model_timeout_seconds),
                 'metadata': {'client': 'adviser'}}
         deadline = time.monotonic() + self.settings.model_timeout_seconds + 2.0
+        started = time.monotonic()
         task = self._submit(body)
         expired_once = False
+        LOG.info('gateway submit: request_id=%s backend=%s state=%s',
+                 request_id, self.settings.remote_backend, task.get('state'))
         try:
             while True:
                 if self.stop_event.is_set():
@@ -162,17 +168,23 @@ class RemoteModelBackend:
                     result = task.get('result') or {}
                     timings = result.get('timings') or {}
                     self.metadata = {'remote_timings': timings} if timings else {}
+                    LOG.info('gateway done: request_id=%s elapsed_ms=%.0f timings=%s',
+                             request_id, (time.monotonic() - started) * 1000, timings)
                     return Decision.parse(result.get('decision'))
                 if state == 'failed':
                     code = (task.get('error') or {}).get('code', 'server_error')
+                    LOG.warning('gateway failed: request_id=%s code=%s', request_id, code)
                     raise ModelError(ERROR_MAP.get(code, 'model_unavailable'))
                 if state == 'cancelled':
+                    LOG.warning('gateway cancelled: request_id=%s', request_id)
                     raise ModelError('model_failed')
                 if state == 'expired' and not expired_once:
                     expired_once = True  # Contract: expired ids rerun as new tasks.
+                    LOG.warning('gateway expired, resubmitting: request_id=%s', request_id)
                     task = self._submit(body)
                     continue
                 if time.monotonic() >= deadline:
+                    LOG.warning('gateway deadline exceeded: request_id=%s', request_id)
                     raise ModelError('model_timeout')
                 self.stop_event.wait(0.2)
                 task = self._poll(request_id, body)

@@ -23,6 +23,11 @@ FATAL_AUTH_CODES = ('bad_token', 'bad_binding', 'bad_protocol', 'bad_message')
 BACKOFF_S = (0.5, 1, 2, 5, 10)
 
 
+def _log(source_id, event, **fields):
+    print(f'[uplink:{source_id}] {event} ' + json.dumps(fields, ensure_ascii=False),
+          flush=True)
+
+
 class UplinkExit(Exception):
     def __init__(self, code, reason):
         self.code, self.reason = code, reason
@@ -112,23 +117,32 @@ class SourceUplink:
                 return
             except _Retry as retry:
                 resume = retry.resume
+                _log(self.source_id, 'retry', stale_sequence=True)
                 continue
             except UplinkExit as exc:
                 self.exit_code, self.exit_reason = exc.code, exc.reason
+                _log(self.source_id, 'exit', code=exc.code, reason=exc.reason)
                 self.stopped.set()
                 return
-            except (OSError, WebSocketException):
-                pass  # connection lost/failed; retry with backoff
+            except (OSError, WebSocketException) as exc:
+                _log(self.source_id, 'connection_lost',
+                     error=exc.__class__.__name__, attempt=attempts + 1)
             attempts += 1
             self.reconnects += 1
             if attempts > self.reconnect_limit:
                 self.exit_code, self.exit_reason = 3, 'retries exhausted'
+                _log(self.source_id, 'exit', code=3, reason='retries exhausted')
                 self.stopped.set()
                 return
-            self.stopped.wait(BACKOFF_S[min(attempts - 1, len(BACKOFF_S) - 1)])
+            backoff = BACKOFF_S[min(attempts - 1, len(BACKOFF_S) - 1)]
+            _log(self.source_id, 'backoff', seconds=backoff,
+                 buffered=len(self.buffer))
+            self.stopped.wait(backoff)
 
     def _one_connection(self, resume):
         first_sequence = self.acked + 1
+        _log(self.source_id, 'connecting', url=self.url, resume=resume,
+             first_sequence=max(first_sequence, 1), buffered=len(self.buffer))
         with connect(self.url, open_timeout=self.handshake_timeout,
                      close_timeout=5, max_size=MAX_FRAME_BYTES, proxy=None) as ws:
             start = {'type': 'start', 'protocol': 1, 'session_id': self.session_id,
@@ -148,6 +162,8 @@ class SourceUplink:
                 raise UplinkExit(3, f'unexpected greeting: {message.get("type")}')
             server_acked = int(message.get('acked_sequence') or 0)
             self._trim(server_acked)
+            _log(self.source_id, 'started', stream_id=message.get('stream_id'),
+                 server_acked=server_acked)
             while not self.stopped.is_set():
                 try:
                     control = self.controls.get(timeout=0.1)
@@ -188,6 +204,8 @@ class SourceUplink:
                             raise _Retry(resume=False)
                         self._raise_for_code(code, message.get('message'))
                     elif kind == 'stopped':
+                        _log(self.source_id, 'stopped_by_server',
+                             acked=message.get('acked_sequence'), stats=self.stats())
                         self.stopped.set()
                         return
 
@@ -200,6 +218,7 @@ class SourceUplink:
                 continue
             ws.send(struct.pack('<I', seq) + pcm)
             self.sent_frames += 1
+        _log(self.source_id, 'stream_end', last_sequence=max(last, self.acked))
         ws.send(json.dumps({'type': 'stream_end', 'last_sequence': max(last, self.acked)}))
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
@@ -208,6 +227,8 @@ class SourceUplink:
                 continue
             if message.get('type') == 'stopped':
                 self.acked = max(self.acked, int(message.get('acked_sequence') or 0))
+                _log(self.source_id, 'stopped_by_server',
+                     acked=self.acked, stats=self.stats())
                 break
             if message.get('type') == 'ack':
                 self._trim(int(message.get('sequence') or 0))

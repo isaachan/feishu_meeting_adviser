@@ -10,6 +10,7 @@ each connection owns its handler task and sink.
 """
 import asyncio
 import json
+import logging
 import struct
 import threading
 import time
@@ -21,8 +22,11 @@ from .errors import StorageError
 from .models import Caption
 from .store import SessionStore
 
+LOG = logging.getLogger(__name__)
+
 MAX_FRAME_BYTES = 1_048_576
 SOURCES = ('loopback', 'mic')
+PROGRESS_LOG_S = 5.0
 
 
 class IngestError(Exception):
@@ -137,6 +141,9 @@ class _Connection:
         self.last_ack_at = 0.0
         self.last_activity = time.monotonic()
         self.tag = ''
+        self.frames = 0
+        self.frame_bytes = 0
+        self.last_progress_at = time.monotonic()
 
     async def send(self, payload: dict):
         await self.ws.send(json.dumps(payload, ensure_ascii=False))
@@ -159,6 +166,9 @@ class _Connection:
         try:
             await self._start(start)
         except IngestError as exc:
+            LOG.warning('ingest start rejected: session=%s source=%s code=%s %s',
+                        start.get('session_id'), start.get('source'),
+                        exc.code, exc.message)
             await self.fail(exc.code, exc.message)
             return
         await self._stream()
@@ -227,6 +237,10 @@ class _Connection:
                          'acked_sequence': self.acked})
         self.since_ack = 0
         self.last_ack_at = time.monotonic()
+        LOG.info('ingest start: session=%s source=%s resume=%s first_sequence=%s '
+                 'acked=%s stream_id=%s peer=%s', self.session_id, self.source,
+                 bool(start.get('resume')), first_sequence, self.acked, stream_id,
+                 getattr(self.ws, 'remote_address', None))
 
     def _release_and_raise(self, code, message):
         self.server._release_source(self.session_id, self.source)
@@ -245,11 +259,16 @@ class _Connection:
             end_time=int(now * 1000),
             speaker_name=(self.speaker if self.source == 'mic' else None))
         try:
-            self.store.ingest_caption(self.session_id, caption,
-                                      delivery_id=f'{self.session_id}:{sentence_key}',
-                                      now=now)
+            stored = self.store.ingest_caption(self.session_id, caption,
+                                               delivery_id=f'{self.session_id}:{sentence_key}',
+                                               now=now)
         except StorageError:
-            pass  # session left recording between final and apply; drop quietly
+            LOG.info('caption dropped (session not recording): session=%s key=%s',
+                     self.session_id, sentence_key)
+            return  # session left recording between final and apply; drop quietly
+        if stored:
+            LOG.info('caption stored: session=%s source=%s key=%s text="%s"',
+                     self.session_id, self.source, sentence_key, text[:120])
 
     async def _stream(self):
         idle_task = asyncio.get_event_loop().create_task(self._idle_watch())
@@ -266,6 +285,8 @@ class _Connection:
                             raise IngestError('bad_message', 'invalid json')
                         kind = message.get('type')
                         if kind == 'gap':
+                            LOG.info('ingest gap: session=%s source=%s',
+                                     self.session_id, self.source)
                             await self._sink().gap()
                         elif kind == 'stop':
                             await self._sink().gap()  # v1: flush and hold open
@@ -275,10 +296,13 @@ class _Connection:
                         else:
                             raise IngestError('bad_message', f'unknown type {kind}')
                 except IngestError as exc:
+                    LOG.warning('ingest error: session=%s source=%s code=%s %s',
+                                self.session_id, self.source, exc.code, exc.message)
                     await self.fail(exc.code, exc.message)
                     return
         except websockets.ConnectionClosed:
-            pass  # recorder vanished: source stays live for reconnect/idle path
+            LOG.info('ingest connection lost: session=%s source=%s last_seq=%s acked=%s',
+                     self.session_id, self.source, self.last_seq, self.acked)
         finally:
             idle_task.cancel()
             if self.sink is not None:
@@ -286,6 +310,11 @@ class _Connection:
                     await self.sink.close()
                 except Exception:
                     pass
+            if self.session_id:
+                LOG.info('ingest closed: session=%s source=%s frames=%s last_seq=%s '
+                         'acked=%s dropped=%s', self.session_id, self.source,
+                         self.frames, self.last_seq, self.acked,
+                         self.server.dropped_frames)
 
     def _sink(self) -> SttSession:
         if self.sink is None:
@@ -303,8 +332,16 @@ class _Connection:
         self.last_seq = sequence
         await self._sink().feed(pcm)
         self.acked = sequence
+        self.frames += 1
+        self.frame_bytes += len(pcm)
         self.since_ack += 1
         now = time.monotonic()
+        if now - self.last_progress_at >= PROGRESS_LOG_S:
+            self.last_progress_at = now
+            LOG.info('ingest progress: session=%s source=%s frames=%s (~%.1fs audio) '
+                     'seq=%s dropped_total=%s', self.session_id, self.source,
+                     self.frames, self.frame_bytes / 32000.0, self.last_seq,
+                     self.server.dropped_frames)
         if (self.since_ack >= self.server.ack_every_frames
                 or now - self.last_ack_at >= self.server.ack_interval_s):
             self.store.source_ack(self.session_id, self.source, sequence)
@@ -318,12 +355,16 @@ class _Connection:
             raise IngestError('bad_message', 'invalid last_sequence')
         self.store.source_ack(self.session_id, self.source, last)
         self.store.mark_source_drained(self.session_id, self.source, last)
+        LOG.info('ingest stream_end: session=%s source=%s last_sequence=%s frames=%s',
+                 self.session_id, self.source, last, self.frames)
         await self.send({'type': 'stopped', 'acked_sequence': last})
 
     async def _idle_watch(self):
         while True:
             await asyncio.sleep(0.5)
             if time.monotonic() - self.last_activity > self.server.idle_timeout_s:
+                LOG.warning('ingest idle timeout: session=%s source=%s',
+                            self.session_id, self.source)
                 await self.fail('idle_timeout', 'no messages within idle window')
                 return
 

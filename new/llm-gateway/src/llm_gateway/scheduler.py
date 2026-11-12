@@ -4,12 +4,15 @@ The store is the source of truth: workers poll ``next_queued`` so restarts and
 multiple processes stay consistent. Global concurrency is the worker count.
 """
 import json
+import logging
 import threading
 import time
 
 from .backends.base import BackendError
 from .decisions import InvalidDecision, validate
 from .store import GatewayStore
+
+LOG = logging.getLogger(__name__)
 
 
 class ExecutionScheduler:
@@ -54,10 +57,13 @@ class ExecutionScheduler:
         with self._lock:
             self._cancellations[request_id] = cancel_event
         started = time.monotonic()
+        LOG.info('execution start: request_id=%s backend=%s', request_id,
+                 task['backend'])
         try:
             if self.store.cancel_requested(request_id):
                 self.store.finish(request_id, 'cancelled', error_code='cancelled',
                                   timings_json=self._timings(started))
+                LOG.info('execution cancelled (pre-start): request_id=%s', request_id)
                 return
             try:
                 backend = self.backend_factory(task['backend'])
@@ -69,20 +75,28 @@ class ExecutionScheduler:
             except BackendError as exc:
                 self.store.finish(request_id, 'cancelled' if exc.code == 'cancelled' else 'failed',
                                   error_code=exc.code, timings_json=self._timings(started))
+                LOG.warning('execution backend error: request_id=%s code=%s '
+                            'execution_ms=%s', request_id, exc.code,
+                            int((time.monotonic() - started) * 1000))
                 return
             except Exception:
                 self.store.finish(request_id, 'failed', error_code='server_error',
                                   timings_json=self._timings(started))
+                LOG.exception('execution crashed: request_id=%s', request_id)
                 return
             try:
                 normalized = validate(decision)
             except InvalidDecision:
                 self.store.finish(request_id, 'failed', error_code='output_invalid',
                                   timings_json=self._timings(started))
+                LOG.warning('execution output invalid: request_id=%s', request_id)
                 return
             self.store.finish(request_id, 'succeeded',
                               result_json=json.dumps(normalized, ensure_ascii=False),
                               timings_json=self._timings(started))
+            LOG.info('execution done: request_id=%s execution_ms=%s reply="%s"',
+                     request_id, int((time.monotonic() - started) * 1000),
+                     str(normalized.get('reply') or '')[:120])
         finally:
             with self._lock:
                 self._cancellations.pop(request_id, None)
