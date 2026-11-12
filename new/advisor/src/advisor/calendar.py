@@ -75,17 +75,31 @@ class FeishuCalendarValidator:
             url += '?' + parse.urlencode(query)
         req = request.Request(url, method='GET', headers={
             'Authorization': 'Bearer ' + token, 'Accept': 'application/json'})
-        try:
+        # macOS/VPN flake (2026-11-12 实测): connection setup intermittently
+        # fails with Errno 22 before any byte is sent; a fresh socket usually
+        # succeeds. GETs are retry-safe by nature.
+        attempts, delay = 3, 0.3
+        for attempt in range(1, attempts + 1):
             try:
-                response = self._open(req, timeout=self.timeout)
-            except error.HTTPError as exc:
-                response = exc
-            with response:
-                status = getattr(response, 'status', getattr(response, 'code', 200))
-                raw = response.read(MAX_RESPONSE_BYTES + 1)
-        except (error.URLError, TimeoutError, OSError):
-            LOG.warning('calendar transport failed: path=%s', path, exc_info=True)
-            raise CalendarError('auth_unavailable') from None
+                try:
+                    response = self._open(req, timeout=self.timeout)
+                except error.HTTPError as exc:
+                    response = exc
+                with response:
+                    status = getattr(response, 'status',
+                                     getattr(response, 'code', 200))
+                    raw = response.read(MAX_RESPONSE_BYTES + 1)
+                break
+            except (error.URLError, TimeoutError, OSError) as exc:
+                reason = getattr(exc, 'reason', exc)
+                if attempt == attempts:
+                    LOG.warning('calendar transport failed after %d attempts: '
+                                'path=%s reason=%r', attempts, path, reason)
+                    raise CalendarError('auth_unavailable') from None
+                LOG.warning('calendar transport retry %d/%d: path=%s reason=%r',
+                            attempt, attempts, path, reason)
+                time.sleep(delay)
+                delay *= 2
         try:
             result = json.loads(raw[:MAX_RESPONSE_BYTES])
         except (ValueError, UnicodeDecodeError):

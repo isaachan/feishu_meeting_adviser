@@ -13,7 +13,7 @@ class AdvisorApiError(Exception):
 
 
 class AdvisorClient:
-    def __init__(self, base_url='http://127.0.0.1:8380', *, timeout=10, opener=None):
+    def __init__(self, base_url='http://127.0.0.1:8380', *, timeout=35, opener=None):
         self.base_url = base_url.rstrip('/')
         self.timeout = timeout
         self.opener = opener or request.build_opener(request.ProxyHandler({})).open
