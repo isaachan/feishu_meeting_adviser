@@ -102,7 +102,7 @@ class GuiE2eTests(unittest.TestCase):
         self.assertEqual(args['session'], session_id)
         self.assertEqual(args['token'], created['recorder_command_args']['token'])
         self.assertEqual(args['url'],
-                         f'ws://127.0.0.1:{bed.ports['ingest']}/ingest')
+                         f"ws://127.0.0.1:{bed.ports['ingest']}/ingest")
 
         # 4) 真 CaptureJob 推流（FakeSource）→ ack → 干净停止
         with tempfile.TemporaryDirectory() as tmp:
