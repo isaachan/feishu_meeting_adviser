@@ -1,6 +1,6 @@
 # Auth 服务契约（OAuth 凭据托管）
 
-状态：v1 于 2026-11-10 冻结（阶段 0.4）。**v1.1（2026-11-11）** 新增 §8：NSDP token 提交通道（组织者个人 token，表单提交、无刷新语义），凭据存储增加 provider 维度。服务端为 `new/auth`。语义自旧 `local-meeting-recorder/src/local_meeting_recorder/oauth.py` 平移（2026-11-10 已对真实飞书 API 形状验证），改为云端多用户（按 open_id 隔离）+ HTTPS 回调。变更需 bump 版本并同步 advisor/auth 两侧实现与测试。上游设计：[ARCHITECTURE](ARCHITECTURE.md) D3。
+状态：v1 于 2026-11-10 冻结（阶段 0.4）。**v1.1（2026-11-11）** 新增 §8：NSDP token 提交通道（组织者个人 token，表单提交、无刷新语义），凭据存储增加 provider 维度。**v1.2（2026-11-12）** 新增 GUI 发现式登录：`/authorize/start` 允许 `intent:"gui:login"` 时 `open_id` 缺省（discovery state，回调后采纳 user_info 主体）；回调成功后 state 记录补存 `user_info` 摘要；新增内部端点 `GET /authorize/status`（advisor 轮询登录进度，见 [macos-gui/DESIGN](../macos-gui/DESIGN.md)）。服务端为 `new/auth`。语义自旧 `local-meeting-recorder/src/local_meeting_recorder/oauth.py` 平移（2026-11-10 已对真实飞书 API 形状验证），改为云端多用户（按 open_id 隔离）+ HTTPS 回调。变更需 bump 版本并同步 advisor/auth 两侧实现与测试。上游设计：[ARCHITECTURE](ARCHITECTURE.md) D3。
 
 ## 1. 范围、端点与角色
 
@@ -40,6 +40,7 @@
 - 生成 PKCE `verifier`/`challenge` 与 `state`；`state` 随机不可猜、**一次性**、TTL 10 min，服务端记录 `(state → open_id, intent, verifier, used)`。
 - `intent` 为待续接意图（如 `join:<会议号>`），仅用于回调成功页提示，不含敏感信息。
 - advisor 将 `authorize_url` 经 CONTRACT_ADVISOR_API 的 `authorization_required` 响应转给 bot → 小A。
+- **发现式登录变体（v1.2）**：`intent` 为 `gui:login` 时允许 `open_id` 缺省（`null`）——state 记录 `discovery=true`、不绑定 open_id；用于 macos-gui 扫码登录（身份即待发现项）。回调时以 user_info 的 open_id **采纳**为主体（跳过防串换相等校验，见 §4.1）；非 discovery state 不受影响。
 
 ### 2.2 `GET /credentials/{open_id}/token[?rejected=<token>]`
 
@@ -58,6 +59,25 @@
 5. 刷新路径上的任何失败（网络不可达、响应非法、refresh 未轮转）或 `refresh_expires_at` 已过 → 凭据已按 fail-closed 置 `reauthorization_required`，返回 `409`。刷新 POST 一旦发出，一次性 refresh token 可能已被消费，客户端不得原样重试（2026-11-10 实现期修正：原文"503 不改状态"与 marker 先行语义冲突）。
 6. `refresh_margin = min(300, expires_in / 2)`。
 
+### 2.3 `GET /authorize/status?state=rnd-…`（v1.2，仅 advisor 调用）
+
+→ 200：
+
+```json
+{"status": "pending"}
+```
+
+或（discovery state 完成后）：
+
+```json
+{"status": "completed", "user": {"open_id": "ou_A", "name": "Kai Han",
+  "en_name": "Kai Han", "email": "kai.han@nio.com"}}
+```
+
+- `pending`：state 存在、未过期、回调尚未完成；`completed`：回调成功、凭据已按 open_id 落库（幂等可重复读）。不存在或 TTL 过期 → `404 {"code": "not_found"}`。
+- 仅返回 §4.1 落存的 user_info 摘要字段；**任何情况下不返回 token**（access/refresh 一律不出本服务，红线同 §1）。
+- 供 advisor 的 `/gui/login/poll` 轮询（CONTRACT_ADVISOR_API §8.2）；非 discovery state 查询此端点同样适用（`completed` 不带 `user` 字段，除非该 state 落存过摘要）。
+
 ## 3. 刷新语义（marker 先行、必须轮转）
 
 1. 刷新前**先原子提交 marker**：记录置 `state=refreshing`（旧实现"Commit before the one-use POST"语义）。
@@ -73,9 +93,10 @@
 
 1. `state` 校验：存在、未过期、**未使用** → 立即标记已用（一次性）。
 2. 用 state 记录中的 `verifier` 完成 PKCE code 换取。
-3. 经 user_info 取得授权者 open_id，**必须等于 state 绑定的 open_id**（防串换账号），否则显式失败页。
-4. 落盘成功后返回简化成功页：显示"授权成功，请回到飞书重新发送刚才的指令（<intent 摘要>）"。
+3. 经 user_info 取得授权者 open_id：**非 discovery state** 必须等于 state 绑定的 open_id（防串换账号），否则显式失败页；**discovery state（v1.2，`intent:"gui:login"`）** 无绑定可校验，以 user_info 的 open_id **采纳**为主体（发现式登录语义）。
+4. 落盘成功后返回简化成功页：显示"授权成功，请回到飞书重新发送刚才的指令（<intent 摘要>）"；discovery state 显示"登录成功，请回到采集应用"。
 5. 任何一步失败：显式失败页（含原因），不静默重试；code 一次性，失败不重放。
+6. **user_info 摘要落 state 记录（v1.2）**：成功路径将 `{open_id, name, en_name, email}` 写入 state 记录（供 `GET /authorize/status` 读取；discovery 与非 discovery 均落）。摘要不含任何 token；state 表 TTL 回收语义不变。
 
 ### 4.2 `GET /oauth/callback?error=…`（用户拒绝授权）
 
@@ -97,7 +118,7 @@
 
 ## 7. 版本
 
-API v1（v1.1 见 §8）。不兼容变更递增版本号，并同步 auth/advisor 两侧实现、测试与 `new/integrations/` 用例。
+API v1（v1.1 见 §8；v1.2 变更：§2.1 discovery 变体、§2.3 `/authorize/status`、§4.1 采纳语义与 user_info 摘要落存）。不兼容变更递增版本号，并同步 auth/advisor 两侧实现、测试与 `new/integrations/` 用例。
 
 ## 8. NSDP token 提交通道（v1.1）
 

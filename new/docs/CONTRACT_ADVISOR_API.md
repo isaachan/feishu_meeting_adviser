@@ -1,6 +1,6 @@
 # Advisor 内部 API 契约（bot ↔ advisor）
 
-状态：v1 于 2026-11-10 冻结（阶段 0.3）；**v1.1（2026-11-11）** 新增 NSDP 组织者凭据门（`authorization_required` 增加 `provider`/`submit_url` 变体与 `nsdp_unavailable`；组织者面全部指令前置该门；`GET /sessions/{id}/status` 响应新增 `nsdp_hold`）。服务端为 `new/advisor`（会话域 + 一次性操作），客户端为 `new/bot`。变更需 bump API 版本并同步两侧实现与测试。上游设计：[ARCHITECTURE](ARCHITECTURE.md) D4/D6；outbox 语义沿用旧 advisor（channel=`local`/`im`、uuid 幂等、uncertain 人工裁决）。
+状态：v1 于 2026-11-10 冻结（阶段 0.3）；**v1.1（2026-11-11）** 新增 NSDP 组织者凭据门（`authorization_required` 增加 `provider`/`submit_url` 变体与 `nsdp_unavailable`；组织者面全部指令前置该门；`GET /sessions/{id}/status` 响应新增 `nsdp_hold`）。**v1.2（2026-11-12）** 新增 §8 GUI 面（`/gui/login/start`·`/gui/login/poll`·`/gui/sessions`·`/gui/logout` + devices 表；经 HTTPS 反代对 laptop GUI 暴露，成为第三个对外入口，见 DEPLOYMENT §2）。服务端为 `new/advisor`（会话域 + 一次性操作），客户端为 `new/bot`（§1–§7）与 `new/macos-gui`（§8）。变更需 bump API 版本并同步两侧实现与测试。上游设计：[ARCHITECTURE](ARCHITECTURE.md) D4/D6、[macos-gui/DESIGN](../macos-gui/DESIGN.md)；outbox 语义沿用旧 advisor（channel=`local`/`im`、uuid 幂等、uncertain 人工裁决）。
 
 ## 1. 传输与通用约定
 
@@ -209,6 +209,71 @@ bot 回小B："该订阅已被组织者撤销"。
 - `sent`：pending→sent；`uncertain`（超时/未知结果）：pending→uncertain，人工裁决后经运维面终定（沿用旧语义）；非 pending 状态收到重复结果 → 幂等忽略（200）。
 - 发送侧幂等：bot 用 `uuid5(NAMESPACE_URL, outbox_uuid)` 作为飞书回复 uuid，重复发送被飞书去重。
 
-## 8. 版本
+## 8. GUI 面（v1.2，macos-gui ↔ advisor）
 
-API v1（响应体保留 `"api": 1` 字段位，首版不强制）。不兼容变更递增版本号并同步 bot/advisor 两侧实现、测试与 `new/integrations/` 用例。
+服务 GUI 客户端（`new/macos-gui`）的登录与会话发现。与 §1–§7 的差异：**经 TLS 反代对外暴露**（`https://<域名>/gui/*` → `127.0.0.1:8380`，受信网络内 GUI 可达），鉴权用 **device_token**（设备凭据，非用户 OAuth 凭据；身份与登录时序见 CONTRACT_AUTH v1.2 与 [macos-gui/DESIGN](../macos-gui/DESIGN.md) §4）。错误体沿用通用格式；本节专属错误码不进 §1.1 总表。
+
+### 8.1 `POST /gui/login/start` —— 生成扫码登录
+
+```json
+{}
+```
+
+→ 201：
+
+```json
+{"login_url": "https://accounts.feishu.cn/open-apis/authen/v1/authorize?…",
+ "device_code": "dc-…", "expires_at": "2026-11-12T15:10:00+08:00"}
+```
+
+- advisor 调 auth `POST /authorize/start`（`{"open_id": null, "intent": "gui:login"}`，discovery 变体），`login_url` 即返回的 `authorize_url`；本地生成随机一次性 `device_code`（TTL 10 min）并映射到 auth state。
+- auth 不可达 → 409 `auth_unavailable`。
+
+### 8.2 `GET /gui/login/poll?device_code=…` —— 轮询登录结果
+
+```json
+{"status": "pending"}
+```
+
+完成时：
+
+```json
+{"status": "completed", "device_token": "dt-…",
+ "user": {"open_id": "ou_A", "name": "Kai Han", "email": "kai.han@nio.com"}}
+```
+
+- advisor 内部轮询 auth `GET /authorize/status?state=`；completed 时铸造 `device_token`（`dt-` 前缀 + ≥32B urlsafe 随机），devices 表落 `sha256(token)`、`open_id`、`created_at`、`last_seen_at`，**只返回一次**（重复 poll 同 device_code → 已核销，404）。
+- 防冒领：领 token 需同时持有 `device_code`（仅 GUI）与完成 OAuth 的 `state`（仅扫码者链路）。
+- 错误：404 `unknown_device`（不存在/已核销）/ 410 `expired`（TTL 过期）。
+
+### 8.3 `GET /gui/sessions` —— 活跃会话发现（Bearer）
+
+请求头 `Authorization: Bearer dt-…` → 200：
+
+```json
+{"user": {"open_id": "ou_A", "name": "Kai Han", "email": "kai.han@nio.com"},
+ "sessions": [{"session_id": "s-3f9c", "meeting_no": "123456789", "title": "周会",
+   "phase": "recording", "started_at": "…",
+   "recorder_command_args": {"session": "s-3f9c", "event": "cal_x/evt_y",
+     "url": "ws://server:8400/ingest", "token": "st-xxx", "mic": false}}]}
+```
+
+- 会话集：该 open_id 名下 `recording`（含完整 `recorder_command_args`，可启动采集）+ `draining`（`recorder_command_args` 为 `null`，仅展示）；按 `started_at` 倒序。args 组装复用建会逻辑（§2），白名单与 CONTRACT_RECORDER_STREAM 附录 A 一致。
+- 鉴权：device_token 未知/不匹配 → 401 `bad_token`（GUI 引导重新扫码）。
+- 红线：**响应不得含任何用户 OAuth 凭据**；流令牌 `st-xxx` 本就要下发 laptop 内存（与 bot 渲染命令下发同级受信面，v1 接受，见 §8.5）。
+
+### 8.4 `POST /gui/logout` —— 注销设备（Bearer）
+
+→ 200 `{"ok": true}`：删除 devices 表对应行，幂等（不存在的 token 同样 200）。
+
+### 8.5 风险与边界（固化）
+
+| 项 | 评估 | 处置 |
+|---|---|---|
+| device_token 被盗 = 可领该用户活跃会话的流令牌 | 与 ingest 明文 ws 同级受信面 | v1 受信网络接受；公网前补设备绑定/短 TTL/服务端吊销面 |
+| `/gui/sessions` 携流令牌过 HTTPS | 与 bot IM 下发命令同级 | 接受并记录（本表） |
+| device_token 无 TTL | 长期有效 | 手动退出/服务端清理即失效；公网前补 |
+
+## 9. 版本
+
+API v1（响应体保留 `"api": 1` 字段位，首版不强制）；v1.1 NSDP 门；v1.2 GUI 面（§8）。不兼容变更递增版本号并同步 bot/advisor/macos-gui 侧实现、测试与 `new/integrations/` 用例。

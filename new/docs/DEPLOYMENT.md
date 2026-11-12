@@ -1,14 +1,14 @@
-# 部署 · 节点与基线（v0.4 草案）
+# 部署 · 节点与基线（v0.5 草案）
 
 状态：设计基线。组件职责见 [ARCHITECTURE](ARCHITECTURE.md)。
-修订：v0.3 将 bot 与 OAuth 鉴权服务从 advisor 拆出，连同 advisor 共三个**独立部署节点**（v0.2 曾为 advisor 子系统）；v0.4 评审修订：v1 最简网络基线——后端不接公网，ingest 走受信网络明文 ws，auth 内部 API 仅 advisor 调用（bot 不直连）。
+修订：v0.3 将 bot 与 OAuth 鉴权服务从 advisor 拆出，连同 advisor 共三个**独立部署节点**（v0.2 曾为 advisor 子系统）；v0.4 评审修订：v1 最简网络基线——后端不接公网，ingest 走受信网络明文 ws，auth 内部 API 仅 advisor 调用（bot 不直连）；**v0.5（2026-11-12）**：advisor 新增第三个对外入口 `/gui/*`（HTTPS 反代，macos-gui 客户端用，CONTRACT_ADVISOR_API §8），组织者 laptop 承载增加 macos-gui，凭据面新增 device_token。
 
 ## 1. 部署节点总览
 
 | 节点 | 数量（v1） | 承载 | 说明 |
 |---|---|---|---|
 | 云端服务器 | 1（单机） | **五个独立部署节点**：`advisor`（会话核心）、`bot`（IM 控制面/通知面）、`auth`（OAuth 鉴权服务），及 `stt-server`、`llm-gateway` | Linux（Ubuntu）；CPU 即可（STT int8 模型已在旧部署验证）。三节点单机同驻但**进程/配置/数据/升级完全独立**，未来可拆机部署 |
-| 组织者 laptop | 每组织者一台 | 飞书客户端、recorder | Mac 先行、Windows 跟进；安装包不签名/公证，文档引导绕过 Gatekeeper/SmartScreen；**零配置零凭据**，按 IM 下发的命令启动 |
+| 组织者 laptop | 每组织者一台 | 飞书客户端、recorder / macos-gui（GUI 分发形态，2026-11-12 立项） | Mac 先行、Windows 跟进；安装包不签名/公证，文档引导绕过 Gatekeeper/SmartScreen；**零配置零凭据**（GUI 仅一次性服务器地址 + device_token 设备凭据），按 IM 下发命令（recorder CLI）或 GUI 会话发现启动 |
 | 参会者设备 | 任意 | 飞书客户端 | 零安装、零配置 |
 | 飞书云（外部） | — | 自建应用（IM 长连接、日历/OAuth 授权页） | SaaS；应用后台需预先注册 OAuth 回调 URI（见 §2） |
 
@@ -28,11 +28,12 @@
 | auth API（HTTP） | `127.0.0.1:8381` | 仅 localhost | advisor 获取有效用户凭据（`get_valid_token(open_id)` 类接口）与授权 URL；bot 不直连 auth |
 | advisor ingest（WS） | `0.0.0.0:8400` | 受信网络 | recorder 音频/事件上行唯一入口；**流令牌**鉴权（非用户凭据）；每条音频源一条连接；v1 受信网络**明文 ws**（最简基线，公网/拆机前补 TLS） |
 | advisor API（HTTP） | `127.0.0.1:8380` | 仅 localhost | bot 调用（指令触发会话操作、订阅读写、待发 IM 拉取/回写）+ 运维 CLI |
+| advisor GUI 面（HTTPS，v0.5） | `https://<域名>/gui/*`（反代 → `127.0.0.1:8380`） | 受信网络内 GUI/浏览器可达 | macos-gui 登录（device-flow）与活跃会话发现（CONTRACT_ADVISOR_API §8）；**device_token** 鉴权（非用户凭据）；与 auth OAuth 回调共用反代域名 |
 | bot | 出站长连接 | — | 主动外连飞书（`lark.ws.Client`），不监听端口 |
 | stt-server（WS） | `127.0.0.1:8392`（沿用旧部署） | 仅 localhost | auth 固定 `none`（准入已由 advisor 完成） |
 | llm-gateway（HTTP） | `127.0.0.1:8377`（沿用） | 仅 localhost | 与旧部署一致 |
 
-网络边界一句话：**对外两个入口——auth 的 OAuth 回调（浏览器可达，HTTPS 域名经反代）与 advisor 的 ingest WS（受信网络）；云内互调全部 localhost**：bot→advisor、advisor→auth、advisor→stt-server、advisor→llm-gateway。
+网络边界一句话：**对外三个入口——auth 的 OAuth 回调（浏览器可达，HTTPS 域名经反代）、advisor 的 ingest WS（受信网络）与 advisor 的 GUI 面 `/gui/*`（HTTPS 经同一反代域名，v0.5）**；云内互调全部 localhost：bot→advisor、advisor→auth、advisor→stt-server、advisor→llm-gateway。
 
 ## 3. 凭据与配置
 
@@ -40,7 +41,8 @@
 |---|---|---|
 | 飞书自建应用 app_id/secret | `bot` 与 `auth` 各持一份所需配置（同一自建应用；bot 用于 IM 收发/tenant token，auth 用于 OAuth 换取），600 权限 | 两节点各自所需的最小能力 |
 | 组织者 user_access_token/refresh_token | **`auth` 节点**（按 open_id 隔离存储；0600+独立数据目录，静态加密可选） | 凭据生命周期由 auth 管理；advisor 经 auth API 取有效 token 用后不留存（bot 不直连 auth） |
-| 会话流令牌 | `advisor` 铸造 → bot 经 IM 命令下发 → laptop 内存 | 仅绑定单一 session、短期、会话结束即吊销；**任何用户凭据不落 laptop** |
+| 会话流令牌 | `advisor` 铸造 → bot 经 IM 命令下发 **或 GUI `/gui/sessions` 下发** → laptop 内存 | 仅绑定单一 session、短期、会话结束即吊销；**任何用户凭据不落 laptop** |
+| GUI device_token（v0.5） | laptop Keychain（明文）+ `advisor` devices 表（sha256 哈希） | 设备凭据，**非用户 OAuth 凭据**；扫码登录（device-flow，CONTRACT_AUTH v1.2 discovery）铸造；无 TTL（手动退出/服务端清理失效）；泄露影响面=可领该用户活跃会话的流令牌，与 ingest 明文 ws 同级受信面 |
 | GLM 凭据 | `llm-gateway` 运行环境（沿用旧 OpenCode 登录注入） | 模型执行 |
 | 节点间（云内） | 无 | localhost 互调无认证（同机受信边界；拆机部署时补 mTLS/服务间凭据） |
 
