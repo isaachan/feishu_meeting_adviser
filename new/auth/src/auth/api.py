@@ -20,6 +20,8 @@ _ERROR_MAP = {
     'oauth_busy': (503, 'busy'),
     'oauth_invalid_open_id': (400, 'bad_message'),
     'oauth_invalid_callback': (400, 'bad_message'),
+    'nsdp_invalid_token': (400, 'bad_message'),
+    'nsdp_invalid_provider': (400, 'bad_message'),
 }
 
 _SUCCESS_PAGE = ('<!doctype html><meta charset="utf-8"><title>授权成功</title>'
@@ -30,6 +32,17 @@ _INVALID_PAGE = ('<!doctype html><meta charset="utf-8"><title>链接无效</titl
                  '<p>授权链接无效或已过期，请回到飞书重新发起。</p>')
 _FAILED_PAGE = ('<!doctype html><meta charset="utf-8"><title>授权失败</title>'
                 '<p>授权失败（阶段：{stage}）。请回到飞书重新发起。</p>')
+_TOKEN_FORM_PAGE = ('<!doctype html><meta charset="utf-8"><title>提交 NSDP token</title>'
+                    '<p>请粘贴你的 NSDP token 并提交（链接 10 分钟内有效，一次性）。'
+                    'token 仅保存在会参谋云端、只用于代你查询版本计划，不会出现在聊天里。</p>'
+                    '<form method="post" autocomplete="off">'
+                    '<input type="password" name="token" maxlength="512" required '
+                    'placeholder="NSDP token">'
+                    '<button type="submit">提交</button></form>')
+_TOKEN_SAVED_PAGE = ('<!doctype html><meta charset="utf-8"><title>已保存</title>'
+                     '<p>NSDP token 已保存。请回到飞书，重新发送刚才的指令。</p>')
+_TOKEN_INVALID_PAGE = ('<!doctype html><meta charset="utf-8"><title>提交无效</title>'
+                       '<p>token 格式无效或链接已失效，未保存任何凭据。请回到飞书重新发起。</p>')
 
 
 def _api_error(exc: AuthError):
@@ -92,6 +105,26 @@ class _Handler(BaseHTTPRequestHandler):
             raise AuthError('oauth_invalid_callback')
         return value
 
+    def _read_form_token(self):
+        """Single urlencoded field ``token`` (the NSDP submit form body)."""
+        raw_length = self.headers.get('Content-Length')
+        try:
+            length = int(raw_length or '0')
+        except ValueError:
+            raise AuthError('nsdp_invalid_token') from None
+        if not 0 <= length <= 8192:
+            raise AuthError('nsdp_invalid_token')
+        raw = self.rfile.read(length)
+        try:
+            fields = parse.parse_qs(raw.decode('utf-8'),
+                                    keep_blank_values=True, max_num_fields=8)
+        except (ValueError, UnicodeDecodeError):
+            raise AuthError('nsdp_invalid_token') from None
+        values = fields.get('token', [])
+        if set(fields) != {'token'} or len(values) != 1:
+            raise AuthError('nsdp_invalid_token')
+        return values[0]
+
     def do_GET(self):
         parsed = parse.urlsplit(self.path)
         if parsed.path == '/healthz':
@@ -113,12 +146,28 @@ class _Handler(BaseHTTPRequestHandler):
             else:
                 self._reply_page(400, _INVALID_PAGE)
             return
+        if parsed.path == '/nsdp/submit':
+            query = parse.parse_qs(parsed.query, keep_blank_values=True)
+            state = query.get('state', [None])[0]
+            try:
+                self._service().nsdp_peek(state)
+            except AuthError:
+                self._reply_page(400, _INVALID_PAGE)
+                return
+            self._reply_page(200, _TOKEN_FORM_PAGE)
+            return
         if parsed.path.startswith('/credentials/') and parsed.path.endswith('/token'):
             open_id = parsed.path[len('/credentials/'):-len('/token')]
             query = parse.parse_qs(parsed.query, keep_blank_values=True)
             rejected = query.get('rejected', [None])[0]
+            provider = query.get('provider', ['feishu'])[0] or 'feishu'
             try:
-                self._reply_json(200, self._service().get_valid_token(open_id, rejected_token=rejected))
+                if provider == 'nsdp':
+                    self._reply_json(200, self._service().get_nsdp_token(open_id))
+                elif provider == 'feishu':
+                    self._reply_json(200, self._service().get_valid_token(open_id, rejected_token=rejected))
+                else:
+                    raise AuthError('nsdp_invalid_provider')
             except AuthError as exc:
                 status, payload = _api_error(exc)
                 self._reply_json(status, payload)
@@ -131,6 +180,45 @@ class _Handler(BaseHTTPRequestHandler):
             try:
                 body = self._read_json()
                 result = self._service().authorize_start(body.get('open_id'), body.get('intent') or '')
+            except AuthError as exc:
+                status, payload = _api_error(exc)
+                self._reply_json(status, payload)
+                return
+            self._reply_json(200, result)
+            return
+        if parsed.path == '/token-submissions/start':
+            try:
+                body = self._read_json()
+                if body.get('provider') != 'nsdp':
+                    raise AuthError('nsdp_invalid_provider')
+                result = self._service().nsdp_submission_start(body.get('open_id'))
+            except AuthError as exc:
+                status, payload = _api_error(exc)
+                self._reply_json(status, payload)
+                return
+            self._reply_json(200, result)
+            return
+        if parsed.path == '/nsdp/submit':
+            query = parse.parse_qs(parsed.query, keep_blank_values=True)
+            state = query.get('state', [None])[0]
+            try:
+                outcome = self._service().nsdp_submit(state, self._read_form_token())
+            except AuthError as exc:
+                page = _TOKEN_INVALID_PAGE if exc.reason in ('nsdp_invalid_token',
+                                                             'oauth_state_used',
+                                                             'oauth_unknown_state') else _INVALID_PAGE
+                self._reply_page(400, page)
+                return
+            assert outcome['open_id']
+            self._reply_page(200, _TOKEN_SAVED_PAGE)
+            return
+        if parsed.path.startswith('/credentials/') and parsed.path.endswith('/invalidate'):
+            open_id = parsed.path[len('/credentials/'):-len('/invalidate')]
+            try:
+                body = self._read_json()
+                if body.get('provider') != 'nsdp':
+                    raise AuthError('nsdp_invalid_provider')
+                result = self._service().invalidate_nsdp(open_id)
             except AuthError as exc:
                 status, payload = _api_error(exc)
                 self._reply_json(status, payload)

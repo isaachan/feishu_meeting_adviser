@@ -58,6 +58,9 @@ class BotService:
             handler = getattr(self, f'_cmd_{command.kind}')
             handler(sender_open_id, command, message_id)
         except AdvisorApiError as exc:
+            LOG.warning('advisor error: %s %s (%s)', exc.code, exc.message,
+                        exc.extra if exc.code in ('authorization_required',
+                                                  'advisor_unreachable') else '')
             self._reply(message_id, self._advisor_error_text(exc))
         except CommandRenderError as exc:
             LOG.warning('command render failed: %s', exc)
@@ -72,8 +75,14 @@ class BotService:
 
     def _advisor_error_text(self, exc: AdvisorApiError) -> str:
         if exc.code == 'authorization_required':
+            if exc.extra.get('provider') == 'nsdp':
+                url = exc.extra.get('submit_url', '')
+                return ('听会需要查询 NSDP 版本计划，请先提交你的 NSDP token'
+                        '（打开链接粘贴即可，电脑/手机均可，需内网/VPN；10 分钟内有效）：\n' + url)
             url = exc.extra.get('authorize_url', '')
             return f'需要先完成授权，请点击链接（电脑/手机均可）：\n{url}'
+        if exc.code == 'nsdp_unavailable':
+            return 'NSDP 服务暂时不可用，请稍后重试。'
         if exc.code == 'meeting_not_found':
             return '未在日历中找到这场会议'
         if exc.code == 'not_organizer':

@@ -221,6 +221,20 @@ class BotServiceTests(unittest.TestCase):
         self.assertIn('授权', reply)
         self.assertIn('https://x/oauth?state=1', reply)
 
+    def test_nsdp_authorization_required_sends_submit_link(self):
+        self.advisor.error = AdvisorApiError(
+            409, 'authorization_required', '',
+            {'provider': 'nsdp', 'submit_url': 'https://x/nsdp/submit?state=9'})
+        reply = self.handle('入会 123456789', message_id='om-2n')
+        self.assertIn('NSDP', reply)
+        self.assertIn('https://x/nsdp/submit?state=9', reply)
+        self.assertNotIn('authorize_url', reply)
+
+    def test_nsdp_unavailable_message(self):
+        self.advisor.error = AdvisorApiError(409, 'nsdp_unavailable', '')
+        reply = self.handle('入会 123456789', message_id='om-2u')
+        self.assertIn('NSDP 服务暂时不可用', reply)
+
     def test_four_rejections_have_reasons(self):
         for code, word in (('meeting_not_found', '未在日历中找到'),
                            ('not_organizer', '组织者'),

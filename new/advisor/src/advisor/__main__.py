@@ -43,6 +43,15 @@ def main() -> None:
     serve.add_argument('--calendar-stub', action='store_true',
                        help='[deprecated] same as --calendar stub')
     serve.add_argument('--calendar-stub-description', default='')
+    serve.add_argument('--nsdp', choices=['off', 'noam', 'stub'], default='noam',
+                       help='NSDP organizer token gate/fetch mode (default: noam CLI)')
+    serve.add_argument('--noam-bin', default='noam', help='noam CLI path for --nsdp noam')
+    serve.add_argument('--nsdp-refresh-s', type=float, default=900,
+                       help='NSDP material refresh interval seconds')
+    serve.add_argument('--nsdp-retry-s', type=float, default=60,
+                       help='NSDP re-auth retry interval seconds (session on hold)')
+    serve.add_argument('--nsdp-nag-s', type=float, default=300,
+                       help='NSDP re-auth DM reminder interval seconds')
 
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
@@ -56,8 +65,20 @@ def main() -> None:
     if not database.exists():
         SessionStore.initialize(database)
     settings = AdviserSettings(remote_url=args.gateway_url,
-                               remote_backend=args.remote_backend)
+                               remote_backend=args.remote_backend,
+                               nsdp_refresh_seconds=args.nsdp_refresh_s,
+                               nsdp_retry_seconds=args.nsdp_retry_s,
+                               nsdp_nag_seconds=args.nsdp_nag_s)
     store = SessionStore(database)
+
+    nsdp_service = None
+    if args.nsdp == 'noam':
+        from .nsdp import NsdpClient, NsdpService
+        nsdp_service = NsdpService(HttpAuthClient(args.auth_url),
+                                   NsdpClient(noam_bin=args.noam_bin), store)
+    elif args.nsdp == 'stub':
+        from .nsdp import NsdpService, StubNsdpClient
+        nsdp_service = NsdpService(HttpAuthClient(args.auth_url), StubNsdpClient(), store)
 
     if args.model == 'rule':
         backend_factory = lambda: RuleBackend()  # noqa: E731
@@ -69,7 +90,8 @@ def main() -> None:
     supervisor = SessionSupervisor(store, settings, backend_factory=backend_factory,
                                    ingest_activity=ingest.activity_snapshot,
                                    close_ingest=ingest.close_session,
-                                   source_connected=ingest.source_connected)
+                                   source_connected=ingest.source_connected,
+                                   nsdp=nsdp_service)
     if args.calendar == 'stub' or args.calendar_stub:
         calendar_validator = StubCalendarValidator(args.calendar_stub_description)
     else:
@@ -77,7 +99,7 @@ def main() -> None:
         calendar_validator = FeishuCalendarValidator(HttpAuthClient(args.auth_url))
     api = AdvisorApi(store, supervisor, auth_client=HttpAuthClient(args.auth_url),
                      calendar_validator=calendar_validator,
-                     ingest_url=args.ingest_url)
+                     ingest_url=args.ingest_url, nsdp=nsdp_service)
     stop_ingest = start_ingest_thread(ingest)
     supervisor.start()
     server = build_api_server(api, port=args.api_port)

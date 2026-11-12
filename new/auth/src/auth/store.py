@@ -96,3 +96,58 @@ class CredentialStore:
                 raise ValueError()
         except (KeyError, TypeError, ValueError):
             raise AuthError('oauth_invalid_local_file') from None
+
+
+_NSDP_TOKEN = re.compile(r'[!-~]{8,512}\Z')
+
+
+class NsdpCredentialStore:
+    """Per-open_id NSDP tokens under ``credentials/nsdp/`` (CONTRACT_AUTH §8).
+
+    Long-lived personal tokens submitted via the HTTPS form: no refresh
+    semantics, no state machine. Invalidated by deletion (next read is
+    ``not_authorized`` so the organizer gets a fresh submit link).
+    """
+
+    def __init__(self, directory):
+        self.directory = Path(directory)
+
+    def _paths(self, open_id):
+        if not valid_open_id(open_id):
+            raise AuthError('oauth_invalid_open_id')
+        base = self.directory / open_id
+        return base.with_suffix('.json'), base.with_suffix('.lock')
+
+    @contextmanager
+    def locked(self, open_id):
+        _, lock_path = self._paths(open_id)
+        ensure_private_directory(self.directory)
+        with FileLock(lock_path):
+            yield
+
+    def read(self, open_id):
+        path, _ = self._paths(open_id)
+        value = read_private_json(path)
+        if value is None:
+            return None
+        if (not isinstance(value, dict) or value.get('version') != 1
+                or value.get('provider') != 'nsdp' or value.get('open_id') != open_id
+                or not isinstance(value.get('token'), str)
+                or not _NSDP_TOKEN.fullmatch(value['token'])
+                or type(value.get('updated_at')) not in (int, float)):
+            raise AuthError('oauth_invalid_local_file')
+        return value
+
+    def write(self, open_id, token, *, now):
+        path, _ = self._paths(open_id)
+        if not isinstance(token, str) or not _NSDP_TOKEN.fullmatch(token):
+            raise AuthError('nsdp_invalid_token')
+        write_private_json(path, {'version': 1, 'provider': 'nsdp', 'open_id': open_id,
+                                  'token': token, 'updated_at': now})
+
+    def delete(self, open_id):
+        path, _ = self._paths(open_id)
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            raise AuthError('oauth_local_write_failed') from None

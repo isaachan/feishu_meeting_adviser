@@ -5,13 +5,17 @@ interface returns the binding + title + description on success and raises
 CalendarError(code) for the four S1 rejection paths.
 """
 import json
+import logging
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib import parse
 
 from .auth_client import AuthorizationRequired, AuthUnavailable
 from .errors import StateError, StorageError
+from .nsdp import NsdpUnavailable
 from .store import SessionStore
+
+LOG = logging.getLogger(__name__)
 
 INGEST_PORT = 8400
 
@@ -64,7 +68,7 @@ class AdvisorApi:
 
     def __init__(self, store: SessionStore, supervisor, *,
                  auth_client, calendar_validator, ingest_url, host='127.0.0.1',
-                 clock=time.time):
+                 clock=time.time, nsdp=None):
         self.store = store
         self.supervisor = supervisor
         self.auth = auth_client
@@ -72,6 +76,22 @@ class AdvisorApi:
         self.ingest_url = ingest_url.rstrip('/')
         self.host = host
         self.clock = clock
+        self.nsdp = nsdp
+
+    def _gate_nsdp(self, owner):
+        """Organizer-surface commands require an NSDP token (hard gate).
+
+        小B (subscriber surface) never passes through here.
+        """
+        if self.nsdp is None:
+            return
+        try:
+            self.nsdp.require_token(owner)
+        except AuthorizationRequired as exc:
+            raise ApiError(409, 'authorization_required', 'nsdp token missing/expired',
+                           provider='nsdp', submit_url=exc.url) from None
+        except AuthUnavailable:
+            raise ApiError(409, 'auth_unavailable', 'auth node unreachable') from None
 
     def with_idempotency(self, key, action):
         if not key or not isinstance(key, str) or len(key) > 128:
@@ -103,6 +123,7 @@ class AdvisorApi:
         if active is not None:
             return self._session_response(dict(active), existing=True)
 
+        self._gate_nsdp(owner)
         try:
             self.auth.get_token(owner)
         except AuthorizationRequired:
@@ -116,11 +137,24 @@ class AdvisorApi:
         except CalendarError as exc:
             raise ApiError(409, exc.code, 'calendar validation failed') from None
 
+        nsdp_text = ''
+        if self.nsdp is not None:
+            try:
+                nsdp_text = self.nsdp.fetch(owner, binding.get('description') or '')
+            except AuthorizationRequired as exc:
+                raise ApiError(409, 'authorization_required', 'nsdp token missing/expired',
+                               provider='nsdp', submit_url=exc.url) from None
+            except AuthUnavailable:
+                raise ApiError(409, 'auth_unavailable', 'auth node unreachable') from None
+            except NsdpUnavailable:
+                raise ApiError(409, 'nsdp_unavailable',
+                               'NSDP unreachable; retry the command later') from None
+
         session = self.store.create_session(
             owner_open_id=owner, meeting_no=meeting_no,
             title=binding['title'], event_calendar_id=binding['event_calendar_id'],
             event_id=binding['event_id'], description=binding.get('description') or '',
-            now=self.clock())
+            now=self.clock(), nsdp_text=nsdp_text)
         assert session is not None
         self.supervisor.start_session(session['session_id'])
         return self._session_response(session)
@@ -143,6 +177,7 @@ class AdvisorApi:
     def list_meetings(self, owner):
         if not isinstance(owner, str) or not owner:
             raise ApiError(400, 'bad_message', 'owner_open_id required')
+        self._gate_nsdp(owner)
         try:
             self.auth.get_token(owner)  # credentials gate (same as join)
         except AuthorizationRequired:
@@ -159,6 +194,9 @@ class AdvisorApi:
     # -- sessions ------------------------------------------------------------
 
     def list_sessions(self, owner):
+        if not isinstance(owner, str) or not owner:
+            raise ApiError(400, 'bad_message', 'owner_open_id required')
+        self._gate_nsdp(owner)
         sessions = self.store.list_sessions(owner)
         return {'sessions': [{'session_id': s['session_id'], 'meeting_no': s['meeting_no'],
                               'title': s['title'], 'phase': s['phase'],
@@ -172,6 +210,8 @@ class AdvisorApi:
 
     def end_session(self, session_id, body):
         owner = body.get('owner_open_id')
+        if isinstance(owner, str) and owner:
+            self._gate_nsdp(owner)
         try:
             session = self.store.require_session(session_id)
         except StorageError:
@@ -208,9 +248,12 @@ class AdvisorApi:
             raise ApiError(500, 'internal', 'storage') from None
 
     def decide_subscription(self, request_no, body):
+        owner = body.get('owner_open_id')
+        if isinstance(owner, str) and owner:
+            self._gate_nsdp(owner)
         try:
             return self.store.decide_subscription(
-                request_no, body.get('owner_open_id'), body.get('decision'),
+                request_no, owner, body.get('decision'),
                 now=self.clock())
         except StateError as exc:
             raise _state_error(exc) from None
@@ -219,6 +262,8 @@ class AdvisorApi:
 
     def revoke_subscription(self, request_no, body):
         caller = body.get('owner_open_id') or body.get('subscriber_open_id')
+        if body.get('owner_open_id'):
+            self._gate_nsdp(body.get('owner_open_id'))
         try:
             return self.store.revoke_subscription(
                 request_no, caller, now=self.clock())
@@ -312,6 +357,8 @@ def build_api_server(api: AdvisorApi, host='127.0.0.1', port=8380):
                     status = 200
                 self._reply(status, payload)
             except ApiError as exc:
+                LOG.warning('api error %s %s -> %s %s %s', self.command, self.path,
+                            exc.status, exc.code, exc.message)
                 self._reply(exc.status, {'error': {'code': exc.code,
                                                    'message': exc.message} | exc.extra})
             except StorageError:

@@ -9,7 +9,7 @@ from pathlib import Path
 import secrets
 import threading
 import time
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from .errors import StateError, StorageError
 from .models import (Caption, JobState, MaterialState, ReplyState, SourceState,
@@ -101,14 +101,18 @@ class SessionStore:
     # -- sessions ---------------------------------------------------------
 
     def create_session(self, *, owner_open_id, meeting_no, title, event_calendar_id,
-                       event_id, description='', idle_timeout_s=900, now=None):
+                       event_id, description='', idle_timeout_s=900, now=None,
+                       nsdp_text=''):
         moment = time.time() if now is None else now
         session_id = 's-' + uuid4().hex
         stream_token = 'st-' + secrets.token_urlsafe(32)
         description = description or ''
-        material = {'state': MaterialState.READY.value if description else MaterialState.DISABLED.value,
-                    'context_version': digest(['material-v1', description]) if description else None,
-                    'description': description, 'documents': []}
+        documents = [{'kind': 'nsdp', 'text': nsdp_text}] if nsdp_text else []
+        has_content = bool(description) or bool(documents)
+        material = {'state': MaterialState.READY.value if has_content else MaterialState.DISABLED.value,
+                    'context_version': self._material_version(description, documents)
+                    if has_content else None,
+                    'description': description, 'documents': documents}
         with self.unit_of_work() as tx:
             active = tx.connection.execute(
                 "SELECT session_id FROM sessions WHERE owner_open_id=? AND meeting_no=? "
@@ -337,6 +341,69 @@ class SessionStore:
         row = self.db.execute(
             'SELECT body FROM session_materials WHERE session_id=?', (session_id,)).fetchone()
         return decode_mapping(row['body']) if row else None
+
+    # -- NSDP material / hold / owner notices ----------------------------------
+
+    @staticmethod
+    def _material_version(description, documents) -> str:
+        return digest(['material-v1', description,
+                       *(item.get('text', '') for item in documents)])
+
+    @_locked
+    def update_nsdp_material(self, session_id, text, *, now=None):
+        """Replace the nsdp document in the session material (refresh/prefetch)."""
+        moment = time.time() if now is None else now
+        with self.unit_of_work() as tx:
+            row = tx.connection.execute(
+                'SELECT body FROM session_materials WHERE session_id=?',
+                (session_id,)).fetchone()
+            material = decode_mapping(row['body']) if row else {
+                'state': MaterialState.DISABLED.value, 'context_version': None,
+                'description': '', 'documents': []}
+            documents = [item for item in material.get('documents', [])
+                         if item.get('kind') != 'nsdp']
+            if text:
+                documents.append({'kind': 'nsdp', 'text': text})
+            material['documents'] = documents
+            description = material.get('description') or ''
+            has_content = bool(description) or bool(documents)
+            material['state'] = (MaterialState.READY.value if has_content
+                                 else MaterialState.DISABLED.value)
+            material['context_version'] = (self._material_version(description, documents)
+                                           if has_content else None)
+            tx.connection.execute(
+                'UPDATE session_materials SET body=?, loaded_ns=? WHERE session_id=?',
+                (encode(material), int(moment * 1_000_000_000), session_id))
+            tx.connection.execute(
+                'UPDATE sessions SET material_version=?, material_state=? WHERE session_id=?',
+                (material['context_version'], material['state'], session_id))
+
+    @_locked
+    def set_nsdp_hold(self, session_id, held, *, now=None):
+        """Hold suspends all model decisions for the session (hard gate)."""
+        with self.unit_of_work() as tx:
+            tx.connection.execute(
+                'UPDATE sessions SET nsdp_hold=? WHERE session_id=?',
+                (1 if held else 0, session_id))
+
+    @_locked
+    def insert_owner_notice(self, session_id, recipient_open_id, content, *,
+                            now=None, dedupe_s=300.0):
+        """Queue one IM notice row for the organizer (nsdp re-auth nudges).
+
+        The uuid is bucketed by dedupe window so retries never duplicate a nudge.
+        """
+        moment = time.time() if now is None else now
+        notice_uuid = str(uuid5(NAMESPACE_URL,
+                                f'nsdp-notice:{session_id}:{int(moment // max(1.0, dedupe_s))}'))
+        with self.unit_of_work() as tx:
+            tx.connection.execute(
+                "INSERT OR IGNORE INTO outbox(uuid,session_id,kind,content,evidence,"
+                "generation,created_ns,context_version,answer_uuid,channel,recipient_id,state) "
+                "VALUES (?,?,'reply',?,'{}',0,?,NULL,?,'im',?,'pending')",
+                (notice_uuid, session_id, content, int(moment * 1_000_000_000),
+                 notice_uuid, recipient_open_id))
+        return notice_uuid
 
     # -- snapshot / jobs / decisions ----------------------------------------
 
@@ -619,6 +686,7 @@ class SessionStore:
                 'pending_model_inputs': pending,
                 'material_state': session['material_state'],
                 'material_present': session['material_state'] != MaterialState.DISABLED.value,
+                'nsdp_hold': bool(session['nsdp_hold']),
                 'sources': sources,
                 'subscriptions': self.subscriptions_for(session_id),
                 } | self.reply_statistics(session_id)

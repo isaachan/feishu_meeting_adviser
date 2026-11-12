@@ -157,15 +157,31 @@ class FakeImBus:
 
 class TestBed:
     """One-shot bring-up: auth(stub) + gateway(fake) + advisor(stub calendar) +
-    fake STT + in-process BotService with the fake IM bus."""
+    fake STT + in-process BotService with the fake IM bus.
 
-    def __init__(self):
+    nsdp='stub' additionally enables the advisor NSDP gate with the stub
+    fetch client and fast refresh/retry intervals (real auth-side submission
+    flow over HTTP); default 'off' keeps prior beds unchanged.
+    """
+
+    def __init__(self, *, nsdp='off'):
         self.tmp = tempfile.mkdtemp(prefix='m1-bed-')
         self.processes = []
         self.ports = {}
         self.stt = None
         self.bus = None
         self.service = None
+        self.nsdp_mode = nsdp
+
+    def _advisor_args(self):
+        args = ['--model', 'remote', '--remote-backend', 'fake',
+                '--calendar-stub', '--calendar-stub-description', '集成床日历材料']
+        if self.nsdp_mode == 'stub':
+            args += ['--nsdp', 'stub',
+                     '--nsdp-refresh-s', '2', '--nsdp-retry-s', '1', '--nsdp-nag-s', '2']
+        else:
+            args += ['--nsdp', 'off']
+        return args
 
     def start(self):
         last_error = None
@@ -204,9 +220,7 @@ class TestBed:
                      '--ingest-url', f'ws://127.0.0.1:{ingest_port}/ingest',
                      '--stt-url', self.stt.url,
                      '--gateway-url', f'http://127.0.0.1:{gateway_port}',
-                     '--auth-url', f'http://127.0.0.1:{auth_port}',
-                     '--model', 'remote', '--remote-backend', 'fake',
-                     '--calendar-stub', '--calendar-stub-description', '集成床日历材料'],
+                     '--auth-url', f'http://127.0.0.1:{auth_port}'] + self._advisor_args(),
                     env, 'advisor')
 
         assert wait_healthz(f'http://127.0.0.1:{auth_port}/healthz'), 'auth healthz timeout'
@@ -277,10 +291,8 @@ class TestBed:
                          '--stt-url', self.stt.url,
                          '--gateway-url',
                          f'http://127.0.0.1:{self.ports["gateway"]}',
-                         '--auth-url', f'http://127.0.0.1:{self.ports["auth"]}',
-                         '--model', 'remote', '--remote-backend', 'fake',
-                         '--calendar-stub', '--calendar-stub-description', '集成床日历材料'],
-                        dict(os.environ), 'advisor')
+                         '--auth-url', f'http://127.0.0.1:{self.ports["auth"]}']
+                        + self._advisor_args(), dict(os.environ), 'advisor')
         self.ports['api'], self.ports['ingest'] = api_port, ingest_port
         spawn()
         assert wait_healthz(f'http://127.0.0.1:{api_port}/healthz'), 'advisor restart healthz'
@@ -313,6 +325,45 @@ class TestBed:
             page = response.read().decode()
         assert '授权成功' in page, page
         return payload['authorize_url']
+
+    def nsdp_submit(self, open_id, token):
+        """Real NSDP submission flow over HTTP: start -> paste form -> saved."""
+        from urllib.parse import parse_qs, urlencode, urlsplit
+        opener = request.build_opener(request.ProxyHandler({}))
+        req = request.Request(
+            f'http://127.0.0.1:{self.ports["auth"]}/token-submissions/start',
+            data=json.dumps({'open_id': open_id, 'provider': 'nsdp'}).encode(),
+            method='POST', headers={'Content-Type': 'application/json'})
+        with opener.open(req, timeout=5) as response:
+            payload = json.loads(response.read())
+        state = parse_qs(urlsplit(payload['submit_url']).query)['state'][0]
+        form = request.Request(
+            f'http://127.0.0.1:{self.ports["auth"]}/nsdp/submit?state={state}',
+            data=urlencode({'token': token}).encode(), method='POST',
+            headers={'Content-Type': 'application/x-www-form-urlencoded'})
+        with opener.open(form, timeout=5) as response:
+            page = response.read().decode()
+        assert '已保存' in page, page
+        return payload['submit_url']
+
+    def nsdp_invalidate(self, open_id):
+        req = request.Request(
+            f'http://127.0.0.1:{self.ports["auth"]}/credentials/{open_id}/invalidate',
+            data=json.dumps({'provider': 'nsdp'}).encode(), method='POST',
+            headers={'Content-Type': 'application/json'})
+        opener = request.build_opener(request.ProxyHandler({}))
+        with opener.open(req, timeout=5) as response:
+            return json.loads(response.read())
+
+    def advisor_db_read(self, query, args=()):
+        """Read-only peek into the advisor sqlite (material assertions)."""
+        import sqlite3
+        path = os.path.join(self.tmp, 'advisor', 'adviser.sqlite3')
+        connection = sqlite3.connect(f'file:{path}?mode=ro', uri=True)
+        try:
+            return connection.execute(query, args).fetchall()
+        finally:
+            connection.close()
 
     def ingest_connect(self, session_id, token, source='loopback'):
         """Open a raw ingest WS connection (contract client, test driven)."""

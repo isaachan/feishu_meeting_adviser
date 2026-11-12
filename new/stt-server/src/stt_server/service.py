@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
+import struct
 import threading
 
 from .auth import AuthError, AuthValidate
@@ -42,6 +44,15 @@ class ServiceState:
             return self._active
 
 
+def _pcm_rms(pcm: bytes) -> float:
+    """RMS of an int16 LE chunk (0.0-32768 scale); 0.0 for empty input."""
+    count = len(pcm) // 2
+    if not count:
+        return 0.0
+    samples = struct.unpack(f'<{count}h', pcm[:count * 2])
+    return math.sqrt(sum(s * s for s in samples) / count)
+
+
 async def _send_json(websocket, payload: dict) -> None:
     await websocket.send(json.dumps(payload, ensure_ascii=False))
 
@@ -60,10 +71,39 @@ class SttService:
         self._recognizer_factory = recognizer_factory
         self.auth = auth
         self.state = ServiceState(max_sessions=max_sessions)
+        self._conn_seq = 0
+        self._live: dict[int, dict] = {}
+        self._live_lock = threading.Lock()
+
+    def stats(self) -> list[dict]:
+        with self._live_lock:
+            return [dict(info) for info in self._live.values()]
+
+    def _track(self, info: dict) -> int:
+        info.setdefault('source_id', '')
+        info['fed_samples'] = 0
+        info['audio_s'] = 0.0
+        info['decode_ms'] = 0.0
+        info['finals'] = 0
+        info['partials'] = 0
+        info['rms_max'] = 0.0
+        info['rms_last'] = 0.0
+        info['last_partial'] = ''
+        with self._live_lock:
+            self._conn_seq += 1
+            self._live[self._conn_seq] = info
+            return self._conn_seq
+
+    def _untrack(self, key: int) -> None:
+        with self._live_lock:
+            self._live.pop(key, None)
 
     async def handle(self, websocket) -> None:
         session: ServerSession | None = None
         acquired = False
+        stats_key: int | None = None
+        info: dict = {}
+        finals = 0
         try:
             first = await asyncio.wait_for(websocket.recv(), self.idle_timeout)
             if not isinstance(first, str):
@@ -122,7 +162,8 @@ class SttService:
                                              'calendar_event_id': validated.calendar_event_id}
                                             if validated is not None else {})})
 
-            finals = 0
+            info = {'source_id': str(start.get('source_id') or '')}
+            stats_key = self._track(info)
             while True:
                 try:
                     message = await asyncio.wait_for(websocket.recv(),
@@ -142,6 +183,9 @@ class SttService:
                         await self._fail(websocket, 'bad_message',
                                          'binary frame must be int16 frames')
                         return
+                    rms = _pcm_rms(pcm)
+                    info['rms_last'] = round(rms, 1)
+                    info['rms_max'] = max(info['rms_max'], rms)
                     try:
                         events = await asyncio.to_thread(
                             session.feed_samples, pcm)
@@ -178,18 +222,34 @@ class SttService:
                 for event in events:
                     if event.status == 'final':
                         finals += 1
+                    else:
+                        info['partials'] += 1
+                        info['last_partial'] = event.text[:80]
                     await _send_json(websocket, {
                         'type': event.status,
                         'text': event.text,
                         'start_offset': event.start_offset,
                         'end_offset': event.end_offset,
                     })
+                info['fed_samples'] = session.fed
+                info['audio_s'] = round(session.fed / 16000.0, 1)
+                info['decode_ms'] = round(session.decode_ms, 0)
+                info['finals'] = finals
         except Exception:  # noqa: BLE001 - connection torn down
             if session is not None:
                 session.cancel()
         finally:
             if acquired:
                 self.state.release()
+            if stats_key is not None:
+                self._untrack(stats_key)
+                if session is not None:
+                    print(json.dumps({
+                        'event': 'session_closed', 'source_id': info['source_id'],
+                        'audio_s': round(session.fed / 16000.0, 1),
+                        'decode_ms': round(session.decode_ms, 0),
+                        'finals': finals, 'rms_max': round(info['rms_max'], 1),
+                    }, ensure_ascii=False), flush=True)
 
     @staticmethod
     async def _send_event(websocket, event) -> None:

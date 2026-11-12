@@ -7,6 +7,7 @@ REASONS = frozenset({
     'oauth_invalid_callback', 'oauth_invalid_local_file', 'oauth_local_write_failed',
     'oauth_invalid_open_id', 'oauth_unknown_state', 'oauth_state_expired',
     'oauth_state_used', 'oauth_subject_mismatch',
+    'nsdp_invalid_token', 'nsdp_invalid_provider',
 })
 
 

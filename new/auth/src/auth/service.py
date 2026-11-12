@@ -14,11 +14,12 @@ import time
 from pathlib import Path
 from urllib import parse
 
-from .constants import AUTHORIZE_URL, CALLBACK_PATH, DEFAULT_STATE_TTL_S, SCOPES
+from .constants import (AUTHORIZE_URL, CALLBACK_PATH, DEFAULT_STATE_TTL_S, NSDP_INTENT,
+                        NSDP_SUBMIT_PATH, SCOPES)
 from .errors import AuthError
 from .state_table import StateTable
 from .storage import digest
-from .store import CredentialStore, valid_open_id
+from .store import CredentialStore, NsdpCredentialStore, valid_open_id
 from .transport import FeishuTransport
 
 _CODE = re.compile(r'[A-Za-z0-9_-]{1,4096}\Z')
@@ -37,6 +38,7 @@ class AuthService:
         self.transport = transport or FeishuTransport(credentials)
         data = Path(data_dir)
         self.store = CredentialStore(data / 'credentials')
+        self.nsdp_store = NsdpCredentialStore(data / 'credentials' / 'nsdp')
         self.states = StateTable(data / 'pending_states.json', clock, ttl_s=state_ttl_s)
         self._flight_guard = threading.Lock()
         self._flights = {}
@@ -161,3 +163,48 @@ class AuthService:
     def _token_response(value):
         return {'access_token': value['access_token'], 'expires_at': value['expires_at'],
                 'scopes': list(value['scopes'])}
+
+    # -- NSDP token submissions (CONTRACT_AUTH §8) -----------------------------
+
+    def nsdp_submission_start(self, open_id):
+        """One-shot submit link bound to the open_id (same state table/TTL)."""
+        if not valid_open_id(open_id):
+            raise AuthError('oauth_invalid_open_id')
+        entry = self.states.issue(open_id, NSDP_INTENT,
+                                  self.base_url + NSDP_SUBMIT_PATH, '')
+        return {'submit_url': f"{entry['redirect_uri']}?state={entry['state']}",
+                'state': entry['state'], 'expires_at': entry['expires_at']}
+
+    def nsdp_peek(self, state):
+        entry = self.states.peek(state)
+        if entry.get('intent') != NSDP_INTENT:
+            raise AuthError('oauth_invalid_callback')
+        return entry
+
+    def nsdp_submit(self, state, token):
+        """Consume the state (one-shot) and store the token for its open_id."""
+        entry = self.states.take(state)
+        if entry.get('intent') != NSDP_INTENT:
+            raise AuthError('oauth_invalid_callback')
+        open_id = entry['open_id']
+        if not isinstance(token, str) or not token.strip():
+            raise AuthError('nsdp_invalid_token')
+        token = token.strip()
+        with self.nsdp_store.locked(open_id):
+            self.nsdp_store.write(open_id, token, now=self.clock())
+        return {'open_id': open_id}
+
+    def get_nsdp_token(self, open_id):
+        if not valid_open_id(open_id):
+            raise AuthError('oauth_invalid_open_id')
+        record = self.nsdp_store.read(open_id)
+        if record is None:
+            raise AuthError('oauth_not_authorized')
+        return {'token': record['token'], 'updated_at': record['updated_at']}
+
+    def invalidate_nsdp(self, open_id):
+        if not valid_open_id(open_id):
+            raise AuthError('oauth_invalid_open_id')
+        with self.nsdp_store.locked(open_id):
+            self.nsdp_store.delete(open_id)
+        return {'ok': True}

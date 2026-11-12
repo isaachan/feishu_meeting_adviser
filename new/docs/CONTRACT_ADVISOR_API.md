@@ -1,6 +1,6 @@
 # Advisor 内部 API 契约（bot ↔ advisor）
 
-状态：v1 于 2026-11-10 冻结（阶段 0.3）。服务端为 `new/advisor`（会话域 + 一次性操作），客户端为 `new/bot`。变更需 bump API 版本并同步两侧实现与测试。上游设计：[ARCHITECTURE](ARCHITECTURE.md) D4/D6；outbox 语义沿用旧 advisor（channel=`local`/`im`、uuid 幂等、uncertain 人工裁决）。
+状态：v1 于 2026-11-10 冻结（阶段 0.3）；**v1.1（2026-11-11）** 新增 NSDP 组织者凭据门（`authorization_required` 增加 `provider`/`submit_url` 变体与 `nsdp_unavailable`；组织者面全部指令前置该门；`GET /sessions/{id}/status` 响应新增 `nsdp_hold`）。服务端为 `new/advisor`（会话域 + 一次性操作），客户端为 `new/bot`。变更需 bump API 版本并同步两侧实现与测试。上游设计：[ARCHITECTURE](ARCHITECTURE.md) D4/D6；outbox 语义沿用旧 advisor（channel=`local`/`im`、uuid 幂等、uncertain 人工裁决）。
 
 ## 1. 传输与通用约定
 
@@ -15,15 +15,18 @@
 |---|---|---|
 | `bad_message` | 字段非法/缺失 | 回用户"指令格式有误" |
 | `not_found` | 会话/订阅请求不存在；或订阅目标会议未命中 | 回用户"未找到该会议或会议已结束" |
-| `authorization_required` | 组织者凭据缺失/失效（响应体附 `authorize_url`） | 把授权链接转发给小A |
+| `authorization_required` | 组织者凭据缺失/失效。飞书变体附 `authorize_url`；NSDP 变体（v1.1）附 `provider:"nsdp"` + `submit_url`（一次性提交链接，见 CONTRACT_AUTH §8） | 把授权链接/提交链接转发给小A（NSDP 变体用 NSDP 话术） |
 | `meeting_not_found` | 日历中无此会议 | 告知原因 |
 | `not_organizer` | 小A 非该日历事件组织者 | 告知原因 |
 | `outside_window` | 当前不在会议时间窗内 | 告知原因 |
 | `auth_unavailable` | 飞书/凭据服务不可达（fail-closed） | 提示稍后重试 |
+| `nsdp_unavailable` | NSDP/noam 不可达（fail-closed，入会被拒） | 提示"NSDP 服务暂时不可用，稍后再试" |
 | `session_ended` / `session_draining` | 会话已结束/排空中，操作被拒 | 告知原因 |
-| `not_owner` | 操作者不是该会话/订阅的 owner | 告知"只有组织者可以…" |
+| `not_owner` | 操作者不是该会话/订阅的 owner | 回答"只有组织者可以…" |
 | `invalid_state` | 状态机非法迁移（含订阅已 revoked 再申请等） | 按 §6.6 对应话术回复 |
 | `internal` | 服务端内部错误 | 提示稍后重试 |
+
+**NSDP 门（v1.1）**：组织者面全部指令（入会/会议列表/状态/结束会议/审批/组织者撤销）在执行前要求该 open_id 已有 NSDP token；无/失效 → 409 `authorization_required`（NSDP 变体），bot 每次都回新提交链接（被动持续提醒）。订阅面（小B 的申请/取消）**不经过**该门。会话进行中 token 失效：监督器置 `nsdp_hold=1`（挂起该会话全部模型决策），经 outbox 向小A 周期性 DM 新提交链接（默认 5 分钟一条）；重新提交成功后自动恢复。NSDP 数据由 advisor 侧取（noam 子进程，token 仅存在于子进程环境），以 `kind:"nsdp"` 材料文档进入模型上下文；建会时的取数兼作 token 隐式验活。
 
 ## 2. `POST /sessions` —— 入会（S1）
 

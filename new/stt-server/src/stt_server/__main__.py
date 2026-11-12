@@ -38,6 +38,14 @@ def parser() -> argparse.ArgumentParser:
 def _health_server(service: SttService, port: int) -> ThreadingHTTPServer:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):  # noqa: N802 - http.server API
+            if self.path == '/stats':
+                body = json.dumps(service.stats(), ensure_ascii=False).encode()
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if self.path != '/healthz':
                 self.send_response(404)
                 self.end_headers()

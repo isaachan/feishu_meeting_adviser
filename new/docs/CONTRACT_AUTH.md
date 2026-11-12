@@ -1,6 +1,6 @@
 # Auth 服务契约（OAuth 凭据托管）
 
-状态：v1 于 2026-11-10 冻结（阶段 0.4）。服务端为 `new/auth`。语义自旧 `local-meeting-recorder/src/local_meeting_recorder/oauth.py` 平移（2026-11-10 已对真实飞书 API 形状验证），改为云端多用户（按 open_id 隔离）+ HTTPS 回调。变更需 bump 版本并同步 advisor/auth 两侧实现与测试。上游设计：[ARCHITECTURE](ARCHITECTURE.md) D3。
+状态：v1 于 2026-11-10 冻结（阶段 0.4）。**v1.1（2026-11-11）** 新增 §8：NSDP token 提交通道（组织者个人 token，表单提交、无刷新语义），凭据存储增加 provider 维度。服务端为 `new/auth`。语义自旧 `local-meeting-recorder/src/local_meeting_recorder/oauth.py` 平移（2026-11-10 已对真实飞书 API 形状验证），改为云端多用户（按 open_id 隔离）+ HTTPS 回调。变更需 bump 版本并同步 advisor/auth 两侧实现与测试。上游设计：[ARCHITECTURE](ARCHITECTURE.md) D3。
 
 ## 1. 范围、端点与角色
 
@@ -19,7 +19,8 @@
 
 - scopes：`calendar:calendar:read`、`calendar:calendar.event:read`、`offline_access`。
 - redirect URI 必须与飞书应用后台注册值**精确匹配**（`https://<域名>/oauth/callback`）。
-- **红线**：user_access_token/refresh_token 绝不进入 IM 文本、不下发 laptop；内部 API 响应仅给 advisor，用后不留存。
+- **红线**：user_access_token/refresh_token 绝不进入 IM 文本、不下发 laptop；内部 API 响应仅给 advisor，用后不留存。**v1.1 起红线同样覆盖 NSDP token（§8）。**
+- **v1.1**：`GET /credentials/{open_id}/token` 接受 `?provider=feishu|nsdp`（缺省 feishu，向后兼容）；飞书响应 `{access_token, expires_at, scopes}`，NSDP 响应 `{token, updated_at}`。
 
 ## 2. 内部 API（仅 advisor 调用）
 
@@ -96,4 +97,25 @@
 
 ## 7. 版本
 
-API v1。不兼容变更递增版本号，并同步 auth/advisor 两侧实现、测试与 `new/integrations/` 用例。
+API v1（v1.1 见 §8）。不兼容变更递增版本号，并同步 auth/advisor 两侧实现、测试与 `new/integrations/` 用例。
+
+## 8. NSDP token 提交通道（v1.1）
+
+组织者（小A）的个人 NSDP token：长期有效、无过期时间可判、无刷新语义。失效只能在使用时由 401 发现（advisor 侧），失效即删除凭据（下次读取 `not_authorized` → 重新走提交流程）。仅组织者需要；小B 无此通道。
+
+### 8.1 内部 API（仅 advisor 调用）
+
+- `POST /token-submissions/start` `{"open_id": "ou_A", "provider": "nsdp"}` → 200 `{"submit_url": "https://<域名>/nsdp/submit?state=…", "state": "rnd-…", "expires_at": …}`。state 复用 §2.1 的 state 表语义（随机、一次性、TTL 10 min、绑定 open_id；intent=`nsdp:token` 与飞书 OAuth state 区分）。
+- `GET /credentials/{open_id}/token?provider=nsdp` → 200 `{"token": "…", "updated_at": …}`；无记录 → 404 `not_authorized`。
+- `POST /credentials/{open_id}/invalidate` `{"provider": "nsdp"}` → 200 `{"ok": true}`（幂等；advisor 观察到 NSDP 401 后调用）。
+
+### 8.2 HTTPS 面（浏览器表单，与 OAuth 回调同面同约束）
+
+- `GET /nsdp/submit?state=…`：校验 state（存在、未用、未过期、intent 匹配；**不核销**，刷新页面可用）→ 极简表单页（`type=password`、`autocomplete=off`、无第三方资源）。
+- `POST /nsdp/submit?state=…`（`application/x-www-form-urlencoded`，单字段 `token`）：**核销 state（一次性）** → 格式校验（可打印、8..512 字符；**不验活**——保持 auth 只做凭据不出网，错误 token 由使用时 401 暴露）→ 按 open_id 存储 → 成功页（"回到飞书重发刚才的指令"，不回显 token）。任何失败 → 显式失败页，不重放。
+- 重复提交同一 state → 400 失败页；已保存的旧 token 不被覆盖。
+
+### 8.3 存储与红线
+
+- `<auth 数据目录>/credentials/nsdp/<open_id>.json`（0700/0600、原子写、`O_NOFOLLOW`，同 §5 纪律）：`{version:1, provider:"nsdp", open_id, token, updated_at}`。
+- 红线：NSDP token 绝不进入 IM 文本（链接里只有 state）、不下发 laptop、不出现在任何 HTML 页面（含错误页）；仅 advisor 经内部 API 读取，用后不留存；提交时不验活、不回显。

@@ -4,9 +4,11 @@ from urllib import error, request
 
 
 class AuthorizationRequired(Exception):
-    def __init__(self, authorize_url):
-        self.authorize_url = authorize_url
-        super().__init__('authorization_required')
+    def __init__(self, url, provider='feishu'):
+        self.url = url
+        self.provider = provider
+        self.authorize_url = url  # legacy attribute name (feishu callers)
+        super().__init__(f'authorization_required:{provider}')
 
 
 class AuthUnavailable(Exception):
@@ -26,8 +28,17 @@ class HttpAuthClient:
             raw = response.read()
         return json.loads(raw) if raw else {}
 
+    @staticmethod
+    def _error_code(exc):
+        payload = {}
+        try:
+            payload = json.loads(exc.read() or b'{}')
+        except ValueError:
+            pass
+        return payload.get('error', {}).get('code')
+
     def get_token(self, open_id, *, rejected_token=None):
-        """Returns {'access_token', 'expires_at', 'scopes'}.
+        """Returns {'access_token', 'expires_at', 'scopes'} (Feishu provider).
 
         Raises AuthorizationRequired (with authorize_url) or AuthUnavailable.
         """
@@ -35,12 +46,7 @@ class HttpAuthClient:
         try:
             return self._call('GET', f'/credentials/{open_id}/token{query}')
         except error.HTTPError as exc:
-            payload = {}
-            try:
-                payload = json.loads(exc.read() or b'{}')
-            except ValueError:
-                pass
-            code = payload.get('error', {}).get('code')
+            code = self._error_code(exc)
             if code == 'reauthorization_required' or exc.code == 404:
                 # not_authorized / reauthorization_required both mean: send a link
                 raise AuthorizationRequired(self.authorize_url(open_id)) from None
@@ -54,3 +60,37 @@ class HttpAuthClient:
         result = self._call('POST', '/authorize/start',
                             {'open_id': open_id, 'intent': intent})
         return result['authorize_url']
+
+    # -- NSDP provider (CONTRACT_AUTH §8) -------------------------------------
+
+    def nsdp_submit_url(self, open_id):
+        result = self._call('POST', '/token-submissions/start',
+                            {'open_id': open_id, 'provider': 'nsdp'})
+        return result['submit_url']
+
+    def get_nsdp_token(self, open_id):
+        """Returns {'token', 'updated_at'} or raises AuthorizationRequired
+        (url = one-shot submit link) / AuthUnavailable."""
+        try:
+            return self._call('GET', f'/credentials/{open_id}/token?provider=nsdp')
+        except error.HTTPError as exc:
+            code = self._error_code(exc)
+            if code == 'not_authorized' or exc.code == 404:
+                try:
+                    url = self.nsdp_submit_url(open_id)
+                except (error.HTTPError, error.URLError, OSError, ValueError):
+                    raise AuthUnavailable('submit_start') from None
+                raise AuthorizationRequired(url, provider='nsdp') from None
+            if exc.code in (503, 400):
+                raise AuthUnavailable(code or exc.code) from None
+            raise AuthUnavailable('internal') from None
+        except (error.URLError, OSError, ValueError) as exc:
+            raise AuthUnavailable('network') from exc
+
+    def invalidate_nsdp(self, open_id):
+        """Drop the stored NSDP token (advisor observed 401 from NSDP)."""
+        try:
+            self._call('POST', f'/credentials/{open_id}/invalidate',
+                       {'provider': 'nsdp'})
+        except (error.HTTPError, error.URLError, OSError, ValueError):
+            pass  # best effort: a stale record still reads as unauthorized later

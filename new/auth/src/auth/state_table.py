@@ -69,6 +69,21 @@ class StateTable:
             self._save(value)
             return dict(entry)
 
+    def peek(self, state):
+        """Read an unused entry without consuming it (renders the submit form)."""
+        if not isinstance(state, str) or not state:
+            raise AuthError('oauth_invalid_callback')
+        now = self.clock()
+        with self._lock:
+            value = self._load()
+            self._prune(value['states'], now)
+            entry = value['states'].get(state)
+            if entry is None:
+                raise AuthError('oauth_unknown_state')
+            if entry.get('used'):
+                raise AuthError('oauth_state_used')
+            return dict(entry)
+
     def release(self, state):
         """Drop a state entry (user declined)."""
         with self._lock:

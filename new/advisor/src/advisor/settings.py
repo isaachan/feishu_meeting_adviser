@@ -16,3 +16,6 @@ class AdviserSettings:
     reply_interval_seconds: float = 10
     idle_timeout_s: int = 900
     poll_interval: float = 0.5
+    nsdp_refresh_seconds: float = 900
+    nsdp_retry_seconds: float = 60
+    nsdp_nag_seconds: float = 300

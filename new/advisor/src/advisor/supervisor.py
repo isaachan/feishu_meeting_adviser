@@ -11,9 +11,11 @@ import os
 import threading
 import time
 
+from .auth_client import AuthorizationRequired
 from .errors import StorageError
 from .model_jobs import ModelJobExecutor
 from .model_backend import load_role
+from .nsdp import NsdpUnavailable
 from .settings import AdviserSettings
 from .store import SessionStore
 
@@ -23,7 +25,8 @@ LOG = logging.getLogger(__name__)
 class SessionSupervisor:
     def __init__(self, store: SessionStore, settings: AdviserSettings, *,
                  backend_factory, ingest_activity=None, close_ingest=None,
-                 source_connected=None, clock=time.time, monotonic=time.monotonic):
+                 source_connected=None, clock=time.time, monotonic=time.monotonic,
+                 nsdp=None):
         self.store = store
         self.settings = settings
         self.backend_factory = backend_factory
@@ -32,6 +35,9 @@ class SessionSupervisor:
         self.source_connected = source_connected
         self.clock = clock
         self.monotonic = monotonic
+        self.nsdp = nsdp
+        self._nsdp_next: dict[str, float] = {}
+        self._nsdp_last_nag: dict[str, float] = {}
         self._stop = threading.Event()
         self._threads: dict[str, threading.Thread] = {}
         self._guard = threading.Lock()
@@ -91,6 +97,7 @@ class SessionSupervisor:
                 if phase == 'ended':
                     return
                 now = self.clock()
+                self._nsdp_maintenance(session_id, session, now)
                 result = executor.take_finished()
                 if result is not None:
                     self._apply_result(result, now)
@@ -117,6 +124,9 @@ class SessionSupervisor:
             self.store.release_lease(session_id, self._lease_owner)
 
     def _launch(self, executor, session_id, role_version, now):
+        session = self.store.session(session_id)
+        if session is not None and session['nsdp_hold']:
+            return  # hard gate: no model decisions while NSDP authorization is missing
         job = self.store.prepare_job(session_id, self.settings, role_version, now=now)
         if job is None:
             return
@@ -139,6 +149,57 @@ class SessionSupervisor:
         for source in self.store.live_sources(session_id):
             if not connected(session_id, source):
                 self.store.mark_source_lost(session_id, source)
+
+    # -- NSDP maintenance (hold / nag / resume) --------------------------------
+
+    def _nsdp_maintenance(self, session_id, session, now):
+        """Periodic refresh while healthy; fast retry + nag DMs while held."""
+        if self.nsdp is None or now < self._nsdp_next.get(session_id, 0.0):
+            return
+        if session['nsdp_hold']:
+            self._nsdp_next[session_id] = now + self.settings.nsdp_retry_seconds
+            self._nsdp_try_resume(session_id, session, now)
+        else:
+            self._nsdp_next[session_id] = now + self.settings.nsdp_refresh_seconds
+            self._nsdp_refresh(session_id, session, now)
+
+    def _nsdp_clues(self, session_id):
+        material = self.store.materials(session_id) or {}
+        return material.get('description') or ''
+
+    def _nsdp_refresh(self, session_id, session, now):
+        try:
+            self.nsdp.prefetch(session['owner_open_id'], session_id,
+                               self._nsdp_clues(session_id))
+        except AuthorizationRequired:
+            self.store.set_nsdp_hold(session_id, True, now=now)
+            self._nsdp_nag(session_id, session['owner_open_id'], now)
+            # a fresh 401 switches immediately to fast-retry cadence
+            self._nsdp_next[session_id] = now + self.settings.nsdp_retry_seconds
+            LOG.warning('session %s nsdp hold: token missing/rejected', session_id)
+        except NsdpUnavailable as exc:
+            LOG.warning('session %s nsdp refresh unavailable: %s', session_id, exc)
+
+    def _nsdp_try_resume(self, session_id, session, now):
+        try:
+            self.nsdp.prefetch(session['owner_open_id'], session_id,
+                               self._nsdp_clues(session_id))
+        except AuthorizationRequired:
+            self._nsdp_nag(session_id, session['owner_open_id'], now)
+        except NsdpUnavailable as exc:
+            LOG.warning('session %s nsdp resume unavailable: %s', session_id, exc)
+        else:
+            self.store.set_nsdp_hold(session_id, False, now=now)
+            self._nsdp_next[session_id] = now + self.settings.nsdp_refresh_seconds
+            LOG.info('session %s nsdp authorization restored; decisions resumed',
+                     session_id)
+
+    def _nsdp_nag(self, session_id, owner_open_id, now):
+        if now - self._nsdp_last_nag.get(session_id, 0.0) < self.settings.nsdp_nag_seconds:
+            return
+        self._nsdp_last_nag[session_id] = now
+        self.nsdp.notify_owner(session_id, owner_open_id,
+                               dedupe_s=self.settings.nsdp_nag_seconds)
 
     def _idle_expired(self, session_id):
         activity = self.ingest_activity()
