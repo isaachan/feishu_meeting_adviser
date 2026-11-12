@@ -1,5 +1,7 @@
 # stt-server
 
+> **方案 B 遗产（已停维，仅作移植参考）。** 已整体平移为 [`new/stt-server/`](../../new/stt-server/)（鉴权固定 `none`，准入由云端 advisor 完成）。本模块不再维护。唯一开发入口见 [new/README.md](../../new/README.md)。
+
 流式 STT 服务：sherpa-onnx 流式 Zipformer（zh-en-punct int8）经 WebSocket 对外提供识别会话。协议契约见 [CONTRACT_STT_STREAM](../docs/CONTRACT_STT_STREAM.md)（v1）。客户端为 `local-meeting-recorder` 的 `stt: remote-stream` 模式；本模块不依赖仓库内其他模块。
 
 ## 安装（Ubuntu Server，CPU）

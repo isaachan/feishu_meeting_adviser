@@ -1,5 +1,7 @@
 # 流式 STT 服务契约（stt-server v2）
 
+> **方案 B 遗产，方案 C 沿用（2026-11-10 平移）。** 本契约协议继续作为 `new/stt-server` 的协议参考；差异：方案 C 中鉴权前移到 advisor（组织者/时间窗校验在 advisor 执行），stt-server 的 auth 固定为 `none`（本契约 v2 的鉴权语义由 auth 节点 + advisor 承接，见 [new/docs/ARCHITECTURE.md](../new/docs/ARCHITECTURE.md) D2/D3）。开发入口为 [new/README.md](../new/README.md)。
+
 状态：v1 于 2026-11-10 冻结（阶段 5.11）；**v2 于 2026-11-10 修订：新增基于飞书日历组织者身份的会话授权**（`start.auth`、核验语义、新增错误码，见第 1、2.1、3.1、3.5、5 节）。服务端为独立模块 `stt-server/`（sherpa-onnx 流式模型）；客户端为 `local-meeting-recorder` 的 `stt: remote-stream` 模式。变更需 bump 协议版本并同步两侧模块与测试。
 
 ## 1. 传输与基线

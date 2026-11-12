@@ -1,5 +1,7 @@
 # 方案 B 落地计划：本地 advisor + 远程模型执行
 
+> **本文档已停维（方案 B 遗产）。** 方案 C（云端 advisor + laptop 采集器）已于 2026-11-10 立项并成为唯一活跃架构，唯一开发入口是 [`new/`](new/README.md)（架构 [new/docs/ARCHITECTURE.md](new/docs/ARCHITECTURE.md)，实施计划 [new/plan.md](new/plan.md)）。本文与根目录各模块（advisor/、local-meeting-recorder/、stt-server/、llm-gateway/）仅作移植参考，不再维护；下述内容为方案 B 时期的历史记录，不代表当前架构事实。
+
 状态：架构方向已确认，以下实施任务均待执行。
 
 ## 1. 已确认方向

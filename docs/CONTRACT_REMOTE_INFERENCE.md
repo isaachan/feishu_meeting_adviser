@@ -1,5 +1,7 @@
 # 远程推理契约（advisor → llm-gateway）
 
+> **方案 B 遗产，方案 C 原样沿用（2026-11-10 平移）。** 本契约继续作为 `new/llm-gateway` 与 `new/advisor`（云内调用）的协议参考；注意现行部署基线见 [new/docs/DEPLOYMENT.md](../new/docs/DEPLOYMENT.md)，开发入口为 [new/README.md](../new/README.md)。
+
 状态：阶段 0 冻结（2026-11-08）。M1 先用网关假模型验证；真实后端按 OpenCode（GLM）优先、Codex 其后的顺序接入。背景见 [plan.md](../plan.md)。
 
 ## 1. 总则

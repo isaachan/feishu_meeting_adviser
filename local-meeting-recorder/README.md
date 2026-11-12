@@ -1,5 +1,7 @@
 # local-meeting-recorder
 
+> **方案 B 遗产（已停维，仅作移植参考）。** 已被方案 C 的 [`new/recorder/`](../../new/recorder/) 取代：去 spool/本地 OAuth/STT 客户端，改 WS 直推云端 advisor ingest（流令牌鉴权），采集层（SCK 双路 + MuteGate + 本地留存）已平移。本模块不再维护。唯一开发入口见 [new/README.md](../../new/README.md)。
+
 在终端用户 laptop 上运行，把本地会议音频转为字幕并交接给 advisor。提供两种模式，输出同一契约事件：
 
 - **fake 模式**：按预写台词及时间间隔回放（无音频依赖，标准库即可运行）。

@@ -1,5 +1,7 @@
 # 远程服务器开发与部署（Remote Server Development）
 
+> **本文档已停维（方案 B 部署基线）。** 其"advisor 与 recorder 始终在 laptop 本地运行、仅需远程部署 stt-server 和 llm-gateway"的结论**已过时**：方案 C（2026-11-10 立项）中 advisor、bot、auth、stt-server、llm-gateway 五个节点全部部署在云端服务器，laptop 只跑 recorder。现行部署基线见 [new/docs/DEPLOYMENT.md](../new/docs/DEPLOYMENT.md)，开发入口为 [new/README.md](../new/README.md)。本文仅作历史参考（M2/5.11 部署经验仍可借鉴）。
+
 状态：2026-11-10 建立。汇总远程服务器上两个服务模块的部署、客户端接入与验证方式；对应里程碑 M2（llm-gateway 远程真机验证，2026-11-09）、5.11 远程 STT 验收（2026-11-10）与飞书组织者授权验收（2026-11-10）。
 
 ## 1. 模块与运行位置

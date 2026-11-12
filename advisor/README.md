@@ -1,5 +1,7 @@
 # advisor
 
+> **方案 B 遗产（已停维，仅作移植参考）。** 本地 advisor 已被方案 C 的云端 advisor（[`new/advisor/`](../../new/advisor/)）取代：会话域上云、经 ingest WS 收音频、bot/auth 独立节点。本模块不再维护。唯一开发入口见 [new/README.md](../../new/README.md)。
+
 负责本地会议会话：消费字幕、构造会议上下文、调用模型、校验并保存决策和本地结果，包含本地 LLM harness。所需客户端、配置、存储及会话实现由模块独立维护，不导入 meeting-listener。
 
 飞书字幕链路已停用（见 [plan.md](../plan.md)）：advisor 不再要求 bot 入会，也不再向飞书发送会中消息或单聊通知；notification 搁置，模型回答保存为本地结果。

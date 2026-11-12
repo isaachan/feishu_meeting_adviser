@@ -1,5 +1,7 @@
 # Recorder 输入与本地交接契约
 
+> **本契约已废弃（方案 B 遗产）。** recorder↔advisor 交接在方案 C 中改为网络流式契约（[new/docs/CONTRACT_RECORDER_STREAM.md](../new/docs/CONTRACT_RECORDER_STREAM.md)，WS 上行 + 流令牌），本地的 spool/ack 文件交接不再使用；其幂等语义（event_id/sequence/stream_end）已平移进新契约。现行实现在 `new/recorder/` 与 `new/advisor/`，唯一开发入口见 [new/README.md](../new/README.md)。
+
 状态：阶段 0 冻结（2026-11-08）；2026-11-10 增补 real 模式会议绑定元数据（第 6 节，向后兼容，不改事件格式）。`local-meeting-recorder` 与 `advisor` 各自按本文件实现与测试；两侧不得互相导入源码，契约变更需同步修改两侧实现并更新根 `integrations/` 用例。背景见 [plan.md](../plan.md)。
 
 ## 1. 范围与模块入口（plan 0.1）

@@ -1,5 +1,7 @@
 # 官方会中字幕与模型回答实现记录
 
+> **本文档已停维（方案 B / 更早时期的实现记录，仅作历史档案）。** 其任务状态、路线与预算结论不反映当前架构；现行架构与实施记录见 [new/plan.md](../new/plan.md)，开发入口为 [new/README.md](../new/README.md)。
+
 依据：[总体计划](PLAN_OFFICIAL_MEETING_EVENTS.md)。已完成项只代表相应文档/代码或单次验证，不代表阶段 0 整体验收。当前路线：`tenant_access_token` → `bots/join`（9 位会议号，返回内部 ID）→ `bots/events`；用户 OAuth 与 `list_by_no` 不是主路径。**本地录制转写缺少可靠的说话人信息，上下文有限，不作为自动降级；原 6 秒目标已撤销，当前规划目标为 20 秒（约 15 秒字幕获取 + 5 秒 LLM 生成/输出）。**预算尚未经端到端验收。
 
 本文保存完整任务定义及验证记录；活动待办由 [meeting-listener](../meeting-listener/TODO.md)、[advisor](../advisor/TODO.md) 和 [跨模块 TODO](../TODO.md)分别维护。

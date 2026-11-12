@@ -1,5 +1,7 @@
 # llm-gateway
 
+> **方案 B 遗产（已停维，仅作移植参考）。** 已整体平移为 [`new/llm-gateway/`](../../new/llm-gateway/)（契约不变）。本模块不再维护。唯一开发入口见 [new/README.md](../../new/README.md)。
+
 在服务器（当前基线：本机 localhost）运行 [远程推理契约](../docs/CONTRACT_REMOTE_INFERENCE.md)：接收 advisor 的推理任务，调度并隔离地执行 OpenCode（GLM），返回结构化决定。网关不解析会议语义，不保存长期会议状态。
 
 - 首版**无认证**，仅限 localhost/可信内网（见 [plan.md](../plan.md) 已确认方向第 8 条；补认证已列入根 TODO）
