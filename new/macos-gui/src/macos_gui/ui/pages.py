@@ -152,3 +152,64 @@ def _format_started(started_at):
     if not isinstance(started_at, (int, float)):
         return ''
     return time.strftime('%H:%M 开始', time.localtime(started_at))
+
+
+class MonitorPage(QWidget):
+    stop_clicked = Signal()
+    back_clicked = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        self.title_label = QLabel('')
+        layout.addWidget(self.title_label)
+        self.state_label = QLabel('')
+        layout.addWidget(self.state_label)
+        self.rows_layout = QVBoxLayout()
+        layout.addLayout(self.rows_layout)
+        layout.addStretch(1)
+        self.hint_label = QLabel('关闭窗口不会停止采集（从 Dock 图标重新打开）。')
+        self.hint_label.setStyleSheet('color: #888')
+        layout.addWidget(self.hint_label)
+        footer = QHBoxLayout()
+        back = QPushButton('返回列表')
+        back.clicked.connect(self.back_clicked.emit)
+        footer.addWidget(back)
+        footer.addStretch(1)
+        stop = QPushButton('停止采集')
+        stop.setStyleSheet('color: #b00')
+        stop.clicked.connect(self.stop_clicked.emit)
+        footer.addWidget(stop)
+        layout.addLayout(footer)
+        self._row_widgets = {}
+
+    def start_run(self, session_item):
+        parts = [session_item.get('title') or session_item['session_id']]
+        if session_item.get('meeting_no'):
+            parts.append(session_item['meeting_no'])
+        self.title_label.setText('  ·  '.join(parts))
+        for label in self._row_widgets.values():
+            label.deleteLater()
+        self._row_widgets = {}
+        self.set_state('starting')
+
+    def set_state(self, text):
+        self.state_label.setText(text)
+
+    def update_stats(self, stats):
+        state = stats.get('state')
+        self.set_state({'idle': '', 'running': '采集进行中',
+                        'stopping': '正在停止…', 'stopped': '已停止'}.get(state, ''))
+        for source_id, row in (stats.get('sources') or {}).items():
+            label = self._row_widgets.get(source_id)
+            if label is None:
+                label = QLabel('')
+                self.rows_layout.addWidget(label)
+                self._row_widgets[source_id] = label
+            connected = '已连接' if row.get('connected') else '未连接'
+            reason = row.get('exit_reason') or ''
+            label.setText(
+                f"{source_id}：{connected} · 已发 {row.get('sent_frames', 0)} · "
+                f"已确认 {row.get('acked_sequence', 0)} · 缓冲 {row.get('buffered', 0)} · "
+                f"重连 {row.get('reconnects', 0)}"
+                + (f" · {reason}" if reason else ''))
