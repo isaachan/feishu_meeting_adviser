@@ -1,6 +1,6 @@
 """HTTP client for the auth node (CONTRACT_AUTH internal API, advisor side)."""
 import json
-from urllib import error, request
+from urllib import error, parse, request
 
 
 class AuthorizationRequired(Exception):
@@ -94,3 +94,28 @@ class HttpAuthClient:
                        {'provider': 'nsdp'})
         except (error.HTTPError, error.URLError, OSError, ValueError):
             pass  # best effort: a stale record still reads as unauthorized later
+
+    # -- GUI discovery login (CONTRACT_AUTH v1.2) ------------------------------
+
+    def gui_authorize_start(self):
+        """Returns {'authorize_url', 'state', 'expires_at'} for the QR login."""
+        try:
+            return self._call('POST', '/authorize/start',
+                              {'open_id': None, 'intent': 'gui:login'})
+        except (error.HTTPError, error.URLError, OSError, ValueError) as exc:
+            raise AuthUnavailable('gui_start') from exc
+
+    def authorize_status(self, state):
+        """Returns {'status': 'pending'|'completed'|'expired', 'user'?: {...}}.
+
+        Auth maps unknown/expired states to 404; the GUI face surfaces that as
+        'expired' so the client regenerates the QR.
+        """
+        try:
+            return self._call('GET', '/authorize/status?state=' + parse.quote(state))
+        except error.HTTPError as exc:
+            if exc.code == 404:
+                return {'status': 'expired'}
+            raise AuthUnavailable('status') from None
+        except (error.URLError, OSError, ValueError) as exc:
+            raise AuthUnavailable('network') from exc

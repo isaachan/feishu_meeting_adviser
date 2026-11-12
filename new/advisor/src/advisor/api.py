@@ -4,8 +4,11 @@ Ports (auth client, calendar validator) are injected; the calendar validator
 interface returns the binding + title + description on success and raises
 CalendarError(code) for the four S1 rejection paths.
 """
+import hashlib
 import json
 import logging
+import secrets
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib import parse
@@ -77,6 +80,8 @@ class AdvisorApi:
         self.host = host
         self.clock = clock
         self.nsdp = nsdp
+        self._gui_logins: dict = {}
+        self._gui_lock = threading.Lock()
 
     def _gate_nsdp(self, owner):
         """Organizer-surface commands require an NSDP token (hard gate).
@@ -318,6 +323,98 @@ class AdvisorApi:
                      row['session_id'])
         return {'uuid': uuid, 'state': 'acknowledged'}
 
+    # -- GUI face (CONTRACT_ADVISOR_API §8) -------------------------------------
+
+    def gui_login_start(self):
+        try:
+            started = self.auth.gui_authorize_start()
+        except AuthUnavailable:
+            raise ApiError(409, 'auth_unavailable', 'auth node unreachable') from None
+        device_code = 'dc-' + secrets.token_urlsafe(24)
+        expires_at = started.get('expires_at')
+        if not isinstance(expires_at, (int, float)) or expires_at <= self.clock():
+            expires_at = self.clock() + 600
+        with self._gui_lock:
+            self._prune_gui_logins()
+            self._gui_logins[device_code] = {'state': started['state'],
+                                             'expires_at': expires_at,
+                                             'consumed': False}
+        LOG.info('gui login started: device_code=%s…', device_code[:6])
+        return {'login_url': started['authorize_url'], 'device_code': device_code,
+                'expires_at': expires_at}
+
+    def _prune_gui_logins(self):
+        now = self.clock()
+        for code in [c for c, e in self._gui_logins.items()
+                     if e.get('consumed') or e['expires_at'] <= now]:
+            del self._gui_logins[code]
+
+    def gui_login_poll(self, device_code):
+        if not isinstance(device_code, str) or not device_code.startswith('dc-') \
+                or len(device_code) > 128:
+            raise ApiError(404, 'unknown_device', 'unknown device code')
+        with self._gui_lock:
+            entry = self._gui_logins.get(device_code)
+            if entry is not None and entry.get('consumed'):
+                del self._gui_logins[device_code]
+                entry = None
+        if entry is None:
+            raise ApiError(404, 'unknown_device', 'unknown or consumed device code')
+        if self.clock() >= entry['expires_at']:
+            with self._gui_lock:
+                self._gui_logins.pop(device_code, None)
+            raise ApiError(410, 'expired', 'device code expired; scan a new QR')
+        try:
+            status = self.auth.authorize_status(entry['state'])
+        except AuthUnavailable:
+            raise ApiError(409, 'auth_unavailable', 'auth node unreachable') from None
+        if status.get('status') == 'expired':
+            with self._gui_lock:
+                self._gui_logins.pop(device_code, None)
+            raise ApiError(410, 'expired', 'login state expired; scan a new QR')
+        if status.get('status') != 'completed':
+            return {'status': 'pending'}
+        user = status.get('user') or {}
+        open_id = user.get('open_id')
+        if not isinstance(open_id, str) or not open_id:
+            raise ApiError(410, 'expired', 'login completed without identity')
+        device_token = 'dt-' + secrets.token_urlsafe(32)
+        self.store.register_device(device_token, open_id, name=user.get('name'),
+                                   email=user.get('email'), now=self.clock())
+        with self._gui_lock:
+            self._gui_logins.pop(device_code, None)  # one-shot: second poll 404s
+        LOG.info('gui device registered: open_id=%s', open_id)
+        return {'status': 'completed', 'device_token': device_token,
+                'user': {'open_id': open_id, 'name': user.get('name'),
+                         'email': user.get('email')}}
+
+    def gui_sessions(self, token):
+        device = self.store.device(token, now=self.clock())
+        if device is None:
+            raise ApiError(401, 'bad_token', 'unknown device token')
+        sessions = self.store.list_sessions(device['open_id'])
+        items = []
+        for s in sessions:
+            args = None
+            if s['phase'] == 'recording':
+                token_row = self.store.session_token(s['session_id'])
+                assert token_row is not None
+                args = {'session': s['session_id'],
+                        'event': f"{s['event_calendar_id']}/{s['event_id']}",
+                        'url': self.ingest_url, 'token': token_row['stream_token'],
+                        'mic': False}
+            items.append({'session_id': s['session_id'], 'meeting_no': s['meeting_no'],
+                          'title': s['title'], 'phase': s['phase'],
+                          'started_at': s['started_at'], 'recorder_command_args': args})
+        return {'user': {'open_id': device['open_id'], 'name': device['user_name'],
+                         'email': device['user_email']}, 'sessions': items}
+
+    def gui_logout(self, token):
+        if self.store.device(token, now=self.clock()) is not None:
+            self.store.drop_device(token)
+            LOG.info('gui device removed')
+        return {'ok': True}
+
 
 def build_api_server(api: AdvisorApi, host='127.0.0.1', port=8380):
     class Handler(BaseHTTPRequestHandler):
@@ -354,6 +451,12 @@ def build_api_server(api: AdvisorApi, host='127.0.0.1', port=8380):
                 raise ApiError(400, 'bad_message', 'object body required')
             return value
 
+        def _bearer_token(self):
+            value = self.headers.get('Authorization', '')
+            if not value.startswith('Bearer '):
+                raise ApiError(401, 'bad_token', 'bearer device token required')
+            return value[len('Bearer '):].strip()
+
         def _run(self, action):
             try:
                 status = 200
@@ -364,7 +467,8 @@ def build_api_server(api: AdvisorApi, host='127.0.0.1', port=8380):
                     status = 200
                 path = self.path.split('?')[0]
                 quiet = (self.command == 'GET'
-                         and (path == '/healthz' or path == '/outbox/pending'))
+                         and (path == '/healthz' or path == '/outbox/pending'
+                              or path == '/gui/login/poll' or path == '/gui/sessions'))
                 if not quiet:
                     LOG.info('api %s %s -> %s', self.command, path, status)
                 self._reply(status, payload)
@@ -372,7 +476,7 @@ def build_api_server(api: AdvisorApi, host='127.0.0.1', port=8380):
                 LOG.warning('api error %s %s -> %s %s %s', self.command, self.path,
                             exc.status, exc.code, exc.message)
                 self._reply(exc.status, {'error': {'code': exc.code,
-                                                   'message': exc.message} | exc.extra})
+                                                    'message': exc.message} | exc.extra})
             except StorageError:
                 self._reply(500, {'error': {'code': 'internal', 'message': 'storage'}})
 
@@ -381,6 +485,11 @@ def build_api_server(api: AdvisorApi, host='127.0.0.1', port=8380):
             query = parse.parse_qs(parsed.query, keep_blank_values=True)
             if parsed.path == '/healthz':
                 self._reply(200, {'status': 'ok'})
+            elif parsed.path == '/gui/login/poll':
+                device_code = query.get('device_code', [None])[0]
+                self._run(lambda: (api.gui_login_poll(device_code), False))
+            elif parsed.path == '/gui/sessions':
+                self._run(lambda: (api.gui_sessions(self._bearer_token()), False))
             elif parsed.path == '/meetings':
                 owner = query.get('owner_open_id', [None])[0]
                 self._run(lambda: (api.list_meetings(owner), False))
@@ -401,6 +510,13 @@ def build_api_server(api: AdvisorApi, host='127.0.0.1', port=8380):
         def do_POST(self):
             parsed = parse.urlsplit(self.path)
             key = self.headers.get('X-Idempotency-Key')
+
+            if parsed.path == '/gui/login/start':
+                self._run(lambda: (api.gui_login_start(), False))  # 201-ish; keep 200
+                return
+            if parsed.path == '/gui/logout':
+                self._run(lambda: (api.gui_logout(self._bearer_token()), False))
+                return
 
             def run(body):
                 if parsed.path == '/sessions':

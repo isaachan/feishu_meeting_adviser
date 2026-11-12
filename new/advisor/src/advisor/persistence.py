@@ -19,7 +19,7 @@ from .models import (Caption, JobState, MaterialState, ReplyState, SourceState,
                      caption_to_dict, digest)
 from .sqlite import SQLiteDatabase
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA = (
     '''CREATE TABLE sessions (
@@ -73,6 +73,11 @@ SCHEMA = (
     'CREATE INDEX subscriptions_session ON subscriptions(session_id,state)',
     '''CREATE TABLE idempotency (
         key TEXT PRIMARY KEY, response TEXT NOT NULL, created_ns INTEGER NOT NULL)''',
+    '''CREATE TABLE gui_devices (
+        token_sha256 TEXT PRIMARY KEY, open_id TEXT NOT NULL,
+        user_name TEXT, user_email TEXT,
+        created_ns INTEGER NOT NULL, last_seen_ns INTEGER NOT NULL)''',
+    'CREATE INDEX gui_devices_owner ON gui_devices(open_id)',
 )
 
 SESSION_PHASES = ('recording', 'draining', 'ended')

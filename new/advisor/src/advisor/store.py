@@ -5,6 +5,7 @@ used by the supervisor, with STATE_MACHINES.md semantics (no paused phase,
 revoked terminal, draining/ended reject new subscriptions and late results).
 """
 import functools
+import hashlib
 from pathlib import Path
 import secrets
 import threading
@@ -31,7 +32,7 @@ def require_schema(connection) -> None:
     tables = _tables(connection) - {'sqlite_sequence'}  # appears lazily with AUTOINCREMENT
     if version != SCHEMA_VERSION or tables != {
             'sessions', 'inputs', 'context', 'jobs', 'outbox', 'session_materials',
-            'sources', 'subscriptions', 'idempotency'}:
+            'sources', 'subscriptions', 'idempotency', 'gui_devices'}:
         raise StorageError('adviser database schema is unsupported; reinitialize')
 
 
@@ -186,6 +187,45 @@ class SessionStore:
             "SELECT * FROM sessions WHERE meeting_no=? AND phase='recording' "
             'ORDER BY started_at DESC LIMIT 1', (meeting_no,)).fetchone()
         return dict(row) if row else None
+
+    # -- gui devices (CONTRACT_ADVISOR_API §8) --------------------------------
+
+    @staticmethod
+    def _device_sha256(token):
+        return hashlib.sha256(token.encode('utf-8')).hexdigest()
+
+    @_locked
+    def register_device(self, token, open_id, *, name=None, email=None, now=None):
+        """Store a device credential by hash only (plaintext never persisted)."""
+        moment = time.time() if now is None else now
+        ns = int(moment * 1_000_000_000)
+        with self.unit_of_work() as tx:
+            tx.connection.execute(
+                'INSERT OR REPLACE INTO gui_devices(token_sha256,open_id,user_name,'
+                'user_email,created_ns,last_seen_ns) VALUES (?,?,?,?,?,?)',
+                (self._device_sha256(token), open_id, name, email, ns, ns))
+
+    @_locked
+    def device(self, token, *, now=None):
+        """Resolve a device token to its row (or None); refreshes last_seen."""
+        if not isinstance(token, str) or not token:
+            return None
+        row = self.db.execute('SELECT * FROM gui_devices WHERE token_sha256=?',
+                              (self._device_sha256(token),)).fetchone()
+        if row is None:
+            return None
+        moment = time.time() if now is None else now
+        self.db.execute('UPDATE gui_devices SET last_seen_ns=? WHERE token_sha256=?',
+                        (int(moment * 1_000_000_000), self._device_sha256(token)))
+        return dict(row)
+
+    @_locked
+    def drop_device(self, token):
+        if not isinstance(token, str) or not token:
+            return
+        with self.unit_of_work() as tx:
+            tx.connection.execute('DELETE FROM gui_devices WHERE token_sha256=?',
+                                  (self._device_sha256(token),))
 
     # -- leases (DB 内租约，替代旧 FileLock) --------------------------------
 
