@@ -21,6 +21,8 @@ from .audio.frames import AudioFrame, SourceEvent
 MAX_FRAME_BYTES = 1_048_576
 FATAL_AUTH_CODES = ('bad_token', 'bad_binding', 'bad_protocol', 'bad_message')
 BACKOFF_S = (0.5, 1, 2, 5, 10)
+_SEND_BATCH = 32   # frames per loop cycle: ≥10x realtime for ~30ms frames
+_MAX_INFLIGHT = 2048  # send-ahead bound (frames beyond the acked cursor)
 
 
 def _log(source_id, event, **fields):
@@ -61,6 +63,7 @@ class SourceUplink:
         self.handshake_timeout = handshake_timeout
         self.buffer: deque[tuple[int, bytes]] = deque(maxlen=window)
         self.acked = 0
+        self._sent_upto = 0  # highest sequence sent on the CURRENT connection
         self.last_seq = 0
         self.reconnects = 0
         self.dropped_frames = 0
@@ -162,11 +165,15 @@ class SourceUplink:
                 raise UplinkExit(3, f'unexpected greeting: {message.get("type")}')
             server_acked = int(message.get('acked_sequence') or 0)
             self._trim(server_acked)
+            self._sent_upto = self.acked
             _log(self.source_id, 'started', stream_id=message.get('stream_id'),
                  server_acked=server_acked)
             while not self.stopped.is_set():
+                # Short control wait: a 0.1s block here throttled the whole
+                # loop to ~1 frame per 0.26s (≈25% realtime, 2026-11-13
+                # real-meeting finding); batch-send + brief polls instead.
                 try:
-                    control = self.controls.get(timeout=0.1)
+                    control = self.controls.get(timeout=0.02)
                 except queue.Empty:
                     control = None
                 if control is not None:
@@ -175,21 +182,30 @@ class SourceUplink:
                         return
                     if control.get('type') == 'gap':
                         ws.send(json.dumps({'type': 'gap'}))
-                while self.buffer:
-                    seq, pcm = self.buffer[0]
-                    if seq <= self.acked:
-                        self.buffer.popleft()
+                sent = 0
+                # Frames stay in the buffer until acked (contract §4.2: buffer
+                # everything un-acked); a mid-batch disconnect therefore loses
+                # nothing — the reconnect resends from acked+1. Scan to the
+                # first unsent frame: the head may still be awaiting its ack.
+                index = 0
+                while index < len(self.buffer) and sent < _SEND_BATCH:
+                    seq, pcm = self.buffer[index]
+                    if seq <= self._sent_upto:
+                        index += 1
                         continue
+                    if seq - self.acked > _MAX_INFLIGHT:
+                        break  # too far ahead of the acked cursor; wait
                     if len(pcm) + 4 > MAX_FRAME_BYTES:
-                        self.buffer.popleft()
+                        del self.buffer[index]
                         self.dropped_frames += 1
                         continue
                     ws.send(struct.pack('<I', seq) + pcm)
                     self.sent_frames += 1
-                    self.buffer.popleft()
-                    break  # interleave control/ack polling with sending
-                for _ in range(16):
-                    message = _recv_json(ws, timeout=0.01)
+                    self._sent_upto = seq
+                    sent += 1
+                    index += 1
+                for _ in range(4):
+                    message = _recv_json(ws, timeout=0.005)
                     if message is None:
                         break
                     kind = message.get('type')
@@ -201,6 +217,7 @@ class SourceUplink:
                             # server dropped our window: restart capture epoch
                             self.buffer.clear()
                             self.acked = 0
+                            self._sent_upto = 0
                             raise _Retry(resume=False)
                         self._raise_for_code(code, message.get('message'))
                     elif kind == 'stopped':
@@ -218,6 +235,7 @@ class SourceUplink:
                 continue
             ws.send(struct.pack('<I', seq) + pcm)
             self.sent_frames += 1
+        self._sent_upto = max(self._sent_upto, last)
         _log(self.source_id, 'stream_end', last_sequence=max(last, self.acked))
         ws.send(json.dumps({'type': 'stream_end', 'last_sequence': max(last, self.acked)}))
         deadline = time.monotonic() + 10

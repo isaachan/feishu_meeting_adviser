@@ -156,6 +156,21 @@ class HappyPathTests(UplinkBase):
         self.assertEqual(self.server.stream_ends['loopback'], 3)
         self.assertEqual(len(uplink.buffer), 0)
 
+    def test_realtime_throughput_not_throttled(self):
+        """回归（2026-11-13 实测）：发送循环曾被节流到 ~25% 实时
+        （0.1s 控制等待 × 每轮 1 帧）。300 帧（~30ms/帧 ≈ 8.6s 音频）
+        必须在 8s 内全部送达——旧代码需要 ~45s。"""
+        uplink = self.make_uplink()
+        started = time.monotonic()
+        for seq in range(1, 301):
+            uplink.offer(self.frame(seq))
+        self.assertTrue(
+            self.wait_for(lambda: self.server.acked.get('loopback') == 300, timeout=8),
+            f'throttled: sent={uplink.sent_frames} acked='
+            f'{self.server.acked.get("loopback")} elapsed={time.monotonic()-started:.1f}s')
+        uplink.stop_clean()
+        self.wait_for(lambda: uplink.stopped.is_set())
+
     def test_gap_event_forwarded(self):
         from recorder.audio.frames import SourceEvent
         uplink = self.make_uplink()
