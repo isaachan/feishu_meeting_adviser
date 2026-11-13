@@ -153,9 +153,12 @@ class AdvisorApi:
                                provider='nsdp', submit_url=exc.url) from None
             except AuthUnavailable:
                 raise ApiError(409, 'auth_unavailable', 'auth node unreachable') from None
-            except NsdpUnavailable:
-                raise ApiError(409, 'nsdp_unavailable',
-                               'NSDP unreachable; retry the command later') from None
+            except NsdpUnavailable as exc:
+                # T7 degrade (2026-11-13): join proceeds without NSDP material;
+                # the supervisor's first maintenance pass backfills it, where a
+                # rejected token surfaces as nsdp_hold (implicit validation).
+                LOG.warning('nsdp fetch degraded, joining without material: %s', exc)
+                nsdp_text = ''
 
         session = self.store.create_session(
             owner_open_id=owner, meeting_no=meeting_no,

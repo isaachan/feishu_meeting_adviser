@@ -5,11 +5,13 @@ version-plan briefs via the noam CLI (token passed through the subprocess
 environment only) and stores them as session material. Tokens never enter
 IM text, the recorder, or the model sandbox (CONTRACT_AUTH §8).
 """
+import hashlib
 import json
 import logging
 import os
 import re
 import subprocess
+import threading
 import time
 
 from .auth_client import AuthorizationRequired, AuthUnavailable
@@ -56,10 +58,15 @@ def _looks_unauthorized(stdout: str, stderr: str) -> bool:
 class NsdpClient:
     """Runs ``noam nsdp …`` with the user token in the environment only."""
 
-    def __init__(self, *, noam_bin='noam', timeout_s=60.0, per_call_chars=4000, run=None):
+    def __init__(self, *, noam_bin='noam', timeout_s=60.0, per_call_chars=4000,
+                 cache_ttl_s=600.0, clock=time.monotonic, run=None):
         self.noam_bin = noam_bin
         self.timeout_s = timeout_s
         self.per_call_chars = per_call_chars
+        self.cache_ttl_s = cache_ttl_s
+        self._clock = clock
+        self._cache: dict = {}
+        self._cache_lock = threading.Lock()
         self._run = run or self._run_subprocess
 
     def _run_subprocess(self, argv, env):
@@ -74,7 +81,17 @@ class NsdpClient:
         whole-catalog ``nsdp info`` measured 30s+ against the real NSDP
         (2026-11-12), which used to blow the join-time budget; targeted calls
         run in ~1.5s. ``info`` remains the no-clue fallback.
+
+        Successful briefs are cached per (token, clues) for ``cache_ttl_s``
+        (join + supervisor refresh + re-joins share it); failures are never
+        cached.
         """
+        cache_key = (hashlib.sha256(token.encode()).hexdigest(), clues_text)
+        now = self._clock()
+        with self._cache_lock:
+            cached = self._cache.get(cache_key)
+            if cached is not None and now < cached[0]:
+                return cached[1]
         env = dict(os.environ)
         env['NSDP_TOKEN'] = token
         clues = extract_clues(clues_text)
@@ -111,7 +128,10 @@ class NsdpClient:
         if not sections:
             raise NsdpUnavailable('empty')
         header = '、'.join(clues) if clues else '概览'
-        return f'NSDP 版本计划（{header}）\n\n' + '\n\n'.join(sections)
+        brief = f'NSDP 版本计划（{header}）\n\n' + '\n\n'.join(sections)
+        with self._cache_lock:
+            self._cache[cache_key] = (now + self.cache_ttl_s, brief)
+        return brief
 
 
 class StubNsdpClient:

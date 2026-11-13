@@ -1,6 +1,6 @@
 # Advisor 内部 API 契约（bot ↔ advisor）
 
-状态：v1 于 2026-11-10 冻结（阶段 0.3）；**v1.1（2026-11-11）** 新增 NSDP 组织者凭据门（`authorization_required` 增加 `provider`/`submit_url` 变体与 `nsdp_unavailable`；组织者面全部指令前置该门；`GET /sessions/{id}/status` 响应新增 `nsdp_hold`）。**v1.2（2026-11-12）** 新增 §8 GUI 面（`/gui/login/start`·`/gui/login/poll`·`/gui/sessions`·`/gui/logout` + devices 表；经 HTTPS 反代对 laptop GUI 暴露，成为第三个对外入口，见 DEPLOYMENT §2）。服务端为 `new/advisor`（会话域 + 一次性操作），客户端为 `new/bot`（§1–§7）与 `new/macos-gui`（§8）。变更需 bump API 版本并同步两侧实现与测试。上游设计：[ARCHITECTURE](ARCHITECTURE.md) D4/D6、[macos-gui/DESIGN](../macos-gui/DESIGN.md)；outbox 语义沿用旧 advisor（channel=`local`/`im`、uuid 幂等、uncertain 人工裁决）。
+状态：v1 于 2026-11-10 冻结（阶段 0.3）；**v1.1（2026-11-11）** 新增 NSDP 组织者凭据门（`authorization_required` 增加 `provider`/`submit_url` 变体与 `nsdp_unavailable`；组织者面全部指令前置该门；`GET /sessions/{id}/status` 响应新增 `nsdp_hold`）。**v1.2（2026-11-12）** 新增 §8 GUI 面（`/gui/login/start`·`/gui/login/poll`·`/gui/sessions`·`/gui/logout` + devices 表；经 HTTPS 反代对 laptop GUI 暴露，成为第三个对外入口，见 DEPLOYMENT §2）；**v1.2a（2026-11-13，T7）** NSDP 取数降级语义：`nsdp_unavailable` 不再拒绝入会（见 §1.1）。服务端为 `new/advisor`（会话域 + 一次性操作），客户端为 `new/bot`（§1–§7）与 `new/macos-gui`（§8）。变更需 bump API 版本并同步两侧实现与测试。上游设计：[ARCHITECTURE](ARCHITECTURE.md) D4/D6、[macos-gui/DESIGN](../macos-gui/DESIGN.md)；outbox 语义沿用旧 advisor（channel=`local`/`im`、uuid 幂等、uncertain 人工裁决）。
 
 ## 1. 传输与通用约定
 
@@ -20,13 +20,13 @@
 | `not_organizer` | 小A 非该日历事件组织者 | 告知原因 |
 | `outside_window` | 当前不在会议时间窗内 | 告知原因 |
 | `auth_unavailable` | 飞书/凭据服务不可达（fail-closed） | 提示稍后重试 |
-| `nsdp_unavailable` | NSDP/noam 不可达（fail-closed，入会被拒） | 提示"NSDP 服务暂时不可用，稍后再试" |
+| `nsdp_unavailable` | NSDP/noam 不可达（**v1.2a 起入会不再触发**：降级建会，见 §1.1；码位保留供后续使用） | 提示"NSDP 服务暂时不可用，稍后再试" |
 | `session_ended` / `session_draining` | 会话已结束/排空中，操作被拒 | 告知原因 |
 | `not_owner` | 操作者不是该会话/订阅的 owner | 回答"只有组织者可以…" |
 | `invalid_state` | 状态机非法迁移（含订阅已 revoked 再申请等） | 按 §6.6 对应话术回复 |
 | `internal` | 服务端内部错误 | 提示稍后重试 |
 
-**NSDP 门（v1.1）**：组织者面全部指令（入会/会议列表/状态/结束会议/审批/组织者撤销）在执行前要求该 open_id 已有 NSDP token；无/失效 → 409 `authorization_required`（NSDP 变体），bot 每次都回新提交链接（被动持续提醒）。订阅面（小B 的申请/取消）**不经过**该门。会话进行中 token 失效：监督器置 `nsdp_hold=1`（挂起该会话全部模型决策），经 outbox 向小A 周期性 DM 新提交链接（默认 5 分钟一条）；重新提交成功后自动恢复。NSDP 数据由 advisor 侧取（noam 子进程，token 仅存在于子进程环境），以 `kind:"nsdp"` 材料文档进入模型上下文；建会时的取数兼作 token 隐式验活。
+**NSDP 门（v1.1）**：组织者面全部指令（入会/会议列表/状态/结束会议/审批/组织者撤销）在执行前要求该 open_id 已有 NSDP token；无/失效 → 409 `authorization_required`（NSDP 变体），bot 每次都回新提交链接（被动持续提醒）。订阅面（小B 的申请/取消）**不经过**该门。会话进行中 token 失效：监督器置 `nsdp_hold=1`（挂起该会话全部模型决策），经 outbox 向小A 周期性 DM 新提交链接（默认 5 分钟一条）；重新提交成功后自动恢复。NSDP 数据由 advisor 侧取（noam 子进程，token 仅存在于子进程环境），以 `kind:"nsdp"` 材料文档进入模型上下文。**v1.2a（2026-11-13，T7）**：NSDP 取数不可达（超时/后端故障）**不再拒绝入会**——降级为无 NSDP 材料建会，监督器首个维护周期起自动补取（成功即入材料，401 即挂起并提醒）；token 隐式验活由建会时点移至该首次取数。取数侧对同一 token 短 TTL 缓存（默认 10 分钟），避免连续建会重复跑全量 `nsdp info`。
 
 ## 2. `POST /sessions` —— 入会（S1）
 

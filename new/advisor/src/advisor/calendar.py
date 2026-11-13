@@ -79,6 +79,7 @@ class FeishuCalendarValidator:
         # fails with Errno 22 before any byte is sent; a fresh socket usually
         # succeeds. GETs are retry-safe by nature.
         attempts, delay = 3, 0.3
+        status, raw = 0, b''
         for attempt in range(1, attempts + 1):
             try:
                 try:

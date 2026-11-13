@@ -186,16 +186,30 @@ class NsdpGateTests(NsdpApiBase):
         self.assertEqual(body['error']['provider'], 'nsdp')
         self.assertEqual(self.auth.invalidated, ['ou_A'])  # invalidated on 401
 
-    def test_nsdp_unavailable_blocks_join(self):
+    def test_nsdp_unavailable_degrades_join(self):
+        """T7（v1.2a）：NSDP 取数不可达 → 无材料建会，不再拒绝。"""
         class DownClient(StubNsdpClient):
-            def brief(self, token, clues_text=''):
-                raise NsdpUnavailable('exit=1')
+            def __init__(self):
+                super().__init__()
+                self.calls = []
 
-        self.nsdp.client = DownClient()
-        status, body = self.post_error('/sessions',
-                                       {'owner_open_id': 'ou_A',
-                                        'meeting_ref': {'no': '123456789'}}, key='g-4')
-        self.assertEqual((status, body['error']['code']), (409, 'nsdp_unavailable'))
+            def brief(self, token, clues_text=''):
+                self.calls.append(clues_text)
+                raise NsdpUnavailable('timeout')
+
+        down = DownClient()
+        self.nsdp.client = down
+        status, body = self.post('/sessions',
+                                 {'owner_open_id': 'ou_A',
+                                  'meeting_ref': {'no': '123456789'}}, key='g-4')
+        self.assertEqual(status, 200)
+        self.assertTrue(body['session_id'].startswith('s-'))
+        self.assertEqual(len(self.spy.started), 1)
+        # material present (calendar description) but without the nsdp document
+        material = self.store.materials(body['session_id'])
+        documents = material.get('documents') if material else None
+        self.assertEqual(documents, [])
+        self.assertEqual(down.calls, ['版本 NT3 BL2.0.0 与票 NT3VFTVDR-111482'])
 
     def test_subscriber_surface_never_gates(self):
         status, body = self.join()
@@ -289,6 +303,24 @@ class SupervisorHoldTests(unittest.TestCase):
             tx.connection.execute(
                 'UPDATE sessions SET generation=generation+1 WHERE session_id=?',
                 (session_id,))
+
+    def test_degraded_join_backfills_nsdp_material(self):
+        """T7：降级建会（无 NSDP 材料）→ supervisor 首个维护周期自动补取。"""
+        session_id = self.store.create_session(
+            owner_open_id='ou_A', meeting_no='123456789', title='t',
+            event_calendar_id='cal', event_id='evt', description='NT3 BL2.0.0',
+            now=self.now[0], nsdp_text='')['session_id']
+        material = self.store.materials(session_id)
+        self.assertEqual(material.get('documents'), [])  # degraded: no nsdp doc
+        supervisor = self._make_supervisor()
+        supervisor.start_session(session_id)
+        self.addCleanup(supervisor.stop, timeout=2)
+        self.assertTrue(
+            self._wait(lambda: (self.store.materials(session_id) or {}).get('documents')),
+            'nsdp material never backfilled')
+        document = self.store.materials(session_id)['documents'][0]
+        self.assertEqual(document['kind'], 'nsdp')
+        self.assertEqual(document['text'], '刷新后的版本计划')
 
     def test_hold_nag_resume_cycle(self):
         session_id = self._create_session()
@@ -426,6 +458,53 @@ class NsdpClientTests(unittest.TestCase):
             calls, rc=1, stdout='', stderr=_json.dumps({'status_code': 401}))
         with self.assertRaises(NsdpUnauthorized):
             client.brief('tok')
+
+    def test_successful_brief_is_cached_per_token_and_clues(self):
+        from advisor.nsdp import NsdpClient
+
+        calls = []
+        now = [1000.0]
+
+        def fake_run(argv, env):
+            calls.append(tuple(argv[1:]))
+            import subprocess
+            return subprocess.CompletedProcess(argv, 0, stdout='plan', stderr='')
+
+        client = NsdpClient(noam_bin='noam', cache_ttl_s=600,
+                            clock=lambda: now[0], run=fake_run)
+        first = client.brief('tok', 'NT3 线索')
+        second = client.brief('tok', 'NT3 线索')
+        self.assertIs(first, second)  # cache hit, no extra subprocess
+        self.assertEqual(len(calls), 1)
+        # different clues → separate entry; different token → separate entry
+        client.brief('tok', 'BL2.0 线索')
+        client.brief('tok-2', 'NT3 线索')
+        self.assertEqual(len(calls), 3)
+        # TTL expiry → refetch
+        now[0] += 601
+        client.brief('tok', 'NT3 线索')
+        self.assertEqual(len(calls), 4)
+
+    def test_failed_brief_is_never_cached(self):
+        import subprocess
+
+        class FailingThenOk:
+            def __init__(self):
+                self.calls = 0
+
+            def __call__(self, argv, env):
+                self.calls += 1
+                if self.calls == 1:
+                    raise subprocess.TimeoutExpired(argv, 60)
+                return subprocess.CompletedProcess(argv, 0, stdout='plan', stderr='')
+
+        runner = FailingThenOk()
+        from advisor.nsdp import NsdpClient
+        client = NsdpClient(noam_bin='noam', run=runner, clock=lambda: 0.0)
+        with self.assertRaises(NsdpUnavailable):
+            client.brief('tok')
+        client.brief('tok')  # second attempt runs again and succeeds
+        self.assertEqual(runner.calls, 2)
 
 
 if __name__ == '__main__':
