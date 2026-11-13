@@ -75,12 +75,23 @@ def ensure_helper_binary(build_dir: Path | None = None) -> Path:
 
 
 class SwiftLoopbackSource(AudioSource):
-    """Far-end audio: Feishu-related app audio via ScreenCaptureKit."""
+    """Far-end audio: Feishu-related app audio via ScreenCaptureKit.
+
+    The SCK content filter is built once per helper start from the apps that
+    exist at that moment. 飞书会议 is a separate app ("Feishu Meetings",
+    com.electron.lark.iron) that appears only once a meeting window opens —
+    a capture started before joining therefore filters the meeting audio out
+    and delivers bit-perfect silence (2026-11-13 real-meeting finding). The
+    silent-restart watchdog below rebuilds the filter automatically: real
+    room audio always carries a noise floor, so N seconds of exactly-zero
+    samples means the filter missed the app, and the helper is respawned.
+    """
 
     def __init__(self, source_id: str = 'loopback', *, rate: int = 16000,
                  channels: int = 1, app_filter: list[str] | None = None,
                  display_wide: bool = False, build_dir: Path | None = None,
-                 binary: Path | None = None, clock=time.monotonic):
+                 binary: Path | None = None, clock=time.monotonic,
+                 silent_restart_s: float = 15.0, max_silent_restarts: int = 6):
         self.source_id = source_id
         self.rate = rate
         self.channels = channels
@@ -89,6 +100,8 @@ class SwiftLoopbackSource(AudioSource):
         self._build_dir = build_dir
         self._binary = binary
         self._clock = clock
+        self.silent_restart_s = silent_restart_s
+        self.max_silent_restarts = max_silent_restarts
         self._sink: Sink | None = None
         self._proc: subprocess.Popen | None = None
         self._threads: list[threading.Thread] = []
@@ -99,6 +112,9 @@ class SwiftLoopbackSource(AudioSource):
         self._format: dict | None = None
         self._stop_reason: str | None = None
         self._paused = False
+        self._last_sound_at: float | None = None
+        self._silent_restarts = 0
+        self._watchdog_stop = threading.Event()
 
     def start(self, sink: Sink) -> None:
         self._sink = sink
@@ -113,6 +129,10 @@ class SwiftLoopbackSource(AudioSource):
             raise SourceStartError(
                 f'SCK helper format mismatch: {self._format} '
                 f'!= {self.rate}Hz/{self.channels}ch')
+        watchdog = threading.Thread(target=self._silent_watchdog, daemon=True,
+                                    name=f'{self.source_id}-watchdog')
+        watchdog.start()
+        self._threads.append(watchdog)
 
     def _spawn(self) -> None:
         assert self._sink is not None
@@ -128,6 +148,7 @@ class SwiftLoopbackSource(AudioSource):
             stderr=subprocess.PIPE)
         self._live.clear()
         self._stop_reason = None
+        self._last_sound_at = self._clock()
         self._threads = [
             threading.Thread(target=self._read_pcm, daemon=True,
                              name=f'{self.source_id}-pcm'),
@@ -144,6 +165,8 @@ class SwiftLoopbackSource(AudioSource):
             chunk = os.read(proc.stdout.fileno(), _READ_CHUNK)
             if not chunk:
                 break
+            if chunk.count(0) != len(chunk):
+                self._last_sound_at = self._clock()  # any nonzero byte = signal
             with self._offset_lock:
                 self._seq += 1
                 seq, offset = self._seq, self._offset
@@ -151,6 +174,36 @@ class SwiftLoopbackSource(AudioSource):
             sink(AudioFrame(self.source_id, seq, offset, self.rate,
                             self.channels, chunk, self._clock()))
         self._live.clear()
+
+    def _silent_watchdog(self) -> None:
+        interval = min(1.0, self.silent_restart_s / 3)
+        while not self._watchdog_stop.wait(interval):
+            if self._paused or not self._live.is_set() or self._sink is None:
+                continue
+            silent_for = self._clock() - (self._last_sound_at or self._clock())
+            if silent_for < self.silent_restart_s:
+                continue
+            if self._silent_restarts >= self.max_silent_restarts:
+                continue  # capped: stop churning, keep delivering (silence)
+            self._silent_restarts += 1
+            sink = self._sink
+            sink(SourceEvent(self.source_id, 'silent_restart', self._clock(),
+                             {'attempt': self._silent_restarts,
+                              'silent_s': round(silent_for, 1)}))
+            sink(SourceEvent(self.source_id, 'gap_begin', self._clock()))
+            self._kill()
+            try:
+                self._spawn()
+            except (SourceStartError, OSError, FileNotFoundError):
+                sink(SourceEvent(self.source_id, 'device_error', self._clock(),
+                                 {'message': 'silent restart: helper respawn failed'}))
+                return
+            if not self._live.wait(_START_TIMEOUT_S):
+                self._kill()
+                sink(SourceEvent(self.source_id, 'device_error', self._clock(),
+                                 {'message': 'silent restart: helper start timeout'}))
+                return
+            sink(SourceEvent(self.source_id, 'gap_end', self._clock()))
 
     def _read_status(self) -> None:
         proc, sink = self._proc, self._sink
@@ -201,6 +254,7 @@ class SwiftLoopbackSource(AudioSource):
         self._sink(SourceEvent(self.source_id, 'gap_end', self._clock()))
 
     def stop(self) -> None:
+        self._watchdog_stop.set()
         proc = self._proc
         if proc is None:
             return
@@ -231,9 +285,11 @@ class SwiftLoopbackSource(AudioSource):
         self._proc = None
 
     def _join_threads(self) -> None:
+        current = threading.current_thread()
         for thread in self._threads:
-            thread.join(timeout=_STOP_TIMEOUT_S)
-        self._threads = []
+            if thread is not current:  # the watchdog may be the caller here
+                thread.join(timeout=_STOP_TIMEOUT_S)
+        self._threads = [thread for thread in self._threads if thread is not current]
 
     def join(self, timeout: float | None = None) -> None:
         self._join_threads()
