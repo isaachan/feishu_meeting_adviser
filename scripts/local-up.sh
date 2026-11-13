@@ -35,8 +35,11 @@ for m in auth stt-server llm-gateway advisor bot recorder; do
     "$VENV/bin/pip" install --timeout 60 --retries 2 -e "$ROOT/$m"
   fi
 done
-# GUI 客户端（含 PySide6/segno，体积较大，首次安装慢）
-if ! ls "$VENV/lib/"*"/site-packages/__editable__.macos_gui"*-*.pth >/dev/null 2>&1; then
+# GUI 客户端（含 PySide6/segno，体积较大，首次安装慢）。
+# 注意：仅检查 editable marker 不够——若曾为跑单测装过不带 [ui] 的 macos-gui，
+# marker 已存在但缺 PySide6，需一并检测。
+if ! ls "$VENV/lib/"*"/site-packages/__editable__.macos_gui"*-*.pth >/dev/null 2>&1 \
+   || ! "$VENV/bin/python" -c "import PySide6" >/dev/null 2>&1; then
   echo "[setup] 安装模块 macos-gui[ui] …"
   "$VENV/bin/pip" install --timeout 60 --retries 2 -e "$ROOT/macos-gui[ui]"
 fi
