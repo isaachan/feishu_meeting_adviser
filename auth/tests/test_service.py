@@ -296,6 +296,20 @@ class TokenTests(unittest.TestCase):
             self.assertEqual(token['access_token'], 'u-first')
             self.assertEqual(transport.refresh_calls, 0)
 
+    def test_token_read_backfills_missing_profile(self):
+        """Pre-v1.3 users get their profile lazily on the next token read."""
+        clock = ManualClock()
+        with TemporaryDirectory() as tmp:
+            transport = FakeTransport()
+            service = self.prepare(tmp, transport, clock)
+            for path in (Path(tmp) / 'profiles').glob('*.json'):
+                path.unlink()
+            token = service.get_valid_token('ou_A')
+            self.assertEqual(token['access_token'], 'u-first')
+            profile = service.user_profile('ou_A')
+            self.assertEqual(profile['name'], 'Kai Han')
+            self.assertEqual(profile['email'], 'kai.han@nio.com')
+
     def test_near_expiry_refreshes_once_with_rotation(self):
         clock = ManualClock()
         with TemporaryDirectory() as tmp:

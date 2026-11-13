@@ -10,6 +10,7 @@ on:
       - "stt-server/**"
       - "llm-gateway/**"
       - "macos-gui/**"
+      - "admin-site/**"
       - "integrations/**"
       - ".github/workflows/quality.yml"
   pull_request:
@@ -21,6 +22,7 @@ on:
       - "stt-server/**"
       - "llm-gateway/**"
       - "macos-gui/**"
+      - "admin-site/**"
       - "integrations/**"
       - ".github/workflows/quality.yml"
 
@@ -33,7 +35,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        module: [recorder, advisor, bot, auth, stt-server, llm-gateway, macos-gui]
+        module: [recorder, advisor, bot, auth, stt-server, llm-gateway, macos-gui, admin-site]
         python-version: ["3.11", "3.14"]
         exclude:
           # stt-server's migrated sync-client WS test harness is flaky on 3.11
@@ -78,6 +80,7 @@ jobs:
             auth/pyproject.toml
             stt-server/pyproject.toml
             llm-gateway/pyproject.toml
+            admin-site/pyproject.toml
       - run: python -m pip install -e './recorder[dev]' -e ./advisor -e ./bot -e ./auth -e ./stt-server -e ./llm-gateway
       - run: ruff check --config advisor/pyproject.toml integrations
       - run: python -m unittest discover -s integrations -v

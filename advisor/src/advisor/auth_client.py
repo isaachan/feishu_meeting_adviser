@@ -97,6 +97,21 @@ class HttpAuthClient:
 
     # -- GUI discovery login (CONTRACT_AUTH v1.2) ------------------------------
 
+    def user_profile(self, open_id):
+        """Stored identity summary (CONTRACT_AUTH v1.3 §2.4).
+
+        Returns {'open_id', 'name', 'en_name', 'email'} or None when the user
+        never authorized; raises AuthUnavailable on transport/server failure.
+        """
+        try:
+            return self._call('GET', f'/users/{open_id}/profile')
+        except error.HTTPError as exc:
+            if exc.code == 404:
+                return None
+            raise AuthUnavailable('profile') from None
+        except (error.URLError, OSError, ValueError) as exc:
+            raise AuthUnavailable('network') from exc
+
     def gui_authorize_start(self):
         """Returns {'authorize_url', 'state', 'expires_at'} for the QR login."""
         try:

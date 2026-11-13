@@ -9,7 +9,7 @@ from tempfile import TemporaryDirectory
 from urllib import error, parse, request
 
 from advisor.api import AdvisorApi, CalendarError, StubCalendarValidator, build_api_server
-from advisor.auth_client import AuthorizationRequired
+from advisor.auth_client import AuthorizationRequired, AuthUnavailable
 from advisor.store import SessionStore
 
 OPENER = request.build_opener(request.ProxyHandler({}))
@@ -18,6 +18,8 @@ OPENER = request.build_opener(request.ProxyHandler({}))
 class FakeAuth:
     def __init__(self, mode='ok'):
         self.mode = mode
+        self.profiles = {'ou_A': {'open_id': 'ou_A', 'name': 'Kai Han',
+                                  'en_name': 'Kai Han', 'email': 'kai.han@nio.com'}}
 
     def get_token(self, open_id, *, rejected_token=None):
         if self.mode == 'missing':
@@ -26,6 +28,12 @@ class FakeAuth:
 
     def authorize_url(self, open_id, intent=''):
         return f'https://auth.internal/oauth/start?intent={intent}'
+
+    def user_profile(self, open_id):
+        if self.mode == 'auth_down':
+            raise AuthUnavailable('test')
+        profile = self.profiles.get(open_id)
+        return dict(profile) if profile else None
 
 
 class FakeCalendar(StubCalendarValidator):
@@ -173,6 +181,89 @@ class SessionOpsTests(ApiBase):
 
     def test_unknown_session_404(self):
         status, body = self.post_error('/sessions/s-nope/end', {'owner_open_id': 'ou_A'}, key='x')
+        self.assertEqual((status, body['error']['code']), (404, 'not_found'))
+
+
+class AdminFaceTests(ApiBase):
+    def created(self, owner='ou_A', no='123456789'):
+        _, body = self.join(owner=owner, no=no)
+        return body
+
+    def subscribe(self, session, subscriber='ou_B'):
+        return self.post('/subscription-requests',
+                         {'subscriber_open_id': subscriber,
+                          'meeting_no': session['meeting_no']},
+                         key=f'admin-sub-{self.counter}')
+
+    def test_admin_sessions_list_all_owners_and_ended(self):
+        first = self.created(owner='ou_A', no='111111111')
+        second = self.created(owner='ou_B', no='222222222')
+        self.store.set_phase(first['session_id'], 'ended')
+        status, listing = self.get('/admin/sessions')
+        self.assertEqual(status, 200)
+        rows = {s['session_id']: s for s in listing['sessions']}
+        self.assertEqual(set(rows), {first['session_id'], second['session_id']})
+        self.assertEqual(rows[first['session_id']]['phase'], 'ended')
+        self.assertEqual(rows[first['session_id']]['owner_open_id'], 'ou_A')
+        self.assertIsNotNone(rows[first['session_id']]['ended_at'])
+        self.assertIsNone(rows[second['session_id']]['ended_at'])
+        self.assertEqual(rows[second['session_id']]['owner_open_id'], 'ou_B')
+        self.assertFalse(rows[second['session_id']]['nsdp_hold'])
+        # identity directory: ou_A has an auth profile, ou_B never authorized
+        self.assertEqual(rows[first['session_id']]['owner_name'], 'Kai Han')
+        self.assertEqual(rows[first['session_id']]['owner_email'], 'kai.han@nio.com')
+        self.assertIsNone(rows[second['session_id']]['owner_name'])
+        self.assertEqual(rows[first['session_id']]['subscriptions'], [])
+        # ordering: newest started_at first
+        self.assertEqual(listing['sessions'][0]['session_id'], second['session_id'])
+
+    def test_admin_sessions_include_subscribers_with_directory(self):
+        session = self.created(owner='ou_A', no='333333333')
+        _, sub = self.subscribe(session)
+        self.post(f"/subscription-requests/{sub['request_no']}/decide",
+                  {'owner_open_id': 'ou_A', 'decision': 'approve'}, key='decide-1')
+        status, listing = self.get('/admin/sessions')
+        row = listing['sessions'][0]
+        self.assertEqual(len(row['subscriptions']), 1)
+        entry = row['subscriptions'][0]
+        self.assertEqual(entry['request_no'], sub['request_no'])
+        self.assertEqual(entry['subscriber_open_id'], 'ou_B')
+        self.assertEqual(entry['state'], 'approved')
+        self.assertIsNone(entry['subscriber_name'])  # ou_B never authorized: open_id fallback
+        # once ou_B shows up in the directory, later listings carry the name
+        # (tombstone throttle: force the 5min re-check window to have passed)
+        self.store.db.execute("UPDATE users SET checked_ns=0 WHERE open_id='ou_B'")
+        self.auth.profiles['ou_B'] = {'open_id': 'ou_B', 'name': 'Bob Li',
+                                      'en_name': 'Bob Li', 'email': 'bob@nio.com'}
+        _, listing = self.get('/admin/sessions')
+        entry = listing['sessions'][0]['subscriptions'][0]
+        self.assertEqual(entry['subscriber_name'], 'Bob Li')
+        self.assertEqual(entry['subscriber_email'], 'bob@nio.com')
+
+    def test_admin_sessions_degrade_when_auth_down(self):
+        self.created(owner='ou_C', no='444444444')
+        self.auth.mode = 'auth_down'
+        status, listing = self.get('/admin/sessions')
+        self.assertEqual(status, 200)  # listing still works, open_id-only display
+        self.assertIsNone(listing['sessions'][0]['owner_name'])
+
+    def test_admin_end_without_body_or_owner(self):
+        body = self.created()
+        req = request.Request(self.url(f"/admin/sessions/{body['session_id']}/end"),
+                              data=b'', method='POST')
+        with OPENER.open(req, timeout=5) as response:
+            self.assertEqual(response.status, 200)
+            result = json.loads(response.read())
+        self.assertEqual(result['phase'], 'draining')
+        # idempotent: draining again stays draining, no body/key needed
+        status, again = self.post(f"/admin/sessions/{body['session_id']}/end", {}, key=None)
+        self.assertEqual(again['phase'], 'draining')
+        self.store.set_phase(body['session_id'], 'ended')
+        status, ended = self.post(f"/admin/sessions/{body['session_id']}/end", {}, key=None)
+        self.assertEqual(ended['phase'], 'ended')
+
+    def test_admin_end_unknown_404(self):
+        status, body = self.post_error('/admin/sessions/s-nope/end', {}, key=None)
         self.assertEqual((status, body['error']['code']), (404, 'not_found'))
 
 

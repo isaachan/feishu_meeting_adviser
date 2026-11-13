@@ -101,6 +101,48 @@ class CredentialStore:
 _NSDP_TOKEN = re.compile(r'[!-~]{8,512}\Z')
 
 
+class ProfileStore:
+    """Per-open_id identity profiles under ``<data>/profiles/`` (v1.3).
+
+    Persisted from the OAuth callback's user_info summary; read via the
+    internal API by the advisor identity directory. Never holds tokens.
+    """
+
+    def __init__(self, directory):
+        self.directory = Path(directory)
+
+    def _paths(self, open_id):
+        if not valid_open_id(open_id):
+            raise AuthError('oauth_invalid_open_id')
+        base = self.directory / open_id
+        return base.with_suffix('.json'), base.with_suffix('.lock')
+
+    @contextmanager
+    def locked(self, open_id):
+        _, lock_path = self._paths(open_id)
+        ensure_private_directory(self.directory)
+        with FileLock(lock_path):
+            yield
+
+    def read(self, open_id):
+        path, _ = self._paths(open_id)
+        value = read_private_json(path)
+        if value is None:
+            return None
+        if (not isinstance(value, dict) or value.get('version') != 1
+                or value.get('open_id') != open_id):
+            raise AuthError('oauth_invalid_local_file')
+        return {key: value.get(key)
+                for key in ('open_id', 'name', 'en_name', 'email', 'updated_at')}
+
+    def write(self, open_id, info, *, now):
+        path, _ = self._paths(open_id)
+        record = {'version': 1, 'open_id': open_id,
+                  'name': info.get('name'), 'en_name': info.get('en_name'),
+                  'email': info.get('email'), 'updated_at': now}
+        write_private_json(path, record)
+
+
 class NsdpCredentialStore:
     """Per-open_id NSDP tokens under ``credentials/nsdp/`` (CONTRACT_AUTH §8).
 

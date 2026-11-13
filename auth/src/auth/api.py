@@ -192,6 +192,20 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             self._reply_json(200, result)
             return
+        if parsed.path.startswith('/users/') and parsed.path.endswith('/profile'):
+            open_id = parsed.path[len('/users/'):-len('/profile')]
+            try:
+                profile = self._service().user_profile(open_id)
+            except AuthError as exc:
+                status, payload = _api_error(exc)
+                self._reply_json(status, payload)
+                return
+            if profile is None:
+                self._reply_json(404, {'error': {'code': 'unknown_user',
+                                                 'message': 'user never authorized'}})
+                return
+            self._reply_json(200, profile)
+            return
         self._reply_json(404, {'error': {'code': 'not_found', 'message': 'unknown path'}})
 
     def do_POST(self):

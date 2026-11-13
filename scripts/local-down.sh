@@ -12,7 +12,7 @@ if [ -f "$DATA/pids" ]; then
   : > "$DATA/pids"
 fi
 # orphan sweep: anything from the local venv still serving
-pkill -f "/\.venv-local/bin/(auth|stt-server|llm-gateway|advisor|bot) serve" 2>/dev/null || true
+pkill -f "/\.venv-local/bin/(auth|stt-server|llm-gateway|advisor|bot|admin-site) serve" 2>/dev/null || true
 sleep 0.5
-pkill -9 -f "/\.venv-local/bin/(auth|stt-server|llm-gateway|advisor|bot) serve" 2>/dev/null || true
+pkill -9 -f "/\.venv-local/bin/(auth|stt-server|llm-gateway|advisor|bot|admin-site) serve" 2>/dev/null || true
 echo "本地栈已停止"

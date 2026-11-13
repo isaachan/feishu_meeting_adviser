@@ -1,6 +1,6 @@
 # Advisor 内部 API 契约（bot ↔ advisor）
 
-状态：v1 于 2026-11-10 冻结（阶段 0.3）；**v1.1（2026-11-11）** 新增 NSDP 组织者凭据门（`authorization_required` 增加 `provider`/`submit_url` 变体与 `nsdp_unavailable`；组织者面全部指令前置该门；`GET /sessions/{id}/status` 响应新增 `nsdp_hold`）。**v1.2（2026-11-12）** 新增 §8 GUI 面（`/gui/login/start`·`/gui/login/poll`·`/gui/sessions`·`/gui/logout` + devices 表；经 HTTPS 反代对 laptop GUI 暴露，成为第三个对外入口，见 DEPLOYMENT §2）；**v1.2a（2026-11-13，T7）** NSDP 取数降级语义：`nsdp_unavailable` 不再拒绝入会（见 §1.1）。服务端为 `advisor`（会话域 + 一次性操作），客户端为 `bot`（§1–§7）与 `macos-gui`（§8）。变更需 bump API 版本并同步两侧实现与测试。上游设计：[ARCHITECTURE](ARCHITECTURE.md) D4/D6、[macos-gui/DESIGN](../macos-gui/DESIGN.md)；outbox 语义沿用旧 advisor（channel=`local`/`im`、uuid 幂等、uncertain 人工裁决）。
+状态：v1 于 2026-11-10 冻结（阶段 0.3）；**v1.1（2026-11-11）** 新增 NSDP 组织者凭据门（`authorization_required` 增加 `provider`/`submit_url` 变体与 `nsdp_unavailable`；组织者面全部指令前置该门；`GET /sessions/{id}/status` 响应新增 `nsdp_hold`）。**v1.2（2026-11-12）** 新增 §8 GUI 面（`/gui/login/start`·`/gui/login/poll`·`/gui/sessions`·`/gui/logout` + devices 表；经 HTTPS 反代对 laptop GUI 暴露，成为第三个对外入口，见 DEPLOYMENT §2）；**v1.2a（2026-11-13，T7）** NSDP 取数降级语义：`nsdp_unavailable` 不再拒绝入会（见 §1.1）。**v1.3（2026-11-13）** 新增 §9 运维面（admin-site：全量会话列表 + 手工停止）；**v1.4（2026-11-13）** §9.1 响应扩展身份目录与订阅列表（`owner_name`/`owner_email`/`subscriptions[]`，依赖 CONTRACT_AUTH v1.3）。服务端为 `advisor`（会话域 + 一次性操作），客户端为 `bot`（§1–§7）、`macos-gui`（§8）与 `admin-site`（§9）。变更需 bump API 版本并同步两侧实现与测试。上游设计：[ARCHITECTURE](ARCHITECTURE.md) D4/D6、[macos-gui/DESIGN](../macos-gui/DESIGN.md)；outbox 语义沿用旧 advisor（channel=`local`/`im`、uuid 幂等、uncertain 人工裁决）。
 
 ## 1. 传输与通用约定
 
@@ -274,6 +274,30 @@ bot 回小B："该订阅已被组织者撤销"。
 | `/gui/sessions` 携流令牌过 HTTPS | 与 bot IM 下发命令同级 | 接受并记录（本表） |
 | device_token 无 TTL | 长期有效 | 手动退出/服务端清理即失效；公网前补 |
 
-## 9. 版本
+## 9. 运维面（v1.3，admin-site ↔ advisor）
 
-API v1（响应体保留 `"api": 1` 字段位，首版不强制）；v1.1 NSDP 门；v1.2 GUI 面（§8）。不兼容变更递增版本号并同步 bot/advisor/macos-gui 侧实现、测试与 `integrations/` 用例。
+服务运维工具 `admin-site`（v1 无登录，仅 localhost 受信边界内可达）。与 §1 同端口、同无认证；**不经过 NSDP 门、不校验 owner**（运维动作，非用户动作）。
+
+### 9.1 `GET /admin/sessions` —— 全量会话列表（含 ended 与身份/订阅）
+
+```json
+{"sessions": [{"session_id": "s-3f9c", "owner_open_id": "ou_A", "owner_name": "Kai Han",
+  "owner_email": "kai.han@nio.com", "meeting_no": "123456789", "title": "周会",
+  "phase": "recording", "started_at": 1762800000.0, "ended_at": null, "nsdp_hold": false,
+  "subscriptions": [{"request_no": 7, "subscriber_open_id": "ou_B", "state": "approved",
+    "subscriber_name": "Bob Li", "subscriber_email": "bob@nio.com"}]}]}
+```
+
+- 全部 owner、全部 phase（recording/draining/ended），按 `started_at` 倒序，至多 500 条；`started_at`/`ended_at` 为 Unix 秒（`ended_at` 未结束为 `null`）；`subscriptions` 为该会话全部订阅行（按 request_no 升序，含 requested/approved/denied/revoked 全状态）。
+- **身份目录（v1.4）**：`owner_name`/`owner_email`/`subscriber_name`/`subscriber_email` 来自 advisor 身份目录表（`users`）；目录缺失项回源 auth `GET /users/{open_id}/profile`（CONTRACT_AUTH v1.3 §2.4）懒补——授权过的用户即有实名，从未授权者（典型为仅走 IM 的小B）为 `null`，前端回落显示 open_id；auth 不可达时降级为仅 open_id 显示。未知名（null）5 分钟内不重复回源。
+- 会话明细复用 §3.2 `/sessions/{id}/status`（该端点本就无 owner 校验）；不新增状态端点。
+
+### 9.2 `POST /admin/sessions/{id}/end` —— 手工停止（进排空）
+
+- 无请求体、无需幂等键（动作天然幂等）；语义与 §3.3 相同（recording→draining，监督器排空后自动 ended）。
+- 幂等口径：draining 再调 → 200 `{"phase": "draining"}`；ended 再调 → 200 `{"phase": "ended"}`；不存在 → 404 `not_found`。
+- 审计：advisor 记 `admin ending` 日志行（区别于 owner 面的 `session ending`）。
+
+## 10. 版本
+
+API v1（响应体保留 `"api": 1` 字段位，首版不强制）；v1.1 NSDP 门；v1.2 GUI 面（§8）；v1.3 运维面（§9）；v1.4 §9.1 身份目录与订阅列表（依赖 CONTRACT_AUTH v1.3）。不兼容变更递增版本号并同步 bot/advisor/macos-gui/admin-site 侧实现、测试与 `integrations/` 用例。

@@ -19,7 +19,7 @@ from .constants import (AUTHORIZE_URL, CALLBACK_PATH, DEFAULT_STATE_TTL_S, GUI_L
 from .errors import AuthError
 from .state_table import StateTable
 from .storage import digest
-from .store import CredentialStore, NsdpCredentialStore, valid_open_id
+from .store import CredentialStore, NsdpCredentialStore, ProfileStore, valid_open_id
 from .transport import FeishuTransport
 
 _CODE = re.compile(r'[A-Za-z0-9_-]{1,4096}\Z')
@@ -38,6 +38,7 @@ class AuthService:
         self.transport = transport or FeishuTransport(credentials)
         data = Path(data_dir)
         self.store = CredentialStore(data / 'credentials')
+        self.profiles = ProfileStore(data / 'profiles')
         self.nsdp_store = NsdpCredentialStore(data / 'credentials' / 'nsdp')
         self.states = StateTable(data / 'pending_states.json', clock, ttl_s=state_ttl_s)
         self._flight_guard = threading.Lock()
@@ -103,6 +104,7 @@ class AuthService:
             record['subject_hash'] = digest([self.credentials.app_id, info['open_id']])
             with self.store.locked(open_id):
                 self.store.write(open_id, record)
+                self.profiles.write(open_id, info, now=self.clock())
             self.states.complete(state, info)
         except AuthError as exc:
             return {'outcome': 'failed', 'stage': exc.stage or 'validation', 'open_id': entry['open_id']}
@@ -123,6 +125,10 @@ class AuthService:
                 'open_id': user['open_id'], 'name': user.get('name'),
                 'en_name': user.get('en_name'), 'email': user.get('email')}}
         return {'status': 'pending'}
+
+    def user_profile(self, open_id):
+        """Stored identity summary (v1.3 §2.4) or None when never authorized."""
+        return self.profiles.read(open_id)
 
     def _callback_params(self, query_string):
         if not isinstance(query_string, str) or len(query_string) > 8192:
@@ -163,6 +169,7 @@ class AuthService:
             self.store.validated_ready(value)
             reusable = self.clock() < value['expires_at'] - value['refresh_margin']
             if reusable and (rejected_token is None or value['access_token'] != rejected_token):
+                self._backfill_profile(open_id, value['access_token'])
                 return self._token_response(value)
             if self.clock() >= value['refresh_expires_at']:
                 self.store.write(open_id, self.store.marker(
@@ -184,7 +191,23 @@ class AuthService:
                 self.store.write(open_id, self.store.marker(
                     open_id, 'reauthorization_required', value.get('subject_hash')))
                 raise
+            self._backfill_profile(open_id, replacement['access_token'])
             return self._token_response(replacement)
+
+    def _backfill_profile(self, open_id, access_token):
+        """Persist the identity profile for pre-v1.3 users, best-effort once.
+
+        Never blocks token delivery: any failure is swallowed and retried on
+        the next credential read while the profile stays missing.
+        """
+        try:
+            if self.profiles.read(open_id) is not None:
+                return
+            info = self.transport.user_info(access_token)
+            if info.get('open_id') == open_id:
+                self.profiles.write(open_id, info, now=self.clock())
+        except AuthError:
+            pass
 
     @staticmethod
     def _token_response(value):

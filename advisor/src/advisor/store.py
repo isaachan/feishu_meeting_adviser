@@ -32,8 +32,32 @@ def require_schema(connection) -> None:
     tables = _tables(connection) - {'sqlite_sequence'}  # appears lazily with AUTOINCREMENT
     if version != SCHEMA_VERSION or tables != {
             'sessions', 'inputs', 'context', 'jobs', 'outbox', 'session_materials',
-            'sources', 'subscriptions', 'idempotency', 'gui_devices'}:
+            'sources', 'subscriptions', 'idempotency', 'gui_devices', 'users'}:
         raise StorageError('adviser database schema is unsupported; reinitialize')
+
+
+def upgrade_schema(database: SQLiteDatabase) -> None:
+    """In-place upgrades between SCHEMA_VERSIONs (idempotent per version).
+
+    v3→v4: identity directory table ``users`` (CONTRACT_ADVISOR_API §9.1).
+    """
+    version = database.connection.execute('PRAGMA user_version').fetchone()[0]
+    if version == SCHEMA_VERSION:
+        return
+    if version == 3:
+        with database.transaction():
+            database.connection.execute(
+                '''CREATE TABLE IF NOT EXISTS users (
+                    open_id TEXT PRIMARY KEY, name TEXT, en_name TEXT, email TEXT,
+                    checked_ns INTEGER NOT NULL DEFAULT 0)''')
+            # seed from gui_devices so existing GUI users keep their display names
+            database.connection.execute(
+                '''INSERT OR IGNORE INTO users(open_id,name,email,checked_ns)
+                   SELECT open_id, MAX(user_name), MAX(user_email), 0
+                   FROM gui_devices GROUP BY open_id''')
+            database.connection.execute(f'PRAGMA user_version={SCHEMA_VERSION}')
+        return
+    # fresh (0/empty) and unknown versions are judged by require_schema
 
 
 def initialize_schema(database: SQLiteDatabase) -> None:
@@ -66,6 +90,7 @@ class SessionStore:
         database = SQLiteDatabase.open_current(self.path, max_database_bytes=max_database_bytes)
         self.db = database.connection
         try:
+            upgrade_schema(database)
             require_schema(self.db)
         except BaseException:
             self.db.close()
@@ -163,6 +188,45 @@ class SessionStore:
             query = query.replace('WHERE phase', 'WHERE owner_open_id=? AND phase')
             params = (owner_open_id,)
         return [dict(row) for row in self.db.execute(query, params)]
+
+    @_locked
+    def list_sessions_all(self, limit=500):
+        """Admin face (CONTRACT_ADVISOR_API §9): every owner, every phase."""
+        rows = self.db.execute(
+            'SELECT * FROM sessions ORDER BY started_at DESC LIMIT ?', (limit,))
+        return [dict(row) for row in rows]
+
+    # -- identity directory (CONTRACT_ADVISOR_API §9.1) ----------------------
+
+    @_locked
+    def upsert_user(self, open_id, *, name=None, en_name=None, email=None, now=None):
+        """Latest-wins profile upsert; NULL fields keep their existing values."""
+        moment = time.time() if now is None else now
+        self.db.execute(
+            '''INSERT INTO users(open_id,name,en_name,email,checked_ns) VALUES(?,?,?,?,?)
+               ON CONFLICT(open_id) DO UPDATE SET
+                 name=COALESCE(excluded.name,users.name),
+                 en_name=COALESCE(excluded.en_name,users.en_name),
+                 email=COALESCE(excluded.email,users.email),
+                 checked_ns=excluded.checked_ns''',
+            (open_id, name, en_name, email, int(moment * 1_000_000_000)))
+
+    @_locked
+    def users_map(self, open_ids):
+        ids = tuple(open_ids)
+        if not ids:
+            return {}
+        rows = self.db.execute(
+            f"SELECT * FROM users WHERE open_id IN ({','.join('?' * len(ids))})", ids)
+        return {row['open_id']: dict(row) for row in rows}
+
+    @_locked
+    def all_subscriptions(self, limit=2000):
+        """Admin face: every subscription row, newest request_no first."""
+        rows = self.db.execute(
+            'SELECT request_no,session_id,subscriber_open_id,state FROM subscriptions '
+            'ORDER BY request_no DESC LIMIT ?', (limit,))
+        return [dict(row) for row in rows]
 
     def set_phase(self, session_id, phase, *, now=None):
         if phase not in SESSION_PHASES:

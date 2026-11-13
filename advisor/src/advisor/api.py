@@ -240,6 +240,83 @@ class AdvisorApi:
         LOG.info('session ending: session=%s -> draining (owner=%s)', session_id, owner)
         return {'session_id': session_id, 'phase': updated['phase']}
 
+    # -- admin face (CONTRACT_ADVISOR_API §9) --------------------------------
+
+    def _identity_directory(self, open_ids):
+        """open_id -> {name, email, ...} for display; backfills from auth
+        profiles (CONTRACT_AUTH §2.4), degrading to open_id-only when auth is
+        unreachable or the user never authorized (tombstone, 5min re-check)."""
+        directory = self.store.users_map(open_ids)
+        now = self.clock()
+        now_ns = int(now * 1_000_000_000)
+        for open_id in sorted(open_ids):
+            row = directory.get(open_id)
+            stale = (row is None or row['checked_ns'] == 0  # migration seed: never checked
+                     or (row['name'] is None
+                         and now_ns - row['checked_ns'] > 300 * 1_000_000_000))
+            if not stale:
+                continue
+            try:
+                profile = self.auth.user_profile(open_id)
+            except AuthUnavailable:
+                continue
+            if profile is None and row is not None:
+                self.store.upsert_user(open_id, now=now)  # tombstone refresh
+                directory[open_id] = row | {'checked_ns': now_ns}
+                continue
+            self.store.upsert_user(open_id, name=profile.get('name') if profile else None,
+                                   en_name=profile.get('en_name') if profile else None,
+                                   email=profile.get('email') if profile else None, now=now)
+            directory[open_id] = {'open_id': open_id,
+                                  'name': profile.get('name') if profile else None,
+                                  'en_name': profile.get('en_name') if profile else None,
+                                  'email': profile.get('email') if profile else None,
+                                  'checked_ns': now_ns}
+        return directory
+
+    def admin_sessions(self):
+        """All owners, all phases incl. ended; ops listing, no NSDP gate."""
+        sessions = self.store.list_sessions_all()
+        subscriptions = self.store.all_subscriptions()
+        ids = {s['owner_open_id'] for s in sessions}
+        ids |= {r['subscriber_open_id'] for r in subscriptions}
+        directory = self._identity_directory(ids)
+        by_session = {}
+        for row in subscriptions:  # newest first -> group then reverse per session
+            by_session.setdefault(row['session_id'], []).append(row)
+        items = []
+        for s in sessions:
+            owner = directory.get(s['owner_open_id']) or {}
+            subs = [{'request_no': r['request_no'],
+                     'subscriber_open_id': r['subscriber_open_id'],
+                     'state': r['state'],
+                     'subscriber_name': (directory.get(r['subscriber_open_id']) or {}).get('name'),
+                     'subscriber_email': (directory.get(r['subscriber_open_id']) or {}).get('email')}
+                    for r in reversed(by_session.get(s['session_id'], []))]
+            items.append({'session_id': s['session_id'],
+                          'owner_open_id': s['owner_open_id'],
+                          'owner_name': owner.get('name'),
+                          'owner_email': owner.get('email'),
+                          'meeting_no': s['meeting_no'], 'title': s['title'],
+                          'phase': s['phase'], 'started_at': s['started_at'],
+                          'ended_at': s['ended_ns'] / 1e9 if s['ended_ns'] else None,
+                          'nsdp_hold': bool(s['nsdp_hold']),
+                          'subscriptions': subs})
+        return {'sessions': items}
+
+    def admin_end_session(self, session_id):
+        """Ops stop: owner check and NSDP gate intentionally bypassed."""
+        try:
+            session = self.store.require_session(session_id)
+        except StorageError:
+            raise ApiError(404, 'not_found', 'unknown session') from None
+        if session['phase'] in ('draining', 'ended'):
+            return {'session_id': session_id, 'phase': session['phase']}
+        updated = self.store.set_phase(session_id, 'draining', now=self.clock())
+        assert updated is not None
+        LOG.info('admin ending: session=%s -> draining', session_id)
+        return {'session_id': session_id, 'phase': updated['phase']}
+
     # -- subscriptions --------------------------------------------------------
 
     def create_subscription(self, body):
@@ -387,6 +464,9 @@ class AdvisorApi:
         device_token = 'dt-' + secrets.token_urlsafe(32)
         self.store.register_device(device_token, open_id, name=user.get('name'),
                                    email=user.get('email'), now=self.clock())
+        self.store.upsert_user(open_id, name=user.get('name'),
+                               en_name=user.get('en_name'), email=user.get('email'),
+                               now=self.clock())
         with self._gui_lock:
             self._gui_logins.pop(device_code, None)  # one-shot: second poll 404s
         LOG.info('gui device registered: open_id=%s', open_id)
@@ -474,7 +554,8 @@ def build_api_server(api: AdvisorApi, host='127.0.0.1', port=8380):
                 path = self.path.split('?')[0]
                 quiet = (self.command == 'GET'
                          and (path == '/healthz' or path == '/outbox/pending'
-                              or path == '/gui/login/poll' or path == '/gui/sessions'))
+                              or path == '/gui/login/poll' or path == '/gui/sessions'
+                              or path == '/admin/sessions'))
                 if not quiet:
                     LOG.info('api %s %s -> %s', self.command, path, status)
                 self._reply(status, payload)
@@ -501,6 +582,8 @@ def build_api_server(api: AdvisorApi, host='127.0.0.1', port=8380):
                 self._run(lambda: (api.list_meetings(owner), False))
             elif parsed.path == '/sessions':
                 self._run(lambda: (api.list_sessions(query.get('owner_open_id', [None])[0]), False))
+            elif parsed.path == '/admin/sessions':
+                self._run(lambda: (api.admin_sessions(), False))
             elif parsed.path.startswith('/sessions/') and parsed.path.endswith('/status'):
                 session_id = parsed.path[len('/sessions/'):-len('/status')]
                 self._run(lambda: (api.session_status(session_id), False))
@@ -522,6 +605,10 @@ def build_api_server(api: AdvisorApi, host='127.0.0.1', port=8380):
                 return
             if parsed.path == '/gui/logout':
                 self._run(lambda: (api.gui_logout(self._bearer_token()), False))
+                return
+            if parsed.path.startswith('/admin/sessions/') and parsed.path.endswith('/end'):
+                session_id = parsed.path[len('/admin/sessions/'):-len('/end')]
+                self._run(lambda: (api.admin_end_session(session_id), False))
                 return
 
             def run(body):

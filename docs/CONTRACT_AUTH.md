@@ -1,6 +1,6 @@
 # Auth 服务契约（OAuth 凭据托管）
 
-状态：v1 于 2026-11-10 冻结（阶段 0.4）。**v1.1（2026-11-11）** 新增 §8：NSDP token 提交通道（组织者个人 token，表单提交、无刷新语义），凭据存储增加 provider 维度。**v1.2（2026-11-12）** 新增 GUI 发现式登录：`/authorize/start` 允许 `intent:"gui:login"` 时 `open_id` 缺省（discovery state，回调后采纳 user_info 主体）；回调成功后 state 记录补存 `user_info` 摘要；新增内部端点 `GET /authorize/status`（advisor 轮询登录进度，见 [macos-gui/DESIGN](../macos-gui/DESIGN.md)）。服务端为 `auth`。语义自旧 `legacy/local-meeting-recorder/src/local_meeting_recorder/oauth.py` 平移（2026-11-10 已对真实飞书 API 形状验证），改为云端多用户（按 open_id 隔离）+ HTTPS 回调。变更需 bump 版本并同步 advisor/auth 两侧实现与测试。上游设计：[ARCHITECTURE](ARCHITECTURE.md) D3。
+状态：v1 于 2026-11-10 冻结（阶段 0.4）。**v1.1（2026-11-11）** 新增 §8：NSDP token 提交通道（组织者个人 token，表单提交、无刷新语义），凭据存储增加 provider 维度。**v1.2（2026-11-12）** 新增 GUI 发现式登录：`/authorize/start` 允许 `intent:"gui:login"` 时 `open_id` 缺省（discovery state，回调后采纳 user_info 主体）；回调成功后 state 记录补存 `user_info` 摘要；新增内部端点 `GET /authorize/status`（advisor 轮询登录进度，见 [macos-gui/DESIGN](../macos-gui/DESIGN.md)）。**v1.3（2026-11-13）** 新增身份档案：回调持久化 user_info 摘要至 `<数据目录>/profiles/`，新端点 `GET /users/{open_id}/profile`（§2.4，供 advisor 身份目录/运维台显示实名）。服务端为 `auth`。语义自旧 `legacy/local-meeting-recorder/src/local_meeting_recorder/oauth.py` 平移（2026-11-10 已对真实飞书 API 形状验证），改为云端多用户（按 open_id 隔离）+ HTTPS 回调。变更需 bump 版本并同步 advisor/auth 两侧实现与测试。上游设计：[ARCHITECTURE](ARCHITECTURE.md) D3。
 
 ## 1. 范围、端点与角色
 
@@ -78,6 +78,20 @@
 - 仅返回 §4.1 落存的 user_info 摘要字段；**任何情况下不返回 token**（access/refresh 一律不出本服务，红线同 §1）。
 - 供 advisor 的 `/gui/login/poll` 轮询（CONTRACT_ADVISOR_API §8.2）；非 discovery state 查询此端点同样适用（`completed` 不带 `user` 字段，除非该 state 落存过摘要）。
 
+### 2.4 `GET /users/{open_id}/profile`（v1.3，仅 advisor 调用）
+
+→ 200：
+
+```json
+{"open_id": "ou_A", "name": "Kai Han", "en_name": "Kai Han",
+ "email": "kai.han@nio.com", "updated_at": 1762900000.0}
+```
+
+- 返回 §4.1 第 7 步持久化的身份档案（name/en_name/email 可为 `null`，以飞书 user_info 实际返回为准）。
+- **存量用户惰性补档**：v1.3 之前已授权、尚无档案的用户，在下一次 `GET /credentials/{open_id}/token` 命中可用 token 时由 auth 顺带 best-effort 补档一次（失败不影响 token 返回，缺档期间重复尝试）。
+- 用户从未授权 → `404 {"code": "unknown_user"}`；open_id 非法 → 400 `bad_message`。
+- **任何情况下不返回 token**（红线同 §1）；供 advisor 身份目录（CONTRACT_ADVISOR_API §9.1）拉取显示名。
+
 ## 3. 刷新语义（marker 先行、必须轮转）
 
 1. 刷新前**先原子提交 marker**：记录置 `state=refreshing`（旧实现"Commit before the one-use POST"语义）。
@@ -97,6 +111,7 @@
 4. 落盘成功后返回简化成功页：显示"授权成功，请回到飞书重新发送刚才的指令（<intent 摘要>）"；discovery state 显示"登录成功，请回到采集应用"。
 5. 任何一步失败：显式失败页（含原因），不静默重试；code 一次性，失败不重放。
 6. **user_info 摘要落 state 记录（v1.2）**：成功路径将 `{open_id, name, en_name, email}` 写入 state 记录（供 `GET /authorize/status` 读取；discovery 与非 discovery 均落）。摘要不含任何 token；state 表 TTL 回收语义不变。
+7. **身份档案持久化（v1.3）**：成功路径同时将同一摘要写入持久档案 `<数据目录>/profiles/<open_id>.json`（§5），供 `GET /users/{open_id}/profile`（§2.4）读取；写失败按第 5 条显式失败处理，不产生半凭据状态。
 
 ### 4.2 `GET /oauth/callback?error=…`（用户拒绝授权）
 
@@ -105,6 +120,7 @@
 ## 5. 存储格式与权限
 
 - 目录 `<auth 数据目录>/credentials/`（0700），每 open_id 一文件（0600），≤64 KiB。
+- 身份档案目录 `<auth 数据目录>/profiles/`（v1.3，0700），每 open_id 一文件（0600）：`{version:1, open_id, name, en_name, email, updated_at}`，不含任何 token；与凭据文件同样的原子写/`O_NOFOLLOW` 语义。
 - 原子写：临时文件 + fsync + `rename` + 目录 fsync；读取 `O_NOFOLLOW`（照搬旧实现）。
 - 记录字段：`{version:1, open_id, state: ready|refreshing|reauthorization_required, access_token, refresh_token, expires_at, refresh_expires_at, scopes, refresh_margin}`。
 - state 记录（PKCE/state 表）独立于凭据文件，同样原子写、带 TTL 回收。
@@ -118,7 +134,7 @@
 
 ## 7. 版本
 
-API v1（v1.1 见 §8；v1.2 变更：§2.1 discovery 变体、§2.3 `/authorize/status`、§4.1 采纳语义与 user_info 摘要落存）。不兼容变更递增版本号，并同步 auth/advisor 两侧实现、测试与 `integrations/` 用例。
+API v1（v1.1 见 §8；v1.2 变更：§2.1 discovery 变体、§2.3 `/authorize/status`、§4.1 采纳语义与 user_info 摘要落存；v1.3 变更：§2.4 `GET /users/{open_id}/profile`、§4.1 第 7 步档案持久化、§5 profiles 目录）。不兼容变更递增版本号，并同步 auth/advisor 两侧实现、测试与 `integrations/` 用例。
 
 ## 8. NSDP token 提交通道（v1.1）
 

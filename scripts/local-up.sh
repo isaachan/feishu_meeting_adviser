@@ -28,7 +28,7 @@ if [ ! -x "$VENV/bin/python" ]; then
   python3 -m venv "$VENV"
   "$VENV/bin/pip" install --quiet --timeout 60 --retries 2 --upgrade pip
 fi
-for m in auth stt-server llm-gateway advisor bot recorder; do
+for m in auth stt-server llm-gateway advisor bot recorder admin-site; do
   marker="$VENV/lib/"*"/site-packages/__editable__.${m//-/_}"*-*.pth
   if ! ls $~marker >/dev/null 2>&1; then
     echo "[setup] 安装模块 $m …"
@@ -87,6 +87,9 @@ start advisor 8380 "$VENV/bin/advisor" serve --data-dir "$DATA/advisor" \
 start bot     -    env BOT_APP_ID="$BOT_APP_ID" BOT_APP_SECRET="$BOT_APP_SECRET" \
   "$VENV/bin/bot" serve --advisor-url http://127.0.0.1:8380
 
+start admin   8390 "$VENV/bin/admin-site" serve --advisor-url http://127.0.0.1:8380 \
+  --logs-dir "$DATA/logs" --host 127.0.0.1 --port 8390
+
 echo
 echo "全部就绪（本机 IP: $HOST_IP）"
 echo "  auth:    http://$HOST_IP:8381  (回调基址 $AUTH_BASE_URL)"
@@ -94,5 +97,6 @@ echo "  stt:     ws://$HOST_IP:8392   health http://$HOST_IP:8393"
 echo "  gateway: http://$HOST_IP:8377"
 echo "  advisor: http://$HOST_IP:8380  ingest $INGEST_URL"
 echo "  bot: 飞书长连接（无监听端口）"
+echo "  admin:  http://127.0.0.1:8390  （运维台：会话列表/手工停止 + 五节点日志流）"
 echo "  GUI:    $VENV/bin/macos-gui   （服务器地址填 http://127.0.0.1:8380）"
 echo "日志：$DATA/logs/   停止：scripts/local-down.sh"

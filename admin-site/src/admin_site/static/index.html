@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>会参谋 · 运维台</title>
+<style>
+  :root {
+    --bg: #101418; --panel: #171d24; --border: #2a3340; --fg: #dbe4ee;
+    --dim: #8a98a8; --accent: #4da3ff; --green: #3fbf6f; --orange: #e0a03c;
+    --red: #e05c5c; --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 14px/1.5 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+  header { display: flex; align-items: center; gap: 12px; padding: 10px 18px;
+           border-bottom: 1px solid var(--border); background: var(--panel); }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  #advisor-state { font-size: 12px; color: var(--dim); display: flex; align-items: center; gap: 6px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); display: inline-block; }
+  .dot.ok { background: var(--green); } .dot.bad { background: var(--red); }
+  nav { margin-left: auto; display: flex; gap: 4px; }
+  nav button { background: none; border: 1px solid transparent; color: var(--dim);
+               padding: 5px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  nav button.active { color: var(--fg); background: var(--bg);
+                      border-color: var(--border); }
+  main { padding: 16px 18px; max-width: 1200px; margin: 0 auto; }
+  .toolbar { display: flex; align-items: center; gap: 14px; margin-bottom: 12px;
+             color: var(--dim); font-size: 13px; flex-wrap: wrap; }
+  .toolbar label { display: flex; gap: 5px; align-items: center; cursor: pointer; }
+  .toolbar .spacer { flex: 1; }
+  .btn { background: var(--panel); border: 1px solid var(--border); color: var(--fg);
+         padding: 4px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .btn:hover { border-color: var(--accent); }
+  .btn.danger { color: #ff8f8f; }
+  #banner { display: none; margin-bottom: 12px; padding: 7px 12px; border-radius: 6px;
+            font-size: 13px; }
+  #banner.err { display: block; background: #3a1f22; color: #ffb3b3; }
+  #banner.ok { display: block; background: #1d3226; color: #a9e8bd; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border);
+           white-space: nowrap; }
+  th { color: var(--dim); font-weight: 500; }
+  td.title { white-space: normal; min-width: 140px; }
+  td.mono, .mono { font-family: var(--mono); font-size: 12px; }
+  .badge { padding: 1px 9px; border-radius: 10px; font-size: 12px; }
+  .badge.recording { background: #16351f; color: var(--green); }
+  .badge.draining { background: #3a2d14; color: var(--orange); }
+  .badge.ended { background: #262c33; color: var(--dim); }
+  .badge.approved { background: #16351f; color: var(--green); }
+  .badge.requested { background: #3a2d14; color: var(--orange); }
+  .badge.denied, .badge.revoked { background: #33202a; color: #c98fa4; }
+  td.subs { white-space: normal; min-width: 180px; }
+  td.subs .sub { display: flex; align-items: center; gap: 6px; margin: 2px 0; }
+  #log-tabs { display: flex; gap: 4px; margin-bottom: 10px; flex-wrap: wrap; }
+  #log-tabs button { background: var(--panel); border: 1px solid var(--border);
+                     color: var(--dim); padding: 4px 14px; border-radius: 6px;
+                     cursor: pointer; font-size: 13px; font-family: var(--mono); }
+  #log-tabs button.active { color: var(--fg); border-color: var(--accent); }
+  #log-tabs button .dot { margin-left: 6px; }
+  #log-box { background: #0b0e12; border: 1px solid var(--border); border-radius: 8px;
+             padding: 10px 12px; height: calc(100vh - 210px); overflow: auto; }
+  #log-box pre { margin: 0; font-family: var(--mono); font-size: 12px; line-height: 1.55;
+                 white-space: pre-wrap; word-break: break-all; color: #b7c4d4; }
+  #empty { color: var(--dim); font-size: 13px; padding: 30px; text-align: center; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>会参谋 · 运维台</h1>
+  <span id="advisor-state"><span class="dot" id="advisor-dot"></span><span id="advisor-text">advisor 检查中…</span></span>
+  <nav>
+    <button id="tab-sessions" class="active">会话</button>
+    <button id="tab-logs">日志</button>
+  </nav>
+</header>
+<main>
+  <div id="banner"></div>
+
+  <section id="view-sessions">
+    <div class="toolbar">
+      <label><input type="checkbox" id="auto-refresh" checked>自动刷新（5s）</label>
+      <button class="btn" id="refresh">立即刷新</button>
+      <span id="session-count"></span>
+    </div>
+    <table>
+      <thead><tr>
+        <th>会话</th><th>会议号</th><th>标题</th><th>状态</th><th>组织者</th>
+        <th>订阅者</th><th>开始时间</th><th>结束时间</th><th>操作</th>
+      </tr></thead>
+      <tbody id="session-rows"></tbody>
+    </table>
+    <div id="empty" class="hidden">暂无会话</div>
+  </section>
+
+  <section id="view-logs" class="hidden">
+    <div id="log-tabs"></div>
+    <div class="toolbar">
+      <button class="btn" id="pause">暂停</button>
+      <button class="btn" id="clear">清屏</button>
+      <label><input type="checkbox" id="autoscroll" checked>自动滚动</label>
+      <span class="spacer"></span>
+      <span id="log-state" class="mono"></span>
+    </div>
+    <div id="log-box"><pre id="log-pane"></pre></div>
+  </section>
+</main>
+
+<script>
+'use strict';
+const $ = (id) => document.getElementById(id);
+const fmtTs = (v) => v == null ? '—' : new Date(v * 1000).toLocaleString('zh-CN', { hour12: false });
+
+let bannerTimer = null;
+function banner(kind, text) {
+  const el = $('banner');
+  el.className = kind;
+  el.textContent = text;
+  clearTimeout(bannerTimer);
+  if (kind === 'ok') bannerTimer = setTimeout(() => { el.className = ''; }, 4000);
+}
+
+/* ---------------- sessions ---------------- */
+let sessionsTimer = null;
+
+async function loadSessions(manual) {
+  let data = null;
+  try {
+    const resp = await fetch('/api/sessions');
+    data = await resp.json();
+    if (!resp.ok) throw new Error((data.error && data.error.message) || resp.status);
+  } catch (err) {
+    setAdvisor(false);
+    if (manual) banner('err', '获取会话失败：' + err.message);
+    return;
+  }
+  setAdvisor(true);
+  const rows = data.sessions || [];
+  $('session-count').textContent = `共 ${rows.length} 个会话`;
+  const tbody = $('session-rows');
+  tbody.innerHTML = '';
+  for (const s of rows) {
+    const tr = document.createElement('tr');
+    const endable = s.phase === 'recording' || s.phase === 'draining';
+    tr.innerHTML =
+      `<td class="mono">${s.session_id}</td>` +
+      `<td class="mono">${s.meeting_no || '—'}</td>` +
+      `<td class="title">${escapeHtml(s.title || '')}</td>` +
+      `<td><span class="badge ${s.phase}">${s.phase}</span></td>` +
+      ownerCell(s) +
+      subsCell(s) +
+      `<td>${fmtTs(s.started_at)}</td>` +
+      `<td>${fmtTs(s.ended_at)}</td>` +
+      `<td>${endable ? `<button class="btn danger" data-end="${s.session_id}" ` +
+        `data-title="${escapeHtml(s.title || s.session_id)}">结束</button>` : '—'}</td>`;
+    tbody.appendChild(tr);
+  }
+  $('empty').classList.toggle('hidden', rows.length > 0);
+  for (const btn of tbody.querySelectorAll('button[data-end]')) {
+    btn.onclick = () => endSession(btn.dataset.end, btn.dataset.title);
+  }
+}
+
+async function endSession(id, title) {
+  if (!confirm(`确定结束会话 ${id}「${title}」？\n会话将进入 draining 排空后自动 ended。`)) return;
+  try {
+    const resp = await fetch(`/api/sessions/${encodeURIComponent(id)}/end`, { method: 'POST' });
+    const body = await resp.json();
+    if (!resp.ok) throw new Error((body.error && body.error.message) || resp.status);
+    banner('ok', `已停止 ${id}（phase=${body.phase}）`);
+  } catch (err) {
+    banner('err', '停止失败：' + err.message);
+  }
+  loadSessions(false);
+}
+
+function setAdvisor(ok) {
+  $('advisor-dot').className = 'dot ' + (ok ? 'ok' : 'bad');
+  $('advisor-text').textContent = ok ? 'advisor 正常' : 'advisor 不可达';
+}
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;',
+                                         '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function personLabel(name, email, fallback) {
+  if (name && email) return `${name} (${email})`;
+  return name || email || fallback;
+}
+
+function ownerCell(s) {
+  const label = personLabel(s.owner_name, s.owner_email, s.owner_open_id || '');
+  return `<td title="${escapeHtml(s.owner_open_id || '')}">${escapeHtml(label)}</td>`;
+}
+
+function subsCell(s) {
+  const subs = s.subscriptions || [];
+  if (!subs.length) return '<td class="subs">—</td>';
+  const items = subs.map((sub) => {
+    const label = personLabel(sub.subscriber_name, sub.subscriber_email,
+                              sub.subscriber_open_id || '');
+    return `<div class="sub" title="${escapeHtml(sub.subscriber_open_id || '')}">` +
+           `<span class="badge ${sub.state}">${sub.state}</span>` +
+           `<span>${escapeHtml(label)}</span></div>`;
+  });
+  return `<td class="subs">${items.join('')}</td>`;
+}
+
+/* ---------------- logs ---------------- */
+const KEYS = ['advisor', 'bot', 'stt-server', 'gateway', 'auth'];
+let currentKey = null, source = null, paused = false, pending = [];
+
+function buildLogTabs() {
+  const tabs = $('log-tabs');
+  tabs.innerHTML = '';
+  for (const key of KEYS) {
+    const btn = document.createElement('button');
+    btn.textContent = key;
+    btn.dataset.key = key;
+    btn.onclick = () => selectLog(key);
+    tabs.appendChild(btn);
+  }
+}
+
+async function markServices() {
+  try {
+    const resp = await fetch('/api/services');
+    const data = await resp.json();
+    for (const svc of (data.services || [])) {
+      const btn = document.querySelector(`#log-tabs button[data-key="${svc.key}"]`);
+      if (!btn) continue;
+      let dot = btn.querySelector('.dot');
+      if (!dot) { dot = document.createElement('span'); dot.className = 'dot'; btn.appendChild(dot); }
+      dot.className = 'dot ' + (svc.exists ? 'ok' : '');
+    }
+  } catch (err) { /* list is best-effort */ }
+}
+
+function setLogState(text) { $('log-state').textContent = text; }
+
+function appendLog(text) {
+  if (paused) { pending.push(text); if (pending.length > 2000) pending.shift(); return; }
+  const pane = $('log-pane');
+  pane.appendChild(document.createTextNode(text));
+  if ($('autoscroll').checked) $('log-box').scrollTop = $('log-box').scrollHeight;
+}
+
+function flushPending() {
+  for (const text of pending) {
+    $('log-pane').appendChild(document.createTextNode(text));
+  }
+  pending = [];
+  if ($('autoscroll').checked) $('log-box').scrollTop = $('log-box').scrollHeight;
+}
+
+function selectLog(key) {
+  if (source) { source.close(); source = null; }
+  currentKey = key;
+  pending = [];
+  $('log-pane').textContent = '';
+  for (const btn of document.querySelectorAll('#log-tabs button'))
+    btn.classList.toggle('active', btn.dataset.key === key);
+  setLogState('connecting…');
+  source = new EventSource(`/api/logs/${encodeURIComponent(key)}/stream`);
+  source.onopen = () => setLogState(`tail -f ${key} · 已连接`);
+  source.onmessage = (event) => {
+    try { appendLog(JSON.parse(event.data)); }
+    catch (err) { appendLog(event.data); }
+  };
+  source.onerror = () => setLogState(`tail -f ${key} · 连接断开，重连中…`);
+}
+
+/* ---------------- tabs & wiring ---------------- */
+function showView(name) {
+  const sessions = name === 'sessions';
+  $('view-sessions').classList.toggle('hidden', !sessions);
+  $('view-logs').classList.toggle('hidden', sessions);
+  $('tab-sessions').classList.toggle('active', sessions);
+  $('tab-logs').classList.toggle('active', !sessions);
+  $('banner').className = '';
+  if (sessions) {
+    loadSessions(false);
+    sessionsTimer = setInterval(() => {
+      if (!document.hidden && $('auto-refresh').checked) loadSessions(false);
+    }, 5000);
+  } else {
+    clearInterval(sessionsTimer);
+    if (!currentKey) selectLog('advisor');
+    markServices();
+  }
+}
+
+$('tab-sessions').onclick = () => showView('sessions');
+$('tab-logs').onclick = () => showView('logs');
+$('refresh').onclick = () => loadSessions(true);
+$('pause').onclick = () => {
+  paused = !paused;
+  $('pause').textContent = paused ? '继续' : '暂停';
+  if (!paused) flushPending();
+};
+$('clear').onclick = () => { $('log-pane').textContent = ''; pending = []; };
+
+buildLogTabs();
+showView('sessions');
+</script>
+</body>
+</html>

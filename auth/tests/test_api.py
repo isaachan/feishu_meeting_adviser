@@ -93,6 +93,30 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(token)['access_token'], 'u-first')
 
+    def test_callback_persists_profile_readable_via_api(self):
+        status, start = self.post('/authorize/start', {'open_id': 'ou_A', 'intent': 'join:9'})
+        state = parse.parse_qs(parse.urlsplit(start['authorize_url']).query)['state'][0]
+        status, _, _ = self.get('/oauth/callback?' + parse.urlencode({'code': 'c-1', 'state': state}))
+        self.assertEqual(status, 200)
+        status, raw, _ = self.get('/users/ou_A/profile')
+        self.assertEqual(status, 200)
+        profile = json.loads(raw)
+        self.assertEqual(profile['open_id'], 'ou_A')
+        self.assertEqual(profile['name'], 'Kai Han')
+        self.assertEqual(profile['email'], 'kai.han@nio.com')
+        self.assertNotIn('access_token', profile)
+
+    def test_profile_unknown_and_invalid_open_id(self):
+        for path, status_wanted, code in (('/users/ou_NOPE/profile', 404, 'unknown_user'),
+                                          ('/users/not-an-open-id/profile', 400, 'bad_message')):
+            req = request.Request(self.url(path), method='GET')
+            try:
+                OPENER.open(req, timeout=5)
+                self.fail('expected HTTPError')
+            except error.HTTPError as exc:
+                self.assertEqual(exc.code, status_wanted)
+                self.assertEqual(json.loads(exc.read())['error']['code'], code)
+
     def test_authorize_start_rejects_bad_bodies(self):
         req = request.Request(self.url('/authorize/start'), data=b'not json', method='POST')
         try:
