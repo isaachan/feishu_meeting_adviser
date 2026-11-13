@@ -1,0 +1,278 @@
+# 方案 B 落地计划：本地 advisor + 远程模型执行
+
+> **本文档已停维（方案 B 遗产）。** 方案 C（云端 advisor + laptop 采集器）已于 2026-11-10 立项并成为唯一活跃架构，唯一开发入口是 [`new/`](new/README.md)（架构 [new/docs/ARCHITECTURE.md](new/docs/ARCHITECTURE.md)，实施计划 [new/plan.md](new/plan.md)）。本文与根目录各模块（advisor/、local-meeting-recorder/、stt-server/、llm-gateway/）仅作移植参考，不再维护；下述内容为方案 B 时期的历史记录，不代表当前架构事实。
+
+状态：架构方向已确认，以下实施任务均待执行。
+
+## 1. 已确认方向
+
+1. `local-meeting-recorder` 在终端用户 laptop 上采集本地会议音频并转为字幕，替代因飞书权限问题而停用的 `meeting-listener`。
+2. `advisor` 也在 laptop 上运行，负责字幕持久化、会议上下文、角色和材料、模型请求、结果校验及决策保存。
+3. 服务器负责运行 OpenCode（GLM）及其接入、调度和执行管理，不管理完整的会议业务状态。
+4. 先实现读取预写台词的 fake-recorder，与真实 recorder 使用同一字幕输入契约，先验证完整链路。
+5. **notification 搁置，后续单独讨论。** 本计划的交付终点为有效模型结果在本地可靠保存；CLI/测试输出仅用于观察与验收，不代表实现了通知渠道。
+6. 真实本地声卡采集与 ASR（阶段 5）已重新立项（2026-11-09）：目标是 Mac/Windows 双平台采集飞书会议音频，架构上采集与 STT 分离、STT 可切换本地/远程实现，交付双平台安装包；先 Mac 跑通再移植 Windows。阶段 5 交付前，当前输入仍只来自 fake-recorder，用户文档中“本地声卡采集未实现”的标注继续有效。
+7. `llm-gateway` 作为本仓库根目录模块维护；真实后端**仅接入 OpenCode（GLM）**（2026-11-08 确认：Codex 取消接入，advisor 中旧 Codex 代码保留为存档、不再暴露入口）；M1 使用网关假模型。
+8. 网关首版按内部部署**不做用户认证**：无用户归属与按用户限额，任务幂等与隔离以客户端生成的全局 `request_id` 为准；接入公网或多用户前补认证（已列入根 TODO）。
+9. 飞书字幕链路**立即停用**：阶段 1 内从 advisor 运行链路移除 bot 入会、飞书字幕源与会中消息默认路径；旧数据保留可查，`meeting-listener` 退出默认运行与文档入口，代码归档在阶段 6 核对。
+10. 首版网关部署基线：**当前 laptop、localhost**（开发与 M1/M2 验证）；真实服务器部署仍按 6.1 执行，届时再补网络与凭据边界。
+
+## 2. 架构及职责
+
+```text
+用户 laptop                                      服务器
+┌─────────────────────────────┐                  ┌────────────────────────┐
+│ local-meeting-recorder       │                  │ llm-gateway             │
+│ ├── fake：按台词及时间间隔回放 │                  │ ├── 用户认证 / 请求归属  │
+│ └── real：音频采集 → ASR      │                  │ ├── 幂等任务 / 并发调度  │
+│                ↓            │                  │ ├── 超时 / 取消 / 清理   │
+│ 本地字幕输入与持久化          │                  │ └── OpenCode (GLM)       │
+│                ↓            │                  └───────────↑────────────┘
+│ advisor                     │                              │
+│ ├── 会话 / 上下文 / 材料      │── 推理请求、查询、取消 ──────→│
+│ ├── 本地模型任务              │←─ 结构化结果 / 执行状态 ──────│
+│ └── 复核 / 决策保存           │
+└─────────────────────────────┘
+```
+
+`llm-gateway` 为本计划建议的服务端模块名，职责是薄模型执行服务，不是远程 advisor。
+
+| 模块 | 拥有的状态 | 不承担的职责 |
+|---|---|---|
+| `local-meeting-recorder` | 录制实例、字幕身份、未交接输入及进度 | 不调用 LLM，不决定是否回答 |
+| `advisor` | 会议会话、字幕与上下文、角色和材料版本、本地任务、有效决策 | 不管理服务器上的模型进程 |
+| `llm-gateway` | 远程任务、执行实例、短期结果和资源计数（首版无用户概念） | 不维护会议记忆，不访问用户本地文件，不决定通知 |
+
+### 首版实现基线
+
+以下作为任务拆解的建议基线，不代表新增产品能力已经验收：
+
+- 以个人助手为基础：不同 laptop 的会议状态独立；同一台 laptop 的多场会议使用不同会话。
+- 同一场现实会议的多个使用者暂不自动合并输入、上下文或决定。
+- 本地 recorder 与 advisor 先使用可恢复的本机持久化交接，优先复用现有 SQLite 字幕源，不另建本地 HTTP 服务。
+- 远程任务使用 HTTPS API，首版采用提交、轮询查询和取消；状态流可后续增加。
+- 首版网关采用单机部署、有界 worker 和本机持久化任务记录；多进程共享资源必须协调，不把状态只放在某个 API 进程的内存中。
+- 服务器统一提供模型执行资源；首版无认证与按用户限额，仅保留全局并发与队列上限。具体凭据来源、可用模型及并发预算在接真实后端前确定。
+- 跨设备接续、多人共享会议、多节点高可用、工具/MCP 能力扩展及 notification 不属于首版验收范围。
+
+## 3. 必须维持的边界
+
+### 3.1 本地是会议业务状态的事实来源
+
+- 会议标识由本地会话管理产生，不要求飞书会议号或 bot 入会。
+- 上下文由 advisor 每次明确构造，服务器不通过长期 agent 会话自行积累另一份会议记忆。
+- 同一会议内按既定顺序处理任务；不同会议可以并行，但受本地和远程并发预算限制。
+- 模型结果只有关联到原始任务、会话和输入快照后，才能成为本地有效决策。
+- 关闭/取消会话、角色或材料变化后的迟到结果，需要按明确规则丢弃或重新评估，不能直接应用。
+
+### 3.2 网络重试不等于重新推理
+
+- advisor 在网络提交前保存稳定的 `request_id` 和请求内容摘要。
+- 网关按认证主体与 `request_id` 识别同一个任务；相同身份重试返回原任务，不默认创建第二次执行。
+- 同一请求身份携带不同内容时显式拒绝。
+- 服务端确认接收前先持久化任务；执行中断后的恢复规则明确区分已完成、可重试和结果未知。
+- 网关重启或上游接口缺少幂等能力时，不能承诺模型绝不重复计算；本地决策提交仍必须幂等。
+
+### 3.3 临时连接与任务生命周期分离
+
+- 一次 HTTP 断开不自动代表任务失败或取消。
+- 取消需要显式请求；取消与完成竞争时保留真实的终态，本地仍复核是否接受结果。
+- 任务有执行期限及结果保留期限；结果已过期时显式报告，不伪装成未提交，也不静默换请求身份重跑。
+- laptop 休眠或退出后，本地业务处理停止；恢复后查询未完成远程任务并复核结果。
+
+### 3.4 模块独立维护
+
+- `advisor/`、`local-meeting-recorder/`、`llm-gateway/` 各自维护配置、环境、依赖和模块测试。
+- 进程间通过书面协议交接，不通过导入另一个模块的源码复用实现；必要的重复代码各自保留。
+- 根 `integrations/` 验证跨模块链路。
+- laptop 与服务器分别持有自己的数据目录，不通过网络文件系统共享 SQLite。
+
+## 4. 计划中的协议
+
+### 4.1 recorder → 本地 advisor
+
+首版只交接确认的最终字幕，同时预留修订身份：
+
+| 字段 | 作用 |
+|---|---|
+| `schema_version` | 输入契约版本 |
+| `session_id` | 本次会议辅助会话 |
+| `stream_id` | 录制/回放输入流，重启和续传语义明确 |
+| `event_id`、`sequence` | 稳定事件身份和流内顺序，用于重复交接与进度确认 |
+| `utterance_id`、`revision` | 句子身份及可核实的修订版本 |
+| `text` | 最终字幕正文 |
+| 起止时间 / 音频偏移 | 上下文排序及新鲜度判断 |
+| `speaker` | 可选发言人标签；无法识别时保持未知 |
+
+接收时间与发言时间分开保存；fake 的台词时间间隔映射到本次回放时间轴，不能因固定历史日期导致全部字幕被判断为过期。上传者/录制者不自动等同于所有发言人。
+
+### 4.2 本地 advisor → llm-gateway
+
+建议接口形态，具体字段在阶段 0 冻结：
+
+```text
+POST /v1/inference-jobs                   提交任务或恢复同一幂等请求
+GET  /v1/inference-jobs/{request_id}      查询状态与完成结果
+POST /v1/inference-jobs/{request_id}/cancel
+```
+
+- 请求包含协议版本、稳定请求身份、允许的模型/后端选择、角色和上下文快照、输出 schema 及执行期限。
+- 本地另行记录会话、任务、generation、角色/材料版本和快照摘要；网关只需将对应请求身份和摘要随结果返回。
+- 首版内部部署无认证：任务幂等、查询与取消以全局 `request_id` 为准；补认证后升级为按用户归属校验（根 TODO 已列）。
+- 服务端执行期限有自己的上限，不允许客户端任意放大资源使用。
+- 返回任务状态、结构化结果或明确错误，以及可用于诊断的排队/执行耗时。
+- 网关校验协议、输出结构和资源策略；会议证据、新鲜度及本地状态由 advisor 复核。
+- 只暴露网关接口，OpenCode 的原始会话、配置和进程控制接口留在服务器内部。
+
+## 5. 分阶段 task list
+
+任务依赖：`阶段 0 → 阶段 1 → 阶段 2`；阶段 3 在阶段 0 后可与本地链路并行准备；阶段 4 依赖阶段 1–3；阶段 6 依赖阶段 1–4。阶段 5（真实声卡采集与 ASR）已于 2026-11-09 立项细化：依赖阶段 2 已冻结的输入契约，可独立启动，不阻塞其他阶段。
+
+### 阶段 0：冻结契约和实施范围
+
+- [x] **0.1 明确三模块接口和入口。** 确定本地会话创建、recorder 启停、advisor 启动和网关服务入口；定义配置和数据归属。**完成（2026-11-08）：**模块入口与数据归属见 [recorder 输入契约](docs/CONTRACT_RECORDER_INPUT.md) 第 1 节；网关接口见 [远程推理契约](docs/CONTRACT_REMOTE_INFERENCE.md)。
+- [x] **0.2 定义字幕输入与本地交接契约。** 确定最终字幕、身份、时间、修订、重复交接、结束及持久化确认语义。**完成（2026-11-08）：**事件格式、spool/ack 交接、幂等与恢复语义见 [recorder 输入契约](docs/CONTRACT_RECORDER_INPUT.md)。
+- [x] **0.3 定义远程推理契约。** 明确请求/结果版本、认证、幂等身份、任务状态、错误分类、执行期限和结果过期语义。**完成（2026-11-08）：**接口、无认证基线、幂等、状态机、取消与错误语义见 [远程推理契约](docs/CONTRACT_REMOTE_INFERENCE.md)。
+- [x] **0.4 确定服务端资源基线。** 确认可用 OpenCode/Codex 版本、模型凭据来源、并发与队列预算；首版无认证（已确认方向第 8 条）。**完成（2026-11-08）：**并发/队列/期限/保留默认值见 [远程推理契约](docs/CONTRACT_REMOTE_INFERENCE.md) 第 7 节；真实后端凭据与服务器规格部署时核实。
+- [x] **0.5 明确数据承接方式。** 确认旧实验数据库与新本地会话数据的关系；保留已有数据，不用隐式清库代替 schema 设计。**完成（2026-11-08）：**本地会话使用独立标识空间与旧数据并存，不清库不迁移，见 [recorder 输入契约](docs/CONTRACT_RECORDER_INPUT.md) 第 6 节。
+
+**验收：** 两份接口契约有正常、重复、断开恢复和取消示例；后续模块可据此分别实现，不依赖飞书入会或通知渠道。**已达成（2026-11-08）：**契约文档为 [recorder 输入契约](docs/CONTRACT_RECORDER_INPUT.md) 与 [远程推理契约](docs/CONTRACT_REMOTE_INFERENCE.md)。
+
+### 阶段 1：advisor 解除飞书入会与通知依赖
+
+- [x] **1.1 引入普通本地会议会话并停用飞书运行路径。** 用显式 `session_id` 和开始时间替代“按 App 找唯一当前飞书会议”；bot 身份和飞书会议号不再是必需字段。同时将 bot 入会、飞书字幕源与会中消息从 advisor 默认运行链路移除（飞书链路立即停用）：旧飞书会话数据保留可查，但不再创建新飞书会话；`meeting-listener` 退出默认运行入口与文档主路径，模块测试可继续运行，代码归档在 6.4 核对。**完成（2026-11-08）：**advisor CLI 改为本地会话入口（`session-new/list/end`、`consume/status/replies/resolve-reply <session>`），移除 Feishu 会话与 rule 后端依赖；advisor 与 integrations 测试已切换到本地会话流程。
+- [x] **1.2 改造应用服务入口。** `AdviserService` 接收明确的会话、输入源、配置、模型后端和本地结果保存依赖，不在构造时要求 bot 已入会。**完成（2026-11-08）：**`LocalSessionManager` 提供会话身份与相位接口，服务按会话身份而非整个会话字典做变更检测；本地会话构造不触发任何飞书调用。
+- [x] **1.3 本地保存有效决定。** 解耦模型决定应用与飞书 outbox/发送；无通知配置时可完成输入、推理、复核和决策保存。保留必要证据和任务状态，测试输出不触发任何通知。**完成（2026-11-08）：**本地会话决定落入 outbox `channel='local'`，发布即本地持久化 `sent`，重复运行不重复保存；无任何传输层调用。
+- [x] **1.4 解耦可选会议材料。** 首版支持无材料或显式本地会议描述；已有飞书材料能力改为可选路径，不因缺少日程/飞书授权而阻塞基础链路。**完成（2026-11-08）：**本地会话使用创建时的显式描述作为唯一材料来源（`LocalMaterialBootstrapper`，identity=local、稳定版本、无任何飞书访问）；无描述即 disabled，不阻塞运行。飞书日历路径仅保留给旧会话。
+- [x] **1.5 支持本机多会话。** 移除整个数据目录唯一 `adviser.lock` 对无关会话的串行限制；明确会话级互斥、连接归属、运行目录及取消信号。**完成（2026-11-08）：**本地会话使用按会话命名的消费租约与维护锁，两个会话可同时运行且互不阻塞；同会话第二个消费者被拒绝。
+- [x] **1.6 处理会话收尾。** 区分停止输入、排空已确认输入和彻底结束会话；明确结束时最后一批输入的处理，以及结束后迟到结果的去向。**完成（2026-11-08）：**`session-end` 空闲时直接结束、否则置 draining；消费循环在输入、模型任务与回复全部落定后将 draining 会话置 ended；ended 会话拒绝再次消费（迟到结果不应用）。
+- [x] **1.7 更新并复用测试。** 覆盖无飞书 App/入会信息、无 notification 的本地运行，验证会话隔离、恢复和有效决定幂等保存。**完成（2026-11-08）：**新增本地会话注册表/服务/收尾测试，进程级 SIGTERM/SIGKILL/发布后中断用例切换到本地会话与本地结果通道；CLI、集成测试与 README/AGENTS 已同步为本地会话入口。
+
+**验收（阶段 1）：** 使用本地假输入和假模型，可运行两场独立会话并分别保存决定；不调用 bot 入会、会中消息或其他通知接口。**已达成（2026-11-08）。**
+
+### 阶段 2：local-meeting-recorder 的 fake 模式
+
+- [x] **2.1 建立模块骨架。** 新建 `local-meeting-recorder/`，配置、虚拟环境、`pyproject.toml`、CLI 和测试独立维护。**完成（2026-11-08）：**标准库实现，CLI 入口 `recorder fake`，模块测试与工具链独立。
+- [x] **2.2 定义台词文件格式。** 支持发言人标签、台词、相对时间/间隔，提供不含真实会议内容的示例。**完成（2026-11-08）：**JSONL（`speaker`/`text`/`delay_ms`）与示例 `examples/standup.jsonl`；解析含完整边界校验。
+- [x] **2.3 实现 fake 回放。** 按指定时间间隔产生最终字幕；支持加速回放、暂停/停止，以及明确的会话/输入流身份。**完成（2026-11-08）：**`FakeReplay` 按台词 delay 生成契约事件（含 offset 与 stream_end），`--speed` 加速，Ctrl-C 经停止事件干净中断且不伪造 stream_end。
+- [x] **2.4 实现可靠本地交接。** advisor 消费前先可靠保存字幕；重复回放/重启不会因随机生成新身份而重复添加同一事件，新的独立回放则有新的输入流。**完成（2026-11-08）：**advisor `SpoolIngester` 按契约消费 spool：顺序消费、缺口等待、持久化后写 ack、重读由字幕库去重吸收；recorder 侧 `SpoolWriter` 原子段写入并按 ack 清理。
+- [x] **2.5 实现结束标记和恢复。** 对已交接进度、最后事件和恢复点有明确记录；停止后可以确认尾部字幕是否完整。**完成（2026-11-08）：**`stream_end` 携带 `last_sequence`，确认到末尾即标记 drained；中断不伪造 stream_end，未确认段保留重投；会话排空条件包含全部输入流 drained。
+- [x] **2.6 增加集成测试。** fake-recorder → 本地持久化 → advisor → 假模型 → 本地有效决定，验证重复、重启和两场会议交错输入。**完成（2026-11-08）：**根 `integrations/test_recorder_handoff.py` 覆盖完整 M1 切片（回放 → spool → 消费 → 本地决定 → ack → 幂等重跑 → 结束）与中断流阻塞自动结束、`--force` 收尾；CI 与集成说明纳入 recorder 模块。
+
+**验收（阶段 2）：** 同一台词可稳定复现本地处理链路；recorder 不关心模型是本地假实现还是远程服务。**已达成（2026-11-08）。**
+
+### 阶段 3：服务端 llm-gateway
+
+- [x] **3.1 建立独立模块及 API。** 提供任务提交、查询、取消和健康检查，定义启动配置和任务状态持久化。**完成（2026-11-09）：**`llm-gateway/` stdlib HTTP 服务（`llm-gateway serve`，默认 127.0.0.1:8377），SQLite 任务先持久化再返回 202。
+- [x] **3.2 无认证内部运行基线。** 首版不做用户身份校验与归属检查：任务幂等、查询与取消以全局 `request_id` 为准；接口层预留认证插入点。补认证与按用户限额已列入根 TODO，实施时更新远程推理契约。**完成（2026-11-09）：**默认绑定 127.0.0.1，处理器无认证状态；API/服务层与传输解耦，认证中间件可在 handler 前插入。
+- [x] **3.3 幂等接收及结果恢复。** 持久化请求身份与摘要；重复提交、内容冲突、响应丢失、服务重启和结果过期都有明确行为。**完成（2026-11-09）：**同 id 同摘要幂等返回原任务；failed/cancelled/expired 可复用 id 重新排队；重启将中断任务标记 `backend_unavailable`；终态保留 24h 后过期清除明细。
+- [x] **3.4 有界并发及调度。** 实现全局执行上限、队列上限和等待期限（首版无按用户限额），避免请求互相饿死；排队和执行耗时分别记录。**完成（2026-11-09）：**worker 池即全局并发（默认 4），队列满返回 429；`queued_ms`/`execution_ms` 分别记录。
+- [x] **3.5 接入服务器端假模型。** 可确定性模拟成功、失败、慢响应、取消竞争和执行中断，先验证任务服务本身。**完成（2026-11-09）：**`fake` 后端按 `metadata.fake.behavior` 确定性模拟 ok/fresh/silence/slow/timeout/error/invalid；默认 fresh（引用首个新鲜输入键回复）。
+- [x] **3.6 接入 OpenCode 执行适配。** 将进程启动、HTTP 协议、工具能力核对、超时及清理放在服务端；明确按请求或用户隔离配置、凭据和运行目录。**完成（2026-11-09）：**网关侧 OpenCode 后端保留 advisor 的隔离不变量（每任务新实例、随机密码、私有 XDG、deny-all + 逐工具核对、guardian EOF 清理），经协议桩全量测试；真实 GLM 调用随 M2 验收。
+- [x] **3.8 完善终态和清理。** 处理 worker 中断、取消/完成竞争、孤儿进程、临时目录和短期结果保留，避免清理误伤其他用户任务。**完成（2026-11-09）：**取消与完成竞争以真实终态为准（取消后到达的成功记为 cancelled）；guardian 保证孤儿进程与 run 目录清理；保留期清扫线程清理过期明细。
+- [x] **3.9 增加服务测试。** 覆盖多客户端并发与 `request_id` 隔离、重复提交、队列饱和、重启恢复、fake 与 opencode 后端和异常清理；真实模型验证与假模型自动测试分开记录。**完成（2026-11-09）：**31 项模块测试（store/service/scheduler/API/opencode 桩）；真实 GLM 验证待 M2 单独记录。
+
+**验收：** 独立模型客户端可以提交、恢复查询和取消任务；网关无需会议数据库或飞书权限即可运行，并且并发任务不会互相覆盖状态。**已达成（2026-11-09）。**
+
+### 阶段 4：RemoteModelBackend 与端到端可靠性
+
+- [x] **4.1 实现远程后端。** 在现有 `ModelBackend.decide(snapshot, role)` 边界增加远程实现；OpenCode 原始协议留在网关。**完成（2026-11-09）：**`RemoteModelBackend`（`llm.backend: remote` + `remote_url`/`remote_backend`），提交/轮询/取消全走契约 API。
+- [x] **4.2 本地任务先于网络提交持久化。** 保存远程请求身份、内容摘要及本地任务/会话关联；断网后重试原请求，而不是每次生成新身份。**完成（2026-11-09）：**本地 job 先持久化（既有 prepare_job），`request_id`/`content_hash` 由载荷确定性派生，重试与重启天然复用同一身份（桩测试验证断连后仅一个远端任务）。
+- [x] **4.3 统一错误和取消。** 映射认证、限额、排队、执行超时、连接中断、结果过期和输出无效等情况；本地停止传播到远端任务，不误取消其他会话。**完成（2026-11-09）：**契约错误码到 `ModelError` 的完整映射；停止事件触发远端 cancel（按 `request_id` 定向）。
+- [x] **4.4 恢复未完成任务。** laptop 重启、休眠恢复后查询已提交任务，按原会话和任务版本接续；恢复过程不依赖内存中的运行时 session ID。**完成（2026-11-09）：**身份确定性派生 + GET 404 时幂等重提交，重启后自动接续原任务；网关侧重启恢复由 3.3 覆盖。
+- [x] **4.5 复核并幂等应用结果。** 核对请求关联、输出 schema、证据、会话状态及角色/材料版本；区分允许的新输入与使旧结果失效的变化。明确当前 DEMO 直发路径的处理，不能绕过本地决定保存直接发送。**完成（2026-11-09）：**复用既有证据/新鲜度复核与 outbox 幂等（本地通道重跑不重复保存）；e2e 二次 consume 决策数为 0。
+- [x] **4.6 分层诊断。** 关联本地 job 和远程 request，分别记录排队、网络、模型执行和本地复核耗时；诊断不默认记录完整 prompt 或凭据。**完成（2026-11-09，最小实现）：**后端元数据携带 `remote_request_id` 与网关 `queued_ms`/`execution_ms`；诊断白名单继续排除正文与凭据。
+- [x] **4.7 完成 fake 全链路验收。** 使用 fake-recorder 和真实网络网关（localhost），先接远端假模型，再验证真实 OpenCode（GLM）后端；结果只在本地保存和通过测试输出观察。**完成（2026-11-09，假模型部分）：**`integrations/test_gateway_e2e.py` 以子进程网关跑通 M1 全链路并验证幂等；真实 OpenCode 验证归 M2 待做。
+
+**验收：** 两个客户端互不串扰；同一客户端两场会话并行；上传响应丢失、执行中断网、客户端重启和会话结束后的迟到结果均可解释，重复取回结果不会重复提交本地决定。**已达成（2026-11-09，假模型链路）。**
+
+### 阶段 5：真实本地声卡采集与 ASR（Mac 先行，Windows 跟进）
+
+> 2026-11-09 重新立项并细化。目标：在 Mac 与 Windows 上采集飞书会议音频；架构上采集与 STT 分离，STT 可简单切换本地/远程实现；交付双平台安装包。实施顺序：先在 Mac 上跑通全链路，再最小化移植 Windows。阶段 5 交付前，现有输入仍只来自 fake-recorder。
+
+**设计基线（2026-11-09 讨论）：**
+
+- 采集目标是“飞书实际收发音频”的近似：远端声音 = 系统播放回路（loopback），本机声音 = 麦克风，且仅当用户在飞书未静音时采集。
+- 分层：`AudioSource（平台采集）→ MuteGate（静音门控）→ Transcriber（STT，remote|local 配置切换）→ 现有 recorder 输入契约`。采集层不感知 STT 实现，STT 层不感知声卡细节；首版先落 remote STT（HTTP ASR），local（如 whisper 系）作为可选实现。
+- 跨平台优先：统一音频库与帧格式，平台差异只允许出现在设备枚举与 loopback 打开的最小模块。已知差异：Windows 有标准 WASAPI loopback；macOS 无公开系统 loopback，候选通路为 ScreenCaptureKit 音频采集或虚拟声卡（如 BlackHole），5.1 实测后定。
+- 静音门控是硬需求：用户在飞书静音时，麦克风仍可能拾到用户在电脑前说的话，这些音频未进入会议且涉及隐私，必须丢弃、不得转写；远端 loopback 不受静音影响。
+- 交付形态：Mac（.app/.dmg）与 Windows 安装包，干净机器安装后无需开发环境即可运行；权限引导与签名/公证列入任务。
+
+**选型决策（2026-11-09 确认）：**
+
+- Mac loopback 主通路为 ScreenCaptureKit 音频采集（可按 App 过滤飞书音频、无需用户装驱动，代价是「屏幕录制」权限与平台桥接层）；BlackHole 虚拟声卡仅作兜底实测。
+- 首版 remote STT 选定智谱 GLM-ASR（HTTP）；Transcriber 接口仍按 `stt: remote|local` 可切换设计，便于更换服务商。
+- 静音门控首版为**显式手动开关**：本机麦克风采集默认关闭，由用户在工具内开关；飞书静音自动检测（代理静音/被动检测）降为后续增强。隐私边界由「自动保证」调整为「用户显式控制」，阶段 5 验收同步调整为「开关关闭期间无本机字幕」。
+- real 模式**整场原始音频本地留存**（与字幕同会话目录归属，不自动删除，手动清理），用于排障、重转写与验收取证。
+- 首版双平台安装包均**不签名/不公证**：Mac 引导右键打开绕过 Gatekeeper，Windows 引导绕过 SmartScreen；「干净机器可运行」验收按此放宽。
+
+- 首版双平台安装包均**不签名/不公证**：Mac 引导右键打开绕过 Gatekeeper，Windows 引导绕过 SmartScreen；「干净机器可运行」验收按此放宽。
+
+**选型修订（2026-11-10 确认）：**
+
+- **默认 STT 由智谱 GLM-ASR 改为本地 sherpa-onnx 流式模型**：用户 GLM Coding Plan 无 ASR 配额，实测错误 1113（余额不足/无可用资源包，证据 `data/acceptance-5-6/` 场景 A 全部空文本 + 对照实验同音频由可转写变为空）。GLM-ASR 客户端保留为可选 provider（`stt: zhipu`），不再是默认。
+- 本地模型复用 [studies/local-meeting](studies/local-meeting/README.md) 已验证的方案：sherpa-onnx 流式 Zipformer Transducer（zh-en-punct int8，2026-06-05 版），流式会话接口语义（`send_pcm → partial/final`、模型内置端点检测）。模块独立原则下由 recorder 复制适配该实现，不导入 studies 代码。
+- STT 接口扩展冻结：新增**流式会话**形态（`StreamingSession.feed(frame) → partial/final 事件`，事件携带源时间轴 offset）；partial 仍不触发模型判断，仅 final 落 caption 契约。能量 VAD 分段保留给 zhipu 文件上传模式；sherpa 模式使用模型端点检测。
+- **STT 服务化（新增任务 5.11）**：本地模型部署到远端服务器，客户端不承担 STT 计算（`stt: remote-stream`）。独立 `stt-server/` 模块（不并入 llm-gateway，保持网关 LLM 任务语义），WebSocket 流式协议，契约冻结入 `docs/CONTRACT_STT_STREAM.md`。
+- 模型文件不进 git；README 记录官方下载地址与 SHA-256；recorder 经参数/环境变量指定模型目录。
+- 任务依赖修订：**5.6 Mac 验收改为依赖 5.10**（本地流式 STT）；5.11 在 5.10 后实施，5.6 可在任一 STT 形态下执行。
+
+任务（2026-11-10 增补）：
+
+- [x] **5.1 选型采集栈并核实 Mac 通路。** 实测 macOS 采集系统播放音频的候选通路（ScreenCaptureKit 音频采集 vs 虚拟声卡如 BlackHole），以及统一跨平台音频库（soundcard/sounddevice 系）对两平台的覆盖面；确定采样格式、缓冲与设备切换策略。平台分支仅允许存在于设备获取层。**完成（2026-11-09，Mac 部分）：**实测确定主通路为 ScreenCaptureKit audio-only SCStream + 飞书系进程过滤（`com.electron.lark`/`.iron`/`.helper` 及同名 widget 服务；飞书会议走独立进程 `com.electron.lark.iron`），Swift 助手子进程作为平台采集层；16kHz/mono/float32 由 SCK 直接重采样输出（ASR 免转换），静音期持续零帧、流不断，per-app 过滤不漏入外部声音（afplay 对照无声），BlackHole 兜底取消。麦克风通路选定 sounddevice（PortAudio，cp311–cp314 wheel，Windows 可复用）。缓冲策略：采集回调只入队、逐源写盘线程独立消费，慢 STT 不阻塞采集（5.2 落地并有测试）。证据：`local-meeting-recorder/studies/sck_audio_spike.swift`、`studies/mic_spike.py`（macOS 26.6 实测）；Windows WASAPI loopback 覆盖面随 5.8 移植时核实。
+- [x] **5.2 实现可停止的双路采集。** 远端 loopback 与本机麦克风两路 AudioSource 统一帧格式与时间轴；支持暂停/恢复、设备异常与音频缺口的显式记录；采集线程不被慢 STT 或模型调用阻塞。（2026-11-09 决策：整场原始音频本地留存。）**完成（2026-11-09）：**`local-meeting_recorder` 新增 `audio/` 包：`AudioFrame`/`SourceEvent` 统一 16k/mono/float32 与累计 sample_offset 时间轴（暂停=显式 gap 事件，不拉伸时间轴）；`SwiftLoopbackSource`（SCK 助手子进程，音频层协议：stdout PCM + stderr JSON 事件 + stdin stop，支持 video-fallback 与 pause 重启续轴）；`MicSource`（sounddevice 回调入队）；`CaptureSession` 逐源写盘线程独立消费（整场 int16 wav 留存 + events.jsonl），订阅者队列解耦（慢订阅不阻塞采集，测试覆盖）。22 项模块测试 + ruff/pyright 通过；真机 12s 双路联测（macOS 26.6）：两路连续无缺口、0 告警、优雅停止，证据 `studies/live_dual_capture.py`。
+- [x] **5.3 飞书静音检测与门控。** 调研并实测本机飞书静音状态检测：飞书进程对麦克风的占用变化（静音时是否停流，需实测）、由本工具代理静音操作（向飞书转发全局静音快捷键，状态自可知）、读取飞书 UI 状态（仅兜底）。实现 MuteGate：静音期间丢弃麦克风音频、不产生字幕、时间轴不伪造缺口；无可靠检测方案时安全默认（不采集麦克风或仅显式手动开启），隐私优先。（2026-11-09 决策：首版仅显式手动开关、默认关闭，自动检测降为后续增强，不阻塞 Mac 验收。）**完成（2026-11-10，按修订口径）：**麦克风默认关闭、`--mic` 显式开启（采集层 pause/gap 语义已实现并有测试）；真实会议验收确认开关关闭期间本机说话不产生字幕；飞书静音自动检测（代理静音/进程占用/UI 读取）维持"后续增强"未实施。
+- [ ] **5.4 实现 Transcriber 接口与远程 STT。** 冻结 STT 接口（帧流输入、partial/最终句语义、说话人路由），`stt: remote|local` 配置切换；首版 remote 走 HTTP ASR（独立部署或复用网关部署形态，接口实现前冻结）；处理重采样、端点检测与最终句输出，partial 不触发本期模型判断；local 实现为可选 extra，不阻塞 Mac 验收。（2026-11-09 决策：首版 remote 选定智谱 GLM-ASR。）**完成（2026-11-09）：**STT 接口冻结于 `local_meeting_recorder/stt/`（帧流输入 → VadSegmenter 能量分段（≤25s，适配 GLM-ASR 30s 上限；gap 显式闭段、时间轴不伪造）→ `Transcriber.transcribe()` 仅最终文本、无 partial；说话人路由不在 STT 层，仅透传 source_id）；remote 实现 `ZhipuASR`（glm-asr-2512，multipart wav 上传、prompt 上下文延续、429/5xx 退避重试、401/413/4xx 显式错误分类，纯 stdlib），`stt: remote|local` 工厂切换，local 留 extra 未实现。39 项模块测试通过；真机验证：12s 真实语音 VAD 分 2 段、GLM-ASR 转写准确、单段延迟 779/453ms（复用既有 GLM API key），证据 `studies/asr_live_check.py`。（2026-11-10 修订：Coding Plan 无 ASR 配额，zhipu 降为可选 provider，默认 STT 改为 sherpa-onnx 本地流式——见选型修订与任务 5.10/5.11。）
+- [x] **5.5 统一 fake 与 real 输入。** real 采集与 fake 回放输出同一 recorder 输入契约（spool/ack、流身份、stream_end），advisor 不按声卡或台词来源分支处理；说话人按双路来源标注（麦克风=本机用户，loopback=远端或未知），无法区分时保持未知，不把录制用户假定为所有发言人。**完成（2026-11-09）：**`RealRecorder`（`recorder real --session … [--mic] [--duration N]`）输出 schema v1 契约事件至同一 spool：说话人映射 mic→`本机`（`--mic-speaker` 可改）、loopback→`None`（远端/未知）；offset 由每源首帧锚点换算到流时间轴；干净停止（duration 到期）写 stream_end，中断（Ctrl-C/stop_event）不伪造；整场音频留存于 `recorder/audio/<stream_id>/`；STT 失败不中断管线（诊断计数）；麦克风默认关闭（隐私手动开关），request_id 适配 ASR 6-64 字符限制。46 项模块测试 + 真机验证（飞书音频+人声 15s：7 段 7 句 0 失败，mic 短句与 loopback 长段转写均准确，证据 `data/recorder/spool/local:real-test-1109b`）。
+- [x] **5.6 Mac 端到端验收。**（依赖 5.10。）以获准的真实飞书会议验证：双路采集质量、静音门控正确性（静音期间无本机字幕）、从发言到字幕落库的各阶段延迟、设备切换与中断恢复；记录转写准确度与延迟证据，不以 fake 通过替代音频验收。**完成（2026-11-10，真实飞书会议 + 手机远端参会者）：**①双路质量：loopback 27s 远端语音连续稳定（-23~-30dB），mic 全程 -30~-40dB；②手动开关门控：无 `--mic` 采集期间本机说话不产生字幕，开 `--mic` 后正确标注`本机`（speaker_name+稳定 speaker_id），loopback 保持 `None`；③准确度：远端 5 句参考句逐字准确（含标点），本机字幕准确；④延迟（说完→落库）：sherpa 本地流式 = 端点尾静音 1.2s + 0–16ms（`after_segment_end_ms` 逐句实测）≈ **1.2s**，优于 zhipu 路径组件估算 1.3–1.6s（VAD 650ms+尾垫 200ms+API 453–779ms），字幕落盘后 ≤2.2s 对消费者可见（spool age-roller）；⑤中断恢复：SIGINT 采集 stopped 且不写 stream_end，已落字幕仍被 advisor 消费；重启新流正常收尾 stream_end，双流字幕全部入库；⑥全链路决策：问句字幕触发网关 fake 模型，2 条决定以 `reply/sent/local` 幂等落库，session-end 排空至 ended。验收过程中修复三个真实缺陷：多流 utterance_id 跨流冲突（句子身份加入流随机数，fake/real 同修）、spool 稀疏事件可见性（age-roller 定时落盘）、watcher 对单事件文件的处理。证据：`data/acceptance-5-6/`（round2 各场景 run/watch/consume 日志、R3 决策库查询记录）；模型后端为网关 fake（音频链路验收与模型质量解耦，真实 GLM 已由 M2 覆盖）。
+- [ ] **5.12 Mac 飞书静音自动检测与门控（2026-11-10 立项，先于 5.7/5.8/5.9；状态：调研完成，实现 pending）。** 复活 5.3 延迟的自动检测增强（原 2026-11-09 决策曾降级为仅手动开关）：识别本机飞书会议的麦克风静音状态，**静音期间自动暂停麦克风采集**（沿用 gap 语义显式断句、不伪造时间轴），解除静音后自动恢复；检测未知或不可靠时按隐私优先默认不采集并显式提示。**调研已完成（2026-11-10，结论与证据全文见 [飞书静音检测调研](docs/MUTE_GATE_INVESTIGATION.md)）**：方案定稿为**代理静音为主 + 像素校验**——`CGEventPostToPid` 向会议进程投递可配置的静音快捷键（实测翻转成功、零焦点扰动），工具操作即权威状态；启动/入会 UNKNOWN→隐私默认不采集；像素色彩检测（静音=红色斜杠按钮/开麦=灰色/说话=绿色填充）作尽力校验器纠偏外部变更（用户直点飞书/主持人强制静音），不可读时沿用工具状态。AX 无障碍路线已证死路（会议进程空壳、唤醒属性均拒）；像素路线的遮挡冻结/黑帧/孪生窗/徽标污染等缺陷已实证存档。**待实现：**MuteGate 模块（状态机+PostToPid+像素校验器）、recorder 集成（自动门控叠加 `--mic`）、快捷键自检闭环、真实会议验收（静音期零本机字幕、恢复 ≤2s、外部变更被纠偏）。手动开关（`--mic`）保留为兜底；Windows 移植在 5.8 复核（优先参考项目的 UIA 读取）。
+- [ ] **5.7 Mac 安装包。** 打包 .app/.dmg（PyInstaller/py2app 择一），包含麦克风/系统音频采集权限引导与签名公证；干净机器安装后无需开发环境即可运行。（2026-11-09 决策：首版不签名/公证，以文档引导绕过 Gatekeeper。）
+- [ ] **5.8 Windows 移植。** 复用采集抽象、STT 与契约层，仅替换设备获取层为 WASAPI loopback；核实 Windows 上飞书静音检测的等价实现与权限模型。
+- [ ] **5.9 Windows 安装包与验收。** 打包 exe/msi（PyInstaller），按 5.6 同一验收清单在 Windows 跑通；两平台安装包与验收证据归档。
+
+- [x] **5.10 接入本地流式 STT（sherpa-onnx）。** recorder 新增流式会话实现（适配 studies/local-meeting 的 LocalSherpaSTT 语义，复制不导入）：模型校验、lazy 加载、`feed(frame) → partial/final` 事件带源时间轴 offset、端点检测出 final、gap/暂停显式断句；`recorder real --stt sherpa`（默认）经 RealRecorder 直接驱动会话，partial 不落契约、final 落 caption；模型目录经 `--stt-model-dir`/环境变量指定；`.[local]` extra 提供 sherpa-onnx 依赖。**完成（2026-11-10）：**`stt/streaming.py`（SttEvent/StreamingSession/LocalSherpaSession，帧契约 ±1 float32、断点续锚、gap 断句、decode 耗时诊断）；RealRecorder 流式路径（ingest 线程直驱会话，zhipu 路径保留）；CLI `--stt sherpa|zhipu`（默认 sherpa）+ `--stt-model-dir`；README 记录模型下载与 SHA-256。55 项模块测试（假 recognizer/假会话注入 + 真模型集成测试）+ ruff/pyright 通过；真实验证：5.6 场景 A 留存的 90s 远端会议音频重转写，5 句参考句逐字准确（含标点）、RTF 0.07、decode 4.4s；句间停顿 <端点阈值时多句合并为一条 final（规则可调，记录在案）。
+- [x] **5.11 STT 服务化与远端部署。** 新建 `stt-server/` 模块：WebSocket 流式 STT 服务（会话建立/PCM 上行/事件下行/关闭与超时），复用同一 sherpa 模型；契约冻结 `docs/CONTRACT_STT_STREAM.md`（协议版本、会话与流身份、partial/final 语义、错误分类、断线重连与恢复）；recorder 增加 `stt: remote-stream` 客户端（同一 StreamingSession 接口）；部署到远端服务器并与 llm-gateway 并列运行；验收：客户端零本地 STT 计算，真机会议字幕延迟与本地模式可比。**完成（2026-11-10）：**契约 v1 冻结；`stt-server/` 模块（WebSocket 会话、int16 PCM 上行、partial/final 下行、gap/stop/idle 语义、并发上限与 healthz，systemd 部署说明；10 项测试含注入式协议回环与错误码）与 recorder `RemoteStreamSession`（默认 `--stt remote-stream`，`--stt-url`/`LMR_STT_URL`；会话故障不中断采集，计入诊断）落地；本机与远端双环境验证：部署于内网 Ubuntu Server（CPU），laptop 真机 20s 语音三轮验收——多句中间 final 正常触发、转写准确、事件→落库 149–296ms（均值 219ms，含 RTT ≈20ms），与本地 sherpa 模式（0–238ms）可比，客户端零 STT 计算。过程中修复服务端 stop/idle 冲刷 final 不发送、客户端 websockets 惰性连接与事件收集阻塞三处真实缺陷。证据：`data/acceptance-5-6/data/recorder/spool/local:remote-accept*`。
+
+**验收（阶段 5，2026-11-10 修订）：** Mac 与 Windows 安装包均可安装运行；真实飞书会议中采集远端声音与受手动开关门控的本机语音，STT 按 `remote-stream（默认，服务端 sherpa）| sherpa（本地）| zhipu（可选）` 配置切换；字幕经同一契约被 advisor 消费并走完本地有效决定链路；用户飞书静音期间不产生本机语音字幕。
+
+### 阶段 6：部署、文档与最终整理
+
+- [ ] **6.1 网关部署。** 提供 TLS 接入、受控凭据注入、持久化任务目录、进程生命周期、健康检查及有界停机步骤；服务重启后的任务处理规则可验证。
+- [x] **6.2 客户端安装和配置。** 分别说明 recorder 与 advisor 的环境、数据、服务地址、模型选择及恢复操作，区分本地会话设置与服务端资源策略；**明确标注本地声卡采集未实现，当前输入仅来自 fake-recorder**。**完成（2026-11-09）：**各模块 README 覆盖安装/运行/恢复；recorder README 标注声卡采集暂缓、仅 fake 输入。
+- [x] **6.3 更新 CI。** 每模块独立测试；根 `integrations/` 运行 fake 全链路、多用户并发、断线与重启场景，常规 CI 使用假模型，不要求真实模型账号或声卡。**完成（2026-11-09）：**quality.yml 矩阵覆盖 advisor/meeting-listener/local-meeting-recorder/llm-gateway（3.11/3.14），integration 作业安装全部模块并跑 integrations/。
+- [ ] **6.4 归档停用模块。** 飞书链路已在阶段 1 停用；本项核对 `meeting-listener` 代码、接口实验与本机资料的归档或删除范围，保留必要的历史验证证据。
+- [ ] **6.5 更新入口文档及任务索引。** 更新根 README、模块 README、AGENTS、活动 TODO、部署与运行说明，使默认路径与方案 B 一致；注明本地声卡采集未实现与网关首版无认证仅限内部部署的边界。
+- [ ] **6.6 记录联合验收结果。** 分别记录 fake-recorder、假/真实模型、多客户端隔离、恢复和资源清理的证据（真实声卡证据按阶段 5 排期补充）；测量从发言结束到本地有效结果保存的各阶段耗时。
+
+**验收：** 新用户能按文档在 laptop 启动 recorder 和 advisor，连接服务端完成处理；服务端只承担模型执行；notification 保持未实施，相关用户体验与可见回答时延待后续方案明确。
+
+## 6. 首个可演示里程碑
+
+**M1：fake-recorder → 本地 advisor → 远程假模型 → 本地有效决定。**（已达成，2026-11-09）
+
+对应阶段 0、阶段 1、阶段 2、阶段 3 的假模型服务及阶段 4 的远程接入与恢复。这个里程碑先证明部署边界与可靠性，不被真实声卡、ASR、模型账号或 notification 阻塞。
+
+后续里程碑：
+
+- **M2：** M1 换成网关上的真实 OpenCode（GLM），保持相同接口和本地业务处理。（真机验证通过：2026-11-09 本机网关单次调用，GLM 返回引用 s:1 的有效决定，执行 26.7s；2026-11-09 远程服务器 + laptop 全链路实测通过——修复 opencode 系统安装路径与 /provider 慢目录两项部署问题；系统性多场景真实模型验收仍按 G2 跟踪）
+- **M3：** 真实声卡 + ASR 替换 fake-recorder，Mac 先行、Windows 跟进，完成实际会议质量和耗时验证；按阶段 5 排期执行（2026-11-09 已立项）。
+
+每个任务完成时补相应测试和证据，未验证的真实接口、模型或设备能力不记为通过。
+
+## 7. 现有代码的主要改动入口
+
+以下路径相对于 `advisor/src/feishu_meeting_adviser/`：
+
+| 入口 | 改造方向 |
+|---|---|
+| `lifecycle.py`、`cli/commands.py` | 普通本地会话，移除必须已入会的启动前提 |
+| `adviser.py` | 显式会话依赖、会话级并发、可恢复本地任务和结果保存 |
+| `llm.py` 的 `ModelBackend` / `create_backend` | 保持业务调用边界，增加 RemoteModelBackend |
+| `opencode_backend.py`、`opencode_guard.py`、`llm.py` 的 CodexBackend | OpenCode 运行时适配与进程管理复制到服务端网关；advisor 中 Codex 旧代码转为存档（6.4 核对删除） |
+| `model_jobs.py`、`adapters/persistence/` | 稳定远程请求身份、本地任务恢复及结果幂等提交 |
+| `snapshot.py`、`decision.py` | 保留本地上下文和证据复核，调整会话开始时间及有效结果保存路径 |
+| `reply_dispatcher.py`、`reply_sender.py` | 与本期结果保存解耦，notification 后续单独设计 |
+| `material_bootstrap.py`、`materials.py` | 无材料/显式材料可运行，飞书绑定变为可选 |
+| `config.py` | 本地会话和远程调用设置与服务器执行策略分离 |
+
+已有背景资料：[远程模型调研](advisor/docs/REMOTE_LLM.md)、[本地 harness](advisor/docs/HARNESS.md)、[字幕输入契约](meeting-listener/docs/TRANSCRIPT_SOURCE_CONTRACT.md)、[当前集成测试](integrations/README.md)。其中飞书输入、服务端 advisor、订阅使用方式等旧方案结论不自动成为本计划的实施前提；以本计划确认的部署边界及实施时核实的运行时能力为准。

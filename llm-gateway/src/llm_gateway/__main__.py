@@ -1,6 +1,7 @@
 """Gateway CLI: serve the inference contract on localhost."""
 import argparse
 import json
+import logging
 from pathlib import Path
 import signal
 import sys
@@ -13,6 +14,8 @@ from .backends.fake import FakeBackend
 from .scheduler import ExecutionScheduler
 from .service import GatewayService, Limits
 from .store import GatewayStore
+
+LOG = logging.getLogger(__name__)
 
 DEFAULT_PORT = 8377
 
@@ -62,6 +65,8 @@ def main(argv=None):
     if not args.command:
         parser().print_help()
         return 0
+    logging.basicConfig(level=logging.INFO,
+                        format='%(asctime)s %(levelname)s %(message)s')
     try:
         database = args.database or default_database()
         store = GatewayStore(database)
@@ -79,9 +84,10 @@ def main(argv=None):
 
         sweeper = threading.Thread(target=sweep, name='gateway-expiry', daemon=True)
         sweeper.start()
-        print(json.dumps({'listening': f'{args.host}:{server.server_address[1]}',
-                          'database': str(database), 'recovered_tasks': recovered,
-                          'pid': __import__('os').getpid()}), flush=True)
+        LOG.info('llm-gateway %s listening on %s:%s (database %s recovered %s '
+                 'workers %s pid %s)', __version__, args.host,
+                 server.server_address[1], database, recovered, args.workers,
+                 __import__('os').getpid())
 
         def stop(signum, frame):
             threading.Thread(target=server.shutdown, daemon=True).start()

@@ -1,13 +1,11 @@
-# 集成测试
+# integrations · 方案 C 集成测试床
 
-本目录默认全部为 integration 测试：模块隔离守护、本地会话 CLI 流程、fake-recorder → 交接契约 → advisor 链路，以及 fake-recorder → advisor → localhost llm-gateway 的 M1 全链路。模块单元测试位于各模块 `tests/`。
+阶段 3（M1）在这里搭：进程级拉起 advisor / bot / auth / stt-server / llm-gateway（假模型后端），
+假飞书 IM 总线（模拟小A/小B 会话、事件重放）、假 OAuth（跳过浏览器直接发码）。
 
-使用独立的临时测试环境，从仓库根目录执行：
+约定：只依赖六个模块的**公开包接口与书面契约**（不导入彼此源码）；跨模块链路用例放本目录，
+模块内用例放各自 `tests/`。在仓库根目录运行：
 
 ```bash
-python3 -m venv /tmp/meeting-integration
-/tmp/meeting-integration/bin/python -m pip install -e ./advisor -e ./meeting-listener -e ./local-meeting-recorder -e ./llm-gateway
-/tmp/meeting-integration/bin/python -m unittest discover -s integrations -v
+python -m unittest discover -s integrations -v
 ```
-
-CI 分别在只安装单个模块的环境中运行模块测试，再在安装全部模块的环境中运行本目录测试。仓库根目录不维护共享 `pyproject.toml` 或共享业务代码。测试只使用临时配置、合成数据及假模型，不访问真实会议、本机 `data/` 或声卡。

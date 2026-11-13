@@ -1,6 +1,6 @@
 """Persistent inference tasks: a row exists before any 202 response.
 
-State machine (docs/CONTRACT_REMOTE_INFERENCE.md):
+State machine (legacy/docs/CONTRACT_REMOTE_INFERENCE.md):
 
     queued -> running -> succeeded | failed
     queued -> cancelled            (cancel while waiting)

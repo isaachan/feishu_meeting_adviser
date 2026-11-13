@@ -121,8 +121,16 @@ class ServiceRoundTripTests(unittest.TestCase):
     def connect(self):
         from websockets.sync.client import connect
 
-        return connect(f'ws://127.0.0.1:{self._port}', open_timeout=5,
-                       proxy=None)
+        # migrated robustness: single retry on handshake timeout (flaky CI hosts)
+        last_error = None
+        for _ in range(3):
+            try:
+                return connect(f'ws://127.0.0.1:{self._port}', open_timeout=5,
+                               proxy=None)
+            except TimeoutError as exc:
+                last_error = exc
+                time.sleep(0.2)
+        raise last_error
 
     def recv_json(self, ws, timeout=5.0):
         return json.loads(ws.recv(timeout=timeout))

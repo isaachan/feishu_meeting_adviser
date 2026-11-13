@@ -3,9 +3,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
+import logging
 import re
 
 from .store import GatewayStore, REQUEUEABLE
+
+LOG = logging.getLogger(__name__)
 
 MAX_PAYLOAD_BYTES = 2 * 1024 * 1024
 MAX_METADATA_BYTES = 4096
@@ -93,7 +96,11 @@ class GatewayService:
                                    'request_id already used with different content')
             if existing['state'] in REQUEUEABLE:
                 self._check_queue()
+                LOG.info('task requeued: request_id=%s backend=%s',
+                         request['request_id'], request['backend'])
                 return 202, self.represent(self.store.requeue(request['request_id']))
+            LOG.info('task resubmitted (existing %s): request_id=%s',
+                     existing['state'], request['request_id'])
             return 200, self.represent(existing)
         self._check_queue()
         task = self.store.insert(
@@ -102,6 +109,10 @@ class GatewayService:
             system=request['system'], input_json=json.dumps(request['input'], ensure_ascii=False),
             output='decision-v1', deadline_seconds=request['deadline_seconds'],
             metadata_json=json.dumps(request['metadata'], ensure_ascii=False))
+        LOG.info('task submitted: request_id=%s backend=%s deadline=%ss '
+                 'input_chars=%s', request['request_id'], request['backend'],
+                 request['deadline_seconds'], len(request['system'])
+                 + len(json.dumps(request['input'], ensure_ascii=False)))
         return 202, self.represent(task)
 
     def _check_queue(self):
