@@ -283,11 +283,18 @@ class BotServiceTests(unittest.TestCase):
         for code, word in (('meeting_not_found', '未在日历中找到'),
                            ('not_organizer', '组织者'),
                            ('outside_window', '时间窗'),
-                           ('auth_unavailable', '稍后再试')):
+                           ('auth_unavailable', '凭据服务暂时不可达')):
             self.advisor.error = AdvisorApiError(409, code, '')
             self.transport.dms.clear()
             _, done = self.join_and_wait(message_id=f'om-{code}')
             self.assertIn(word, done, code)
+
+    def test_unreachable_message_hints_verify_via_status(self):
+        self.advisor.error = AdvisorApiError(503, 'advisor_unreachable', 'TimeoutError')
+        self.transport.dms.clear()
+        _, done = self.join_and_wait(message_id='om-unreach')
+        self.assertIn('操作可能仍在后台进行', done)
+        self.assertIn('状态', done)
 
     def test_end_picks_latest_session(self):
         reply = self.handle('结束会议', message_id='om-3')

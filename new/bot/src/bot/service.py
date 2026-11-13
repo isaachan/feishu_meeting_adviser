@@ -135,8 +135,11 @@ class BotService:
             return exc.message or '当前状态不允许该操作'
         if exc.code == 'not_owner':
             return '只有组织者可以执行该操作'
-        if exc.code in ('advisor_unreachable', 'auth_unavailable'):
-            return '服务暂不可用，请稍后再试'
+        if exc.code == 'advisor_unreachable':
+            return ('连接云端超时，操作可能仍在后台进行——请等 1 分钟后发「状态」'
+                    '确认结果，先不要重发指令。')
+        if exc.code == 'auth_unavailable':
+            return '云端凭据服务暂时不可达（fail-closed），请稍后重试。'
         return '操作失败：' + (exc.message or exc.code)
 
     # -- command handlers --------------------------------------------------------
