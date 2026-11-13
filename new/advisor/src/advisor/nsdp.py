@@ -69,18 +69,21 @@ class NsdpClient:
         self._cache_lock = threading.Lock()
         self._run = run or self._run_subprocess
 
-    def _run_subprocess(self, argv, env):
+    def _run_subprocess(self, argv, env, timeout=None):
         return subprocess.run(argv, env=env, capture_output=True, text=True,
-                              encoding='utf-8', errors='replace', timeout=self.timeout_s,
+                              encoding='utf-8', errors='replace',
+                              timeout=timeout if timeout is not None else self.timeout_s,
                               stdin=subprocess.DEVNULL)
 
-    def brief(self, token, clues_text='') -> str:
+    def brief(self, token, clues_text='', *, timeout_s=None) -> str:
         """Returns a bounded text digest of the version plan for this token.
 
         With clues: targeted ``releases --release <clue>`` calls only — the
         whole-catalog ``nsdp info`` measured 30s+ against the real NSDP
         (2026-11-12), which used to blow the join-time budget; targeted calls
-        run in ~1.5s. ``info`` remains the no-clue fallback.
+        run in ~1.5s. ``info`` remains the no-clue fallback. ``timeout_s``
+        overrides the per-call budget (join path passes a short budget so the
+        T7 degrade kicks in fast; background refresh uses the full default).
 
         Successful briefs are cached per (token, clues) for ``cache_ttl_s``
         (join + supervisor refresh + re-joins share it); failures are never
@@ -101,11 +104,12 @@ class NsdpClient:
         for args in commands:
             argv = [self.noam_bin, *args]
             started = time.monotonic()
+            budget = timeout_s if timeout_s is not None else self.timeout_s
             try:
-                completed = self._run(argv, env)
+                completed = self._run(argv, env, timeout=budget)
             except subprocess.TimeoutExpired:
                 LOG.warning('noam timeout: args=%s budget=%.0fs', ' '.join(args),
-                            self.timeout_s)
+                            budget)
                 raise NsdpUnavailable('timeout') from None
             except OSError:
                 raise NsdpUnavailable('spawn_failed') from None
@@ -140,9 +144,11 @@ class StubNsdpClient:
     def __init__(self, text='NSDP 版本计划（桩）\n\n$ nsdp info\n桩平台 桩版本 桩车型 桩里程碑'):
         self.text = text
         self.calls: list[tuple[str, str]] = []
+        self.timeouts: list = []
 
-    def brief(self, token, clues_text=''):
+    def brief(self, token, clues_text='', *, timeout_s=None):
         self.calls.append((token, clues_text))
+        self.timeouts.append(timeout_s)
         if token == 'bad-token':
             raise NsdpUnauthorized()
         return self.text
@@ -167,12 +173,13 @@ class NsdpService:
     def submit_url(self, open_id) -> str:
         return self.auth.nsdp_submit_url(open_id)
 
-    def fetch(self, open_id, clues_text='') -> str:
+    def fetch(self, open_id, clues_text='', *, budget_s=None) -> str:
         """Prefetch brief text; a rejected token is invalidated and re-raised
-        as AuthorizationRequired (fresh submit link)."""
+        as AuthorizationRequired (fresh submit link). ``budget_s`` caps each
+        noam call (join path uses a short budget, refresh uses the default)."""
         token = self.require_token(open_id)
         try:
-            return self.client.brief(token, clues_text)
+            return self.client.brief(token, clues_text, timeout_s=budget_s)
         except NsdpUnauthorized:
             self.auth.invalidate_nsdp(open_id)
             raise AuthorizationRequired(self.submit_url(open_id),

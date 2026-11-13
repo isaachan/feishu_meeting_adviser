@@ -51,6 +51,10 @@ def main() -> None:
     serve.add_argument('--nsdp-timeout-s', type=float, default=60,
                        help='per-call noam timeout for --nsdp noam (default 60; '
                             'nsdp info walks the whole catalog and can take 30s+)')
+    serve.add_argument('--nsdp-join-budget-s', type=float, default=12,
+                       help='noam budget during join; on expiry the join degrades '
+                            'to no-NSDP-material and the supervisor backfills '
+                            '(default 12)')
     serve.add_argument('--nsdp-refresh-s', type=float, default=900,
                        help='NSDP material refresh interval seconds')
     serve.add_argument('--nsdp-retry-s', type=float, default=60,
@@ -105,7 +109,8 @@ def main() -> None:
         calendar_validator = FeishuCalendarValidator(HttpAuthClient(args.auth_url))
     api = AdvisorApi(store, supervisor, auth_client=HttpAuthClient(args.auth_url),
                      calendar_validator=calendar_validator,
-                     ingest_url=args.ingest_url, nsdp=nsdp_service)
+                     ingest_url=args.ingest_url, nsdp=nsdp_service,
+                     nsdp_join_budget_s=args.nsdp_join_budget_s)
     stop_ingest = start_ingest_thread(ingest)
     supervisor.start()
     server = build_api_server(api, host=args.api_host, port=args.api_port)

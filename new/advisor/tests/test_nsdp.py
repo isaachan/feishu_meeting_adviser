@@ -174,7 +174,7 @@ class NsdpGateTests(NsdpApiBase):
 
     def test_dead_token_blocks_join_with_submit_link(self):
         class RejectingClient(StubNsdpClient):
-            def brief(self, token, clues_text=''):
+            def brief(self, token, clues_text='', *, timeout_s=None):
                 self.calls.append((token, clues_text))
                 raise NsdpUnauthorized()
 
@@ -193,7 +193,7 @@ class NsdpGateTests(NsdpApiBase):
                 super().__init__()
                 self.calls = []
 
-            def brief(self, token, clues_text=''):
+            def brief(self, token, clues_text='', *, timeout_s=None):
                 self.calls.append(clues_text)
                 raise NsdpUnavailable('timeout')
 
@@ -210,6 +210,14 @@ class NsdpGateTests(NsdpApiBase):
         documents = material.get('documents') if material else None
         self.assertEqual(documents, [])
         self.assertEqual(down.calls, ['版本 NT3 BL2.0.0 与票 NT3VFTVDR-111482'])
+
+    def test_join_uses_short_nsdp_budget(self):
+        """T7：建会取数用短预算（默认 12s）快速降级，后台刷新才用默认 60s。"""
+        status, body = self.post('/sessions',
+                                 {'owner_open_id': 'ou_A',
+                                  'meeting_ref': {'no': '123456789'}}, key='g-budget')
+        self.assertEqual(status, 200)
+        self.assertEqual(self.client.timeouts, [12.0])
 
     def test_subscriber_surface_never_gates(self):
         status, body = self.join()
@@ -394,7 +402,7 @@ class SupervisorHoldTests(unittest.TestCase):
                 super().__init__()
                 self.ran = False
 
-            def brief(self, token, clues_text=''):
+            def brief(self, token, clues_text='', *, timeout_s=None):
                 self.ran = True
                 raise NsdpUnavailable('exit=1')
 
@@ -418,7 +426,7 @@ class NsdpClientTests(unittest.TestCase):
 
         from advisor.nsdp import NsdpClient
 
-        def fake_run(argv, env):
+        def fake_run(argv, env, timeout=None):
             calls.append(tuple(argv[1:]))
             assert 'NSDP_TOKEN' in env and 'token' not in ' '.join(argv)
             return subprocess.CompletedProcess(argv, rc, stdout=stdout, stderr=stderr)
@@ -444,7 +452,7 @@ class NsdpClientTests(unittest.TestCase):
         import subprocess
         from advisor.nsdp import NsdpClient
 
-        def fake_run(argv, env):
+        def fake_run(argv, env, timeout=None):
             raise subprocess.TimeoutExpired(argv, 60)
         client = NsdpClient(noam_bin='noam', run=fake_run)
         with self.assertRaises(NsdpUnavailable) as ctx:
@@ -465,7 +473,7 @@ class NsdpClientTests(unittest.TestCase):
         calls = []
         now = [1000.0]
 
-        def fake_run(argv, env):
+        def fake_run(argv, env, timeout=None):
             calls.append(tuple(argv[1:]))
             import subprocess
             return subprocess.CompletedProcess(argv, 0, stdout='plan', stderr='')
@@ -492,7 +500,7 @@ class NsdpClientTests(unittest.TestCase):
             def __init__(self):
                 self.calls = 0
 
-            def __call__(self, argv, env):
+            def __call__(self, argv, env, timeout=None):
                 self.calls += 1
                 if self.calls == 1:
                     raise subprocess.TimeoutExpired(argv, 60)
@@ -505,6 +513,23 @@ class NsdpClientTests(unittest.TestCase):
             client.brief('tok')
         client.brief('tok')  # second attempt runs again and succeeds
         self.assertEqual(runner.calls, 2)
+
+    def test_timeout_budget_passes_through_to_run(self):
+        """Join 路径短预算（T7）：brief(timeout_s=) 逐调用覆盖默认。"""
+        import subprocess
+
+        from advisor.nsdp import NsdpClient
+        seen = []
+
+        def fake_run(argv, env, timeout=None):
+            seen.append(timeout)
+            return subprocess.CompletedProcess(argv, 0, stdout='plan', stderr='')
+
+        client = NsdpClient(noam_bin='noam', timeout_s=60, run=fake_run,
+                            clock=lambda: 0.0)
+        client.brief('tok-a', timeout_s=5)
+        client.brief('tok-b')  # default budget
+        self.assertEqual(seen, [5, 60])
 
 
 if __name__ == '__main__':

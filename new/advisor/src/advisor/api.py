@@ -71,7 +71,7 @@ class AdvisorApi:
 
     def __init__(self, store: SessionStore, supervisor, *,
                  auth_client, calendar_validator, ingest_url, host='127.0.0.1',
-                 clock=time.time, nsdp=None):
+                 clock=time.time, nsdp=None, nsdp_join_budget_s=12.0):
         self.store = store
         self.supervisor = supervisor
         self.auth = auth_client
@@ -80,6 +80,7 @@ class AdvisorApi:
         self.host = host
         self.clock = clock
         self.nsdp = nsdp
+        self.nsdp_join_budget_s = nsdp_join_budget_s
         self._gui_logins: dict = {}
         self._gui_lock = threading.Lock()
 
@@ -147,7 +148,9 @@ class AdvisorApi:
         nsdp_text = ''
         if self.nsdp is not None:
             try:
-                nsdp_text = self.nsdp.fetch(owner, binding.get('description') or '')
+                # Short join budget: degrade fast — the supervisor backfills.
+                nsdp_text = self.nsdp.fetch(owner, binding.get('description') or '',
+                                             budget_s=self.nsdp_join_budget_s)
             except AuthorizationRequired as exc:
                 raise ApiError(409, 'authorization_required', 'nsdp token missing/expired',
                                provider='nsdp', submit_url=exc.url) from None
