@@ -2,6 +2,7 @@
 
 import argparse
 import logging
+import shutil
 from pathlib import Path
 
 from . import __version__
@@ -82,6 +83,10 @@ def main() -> None:
 
     nsdp_service = None
     if args.nsdp == 'noam':
+        if shutil.which(args.noam_bin) is None:
+            LOG.error('noam CLI not found at %r: NSDP fetch will keep degrading '
+                      'to no material — install noam on this node or point '
+                      '--noam-bin at it (DEPLOYMENT §5)', args.noam_bin)
         from .nsdp import NsdpClient, NsdpService
         nsdp_service = NsdpService(HttpAuthClient(args.auth_url),
                                    NsdpClient(noam_bin=args.noam_bin,
