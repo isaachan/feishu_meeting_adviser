@@ -28,7 +28,7 @@ class S3SubscriptionTests(unittest.TestCase):
         """Returns (session_id, token, event) after streaming frames."""
         bed, bus = self.bed, self.bed.bus
         bed.authorize('ou_A')
-        reply = bus.user_says(bed.service, 'ou_A', f'入会 {meeting_no}')
+        _, reply = bus.join_says(bed.service, 'ou_A', f'入会 {meeting_no}')
         self.assertIn('已入会', reply)
         session_id = re.search(r"--session '([^']+)'", reply).group(1)
         token = re.search(r"--token '([^']+)'", reply).group(1)

@@ -28,14 +28,15 @@ class S1MainChainTests(unittest.TestCase):
         bed, bus = self.bed, self.bed.bus
 
         # 1) instruction without credentials -> authorization link
-        reply = bus.user_says(bed.service, 'ou_A', '入会 123456789')
+        ack, reply = bus.join_says(bed.service, 'ou_A', '入会 123456789')
+        self.assertIn('正在入会', ack)
         self.assertIn('授权', reply)
         link = re.search(r'https?://\S+', reply)
         self.assertTrue(link, reply)
 
         # 2) fake OAuth in the browser role, then retry the instruction
         bed.authorize('ou_A')
-        reply = bus.user_says(bed.service, 'ou_A', '入会 123456789')
+        _, reply = bus.join_says(bed.service, 'ou_A', '入会 123456789')
         self.assertIn('已入会', reply)
         self.assertIn('recorder real', reply)
         # red line: no user credentials in the command text
@@ -82,10 +83,10 @@ class S1MainChainTests(unittest.TestCase):
     def test_s1_rejections_live(self):
         bed, bus = self.bed, self.bed.bus
         # meeting link with password parses and reaches the (stub) calendar path
-        reply = bus.user_says(bed.service, 'ou_A',
-                              '入会 https://vc.feishu.cn/j/987654321?pwd=abc')
+        _, reply = bus.join_says(bed.service, 'ou_A',
+                                '入会 https://vc.feishu.cn/j/987654321?pwd=abc')
         self.assertIn('已入会', reply)
-        reply = bus.user_says(bed.service, 'ou_A', '入会 987654321')
+        _, reply = bus.join_says(bed.service, 'ou_A', '入会 987654321')
         self.assertIn('已在服务中', reply)  # duplicate join idempotence
 
 

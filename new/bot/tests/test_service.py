@@ -1,5 +1,7 @@
 """Plan-1.5 acceptance: command parsing (legal/illegal/@mentions/password links)
 and full stub-mode command round trips through BotService."""
+import threading
+import time
 import unittest
 
 from bot.advisor_client import AdvisorApiError
@@ -201,11 +203,25 @@ class BotServiceTests(unittest.TestCase):
                                     sender_name=name)
         return self.transport.replies[-1][1] if self.transport.replies else ''
 
+    def wait_dm(self, *, sender='ou_A', count=1, timeout=5.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            dms = [text for open_id, text in self.transport.dms if open_id == sender]
+            if len(dms) >= count:
+                return dms
+            time.sleep(0.01)
+        raise AssertionError(f'dm never arrived (have {self.transport.dms})')
+
+    def join_and_wait(self, *, sender='ou_A', message_id='om-1'):
+        ack = self.handle('入会 123456789', sender=sender, message_id=message_id)
+        return ack, self.wait_dm(sender=sender)[-1]
+
     def test_join_round_trip_renders_command(self):
-        reply = self.handle('入会 123456789', message_id='om-1')
-        self.assertIn('已入会《周会》', reply)
-        self.assertIn("recorder real --session 's-3f9c2a'", reply)
-        self.assertNotIn('--mic', reply)
+        ack, done = self.join_and_wait()
+        self.assertIn('正在入会', ack)
+        self.assertIn('已入会《周会》', done)
+        self.assertIn("recorder real --session 's-3f9c2a'", done)
+        self.assertNotIn('--mic', done)
         self.assertEqual(self.advisor.calls[0][:3], ('create_session', 'ou_A', '123456789'))
 
     def test_join_duplicate_message_ignored(self):
@@ -214,26 +230,54 @@ class BotServiceTests(unittest.TestCase):
         self.service.handle_message('ou_A', '入会 123456789', 'om-dup')
         self.assertEqual(len(self.transport.replies), count)
 
+    def test_join_does_not_block_other_commands(self):
+        """T6：慢入会期间，顺序 worker 可继续处理其他指令。"""
+        gate = threading.Event()
+
+        original = self.advisor.create_session
+
+        def slow_create(owner, meeting_no, **kwargs):
+            gate.wait(timeout=5)
+            return original(owner, meeting_no, **kwargs)
+        self.advisor.create_session = slow_create
+
+        ack = self.handle('入会 123456789', message_id='om-slow')
+        self.assertIn('正在入会', ack)
+        self.assertEqual(len(self.transport.dms), 0)  # not finished yet
+        # a second (fast) command completes while the join is still running
+        other = self.handle('结束会议', sender='ou_B', message_id='om-other')
+        self.assertIn('排空', other)
+        gate.set()
+        done = self.wait_dm()[-1]
+        self.assertIn('已入会《周会》', done)
+
+    def test_join_same_user_resends_serialize(self):
+        """重发入会按用户串行，最终各收到一次完成 DM。"""
+        self.handle('入会 123456789', message_id='om-r1')
+        self.handle('入会 123456789', message_id='om-r2')
+        dms = self.wait_dm(count=2)
+        self.assertTrue(all('已入会《周会》' in text for text in dms))
+
     def test_authorization_required_sends_link(self):
         self.advisor.error = AdvisorApiError(
             409, 'authorization_required', '', {'authorize_url': 'https://x/oauth?state=1'})
-        reply = self.handle('入会 123456789', message_id='om-2')
-        self.assertIn('授权', reply)
-        self.assertIn('https://x/oauth?state=1', reply)
+        _, done = self.join_and_wait(message_id='om-2')
+        self.assertIn('授权', done)
+        self.assertIn('https://x/oauth?state=1', done)
 
     def test_nsdp_authorization_required_sends_submit_link(self):
         self.advisor.error = AdvisorApiError(
             409, 'authorization_required', '',
             {'provider': 'nsdp', 'submit_url': 'https://x/nsdp/submit?state=9'})
-        reply = self.handle('入会 123456789', message_id='om-2n')
-        self.assertIn('NSDP', reply)
-        self.assertIn('https://x/nsdp/submit?state=9', reply)
-        self.assertNotIn('authorize_url', reply)
+        _, done = self.join_and_wait(message_id='om-2n')
+        self.assertIn('NSDP', done)
+        self.assertIn('https://x/nsdp/submit?state=9', done)
+        self.assertNotIn('authorize_url', done)
 
     def test_nsdp_unavailable_message(self):
         self.advisor.error = AdvisorApiError(409, 'nsdp_unavailable', '')
-        reply = self.handle('入会 123456789', message_id='om-2u')
-        self.assertIn('NSDP 服务暂时不可用', reply)
+        _, done = self.join_and_wait(message_id='om-2u')
+        self.assertIn('NSDP 服务暂时不可用', done)
 
     def test_four_rejections_have_reasons(self):
         for code, word in (('meeting_not_found', '未在日历中找到'),
@@ -241,8 +285,9 @@ class BotServiceTests(unittest.TestCase):
                            ('outside_window', '时间窗'),
                            ('auth_unavailable', '稍后再试')):
             self.advisor.error = AdvisorApiError(409, code, '')
-            reply = self.handle('入会 123456789', message_id=f'om-{code}')
-            self.assertIn(word, reply)
+            self.transport.dms.clear()
+            _, done = self.join_and_wait(message_id=f'om-{code}')
+            self.assertIn(word, done, code)
 
     def test_end_picks_latest_session(self):
         reply = self.handle('结束会议', message_id='om-3')

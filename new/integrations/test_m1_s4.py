@@ -26,7 +26,7 @@ class ReliabilityTests(unittest.TestCase):
     def open_session(self, meeting_no='123456789'):
         bed, bus = self.bed, self.bed.bus
         bed.authorize('ou_A')
-        reply = bus.user_says(bed.service, 'ou_A', f'入会 {meeting_no}')
+        _, reply = bus.join_says(bed.service, 'ou_A', f'入会 {meeting_no}')
         self.assertIn('已入会', reply)
         session_id = re.search(r"--session '([^']+)'", reply).group(1)
         token = re.search(r"--token '([^']+)'", reply).group(1)

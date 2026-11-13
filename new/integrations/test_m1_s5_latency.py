@@ -25,7 +25,7 @@ class LatencyTests(unittest.TestCase):
     def test_latency_breakdown(self):
         bed, bus = self.bed, self.bed.bus
         bed.authorize('ou_A')
-        reply = bus.user_says(bed.service, 'ou_A', '入会 777000777')
+        _, reply = bus.join_says(bed.service, 'ou_A', '入会 777000777')
         session_id = re.search(r"--session '([^']+)'", reply).group(1)
         token = re.search(r"--token '([^']+)'", reply).group(1)
         event = re.search(r"--event '([^']+)'", reply).group(1)

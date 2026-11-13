@@ -27,7 +27,7 @@ class S2DecisionTests(unittest.TestCase):
     def start_session_and_stream(self, frames=12):
         bed, bus = self.bed, self.bed.bus
         bed.authorize('ou_A')
-        reply = bus.user_says(bed.service, 'ou_A', '入会 123456789')
+        _, reply = bus.join_says(bed.service, 'ou_A', '入会 123456789')
         self.assertIn('已入会', reply)
         session_id = re.search(r"--session '([^']+)'", reply).group(1)
         token = re.search(r"--token '([^']+)'", reply).group(1)
@@ -89,7 +89,7 @@ class S2DecisionTests(unittest.TestCase):
     def test_status_command_lists_the_session(self):
         bed, bus = self.bed, self.bed.bus
         bed.authorize('ou_A')
-        reply = bus.user_says(bed.service, 'ou_A', '入会 555000111')
+        _, reply = bus.join_says(bed.service, 'ou_A', '入会 555000111')
         self.assertIn('已入会', reply)
         reply = bus.user_says(bed.service, 'ou_A', '状态')
         self.assertIn('《会议 555000111》', reply)

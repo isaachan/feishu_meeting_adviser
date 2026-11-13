@@ -150,6 +150,20 @@ class FakeImBus:
             time.sleep(0.02)
         return ''
 
+    def join_says(self, service, open_id, text, *, timeout=20):
+        """Send a slow 入会 command (T6): ack reply is immediate, the real
+        outcome (success command / error link) arrives as a DM; returns both."""
+        with self._lock:
+            before = len(self.dms)
+        ack = self.user_says(service, open_id, text)
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            with self._lock:
+                if len(self.dms) > before:
+                    return ack, self.dms[-1][1]
+            time.sleep(0.02)
+        raise AssertionError('join outcome dm never arrived')
+
     def dms_to(self, open_id):
         with self._lock:
             return [text for target, text in self.dms if target == open_id]

@@ -35,8 +35,46 @@ class BotService:
         self.clock = clock
         self.seen: dict[str, None] = {}
         self._seen_guard = threading.Lock()
+        self._user_locks: dict[str, threading.Lock] = {}
+        self._user_locks_guard = threading.Lock()
         self._stop = threading.Event()
         self._poller = None
+
+    # -- slow-command background execution (T6) ---------------------------------
+    # 入会等慢指令：立即回执，advisor 调用放后台线程，完成后主动 DM 结果。
+    # 每用户一把锁串行其慢指令（重发入会在 advisor 侧本就幂等）；顺序 worker
+    # 不再被单个慢指令阻塞，其他用户/指令即时处理。
+
+    def _user_lock(self, open_id: str) -> threading.Lock:
+        with self._user_locks_guard:
+            lock = self._user_locks.get(open_id)
+            if lock is None:
+                lock = threading.Lock()
+                self._user_locks[open_id] = lock
+            return lock
+
+    def _spawn_slow(self, lock, sender, work):
+        def guarded():
+            with lock:
+                try:
+                    work()
+                except AdvisorApiError as exc:
+                    LOG.warning('slow command failed: %s %s', exc.code, exc.message)
+                    self._dm(sender, self._advisor_error_text(exc))
+                except CommandRenderError as exc:
+                    LOG.warning('command render failed: %s', exc)
+                    self._dm(sender, f'采集命令渲染失败（{exc}）；请联系管理员')
+                except Exception:
+                    LOG.exception('slow command crashed')
+                    self._dm(sender, '操作失败，请稍后重试')
+        threading.Thread(target=guarded, name='bot-slow', daemon=True).start()
+
+    def _dm(self, open_id, text):
+        try:
+            if self.transport is not None:
+                self.transport.send_dm(open_id, text)
+        except Exception:
+            LOG.exception('dm failed')
 
     # -- inbound ---------------------------------------------------------------
 
@@ -104,6 +142,14 @@ class BotService:
     # -- command handlers --------------------------------------------------------
 
     def _cmd_join(self, sender, command, message_id):
+        """T6：慢指令——立即回执，建会放后台，完成后主动 DM 启动命令。"""
+        self._reply(message_id,
+                    '正在入会：校验日历并准备会话中…完成或失败都会另行通知'
+                    '（首次可能需要几十秒，期间无需重发）。')
+        self._spawn_slow(self._user_lock(sender), sender,
+                         lambda: self._join_now(sender, command, message_id))
+
+    def _join_now(self, sender, command, message_id):
         result = self.advisor.create_session(
             sender, command.meeting_no, password=command.password,
             message_id=message_id)
@@ -111,9 +157,10 @@ class BotService:
         args['mic'] = bool(command.kind == 'join' and False)  # mic opt-in lands with S1 UX
         command_text = render(args)
         hint = '（该会议已在服务中，沿用原会话）' if result.get('existing') else ''
-        self._reply(message_id,
-                    f'已入会《{result["title"]}》{hint}\n在 laptop 终端粘贴执行：\n\n'
-                    f'{command_text}\n\n启动后我会开始听会。')
+        self._dm(sender,
+                 f'已入会《{result["title"]}》{hint}\n在 laptop 终端粘贴执行：\n\n'
+                 f'{command_text}\n\n启动后我会开始听会。（也可打开 GUI 客户端，'
+                 f'会话出现后点「开始采集」即可，无需粘贴命令。）')
 
     def _cmd_end(self, sender, command, message_id):
         listing = self.advisor.list_sessions(sender).get('sessions', [])

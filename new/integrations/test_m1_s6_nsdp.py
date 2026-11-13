@@ -32,8 +32,8 @@ class NsdpEndToEndTests(unittest.TestCase):  # noqa: D101
         self.bed.stop()
 
     def test_gate_submit_join_hold_resume(self):
-        # 1) first organizer command hard-blocks with the submit link
-        reply = self.bus.user_says(self.bed.service, OWNER, '入会 123456789')
+        # 1) first organizer command hard-blocks with the submit link (async DM)
+        _, reply = self.bus.join_says(self.bed.service, OWNER, '入会 123456789')
         self.assertIn('NSDP', reply)
         self.assertIn('/nsdp/submit?state=', reply)
 
@@ -45,13 +45,13 @@ class NsdpEndToEndTests(unittest.TestCase):  # noqa: D101
         self.bed.nsdp_submit(OWNER, 'stub-nsdp-token-1')
 
         # 4) next join now proceeds to the (stub) feishu OAuth gate
-        reply = self.bus.user_says(self.bed.service, OWNER, '入会 123456789')
+        _, reply = self.bus.join_says(self.bed.service, OWNER, '入会 123456789')
         self.assertIn('授权', reply)
         self.assertNotIn('/nsdp/submit', reply)
         self.bed.authorize(OWNER)
 
         # 5) join succeeds; token/command red lines hold
-        reply = self.bus.user_says(self.bed.service, OWNER, '入会 123456789')
+        _, reply = self.bus.join_says(self.bed.service, OWNER, '入会 123456789')
         self.assertIn('已入会', reply)
         self.assertIn('recorder', reply)
         self.assertNotIn('stub-nsdp-token-1', reply)
