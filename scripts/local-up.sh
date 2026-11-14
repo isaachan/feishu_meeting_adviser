@@ -35,6 +35,11 @@ for m in auth stt-server llm-gateway advisor bot recorder admin-site; do
     "$VENV/bin/pip" install --timeout 60 --retries 2 -e "$ROOT/$m"
   fi
 done
+# 已有 editable 安装不会自动同步 bot 新增的 SOCKS 代理依赖。
+if ! "$VENV/bin/python" -c "from python_socks.async_.asyncio import Proxy" >/dev/null 2>&1; then
+  echo "[setup] 更新 bot 代理依赖 …"
+  "$VENV/bin/pip" install --timeout 60 --retries 2 -e "$ROOT/bot"
+fi
 # GUI 客户端（含 PySide6/segno，体积较大，首次安装慢）。
 # 注意：仅检查 editable marker 不够——若曾为跑单测装过不带 [ui] 的 macos-gui，
 # marker 已存在但缺 PySide6，需一并检测。
@@ -84,7 +89,10 @@ start advisor 8380 "$VENV/bin/advisor" serve --data-dir "$DATA/advisor" \
   --auth-url http://127.0.0.1:8381 --model remote --remote-backend "$REMOTE_BACKEND" \
   --calendar feishu --nsdp "$NSDP_MODE" $( [ "$NSDP_MODE" = noam ] && echo --noam-bin "$NOAM_BIN" )
 
+# 飞书长连接直连，避免 macOS 系统 SOCKS 代理导致 WebSocket 握手超时。
+BOT_NO_PROXY="${no_proxy:-},${NO_PROXY:-},feishu.cn,.feishu.cn"
 start bot     -    env BOT_APP_ID="$BOT_APP_ID" BOT_APP_SECRET="$BOT_APP_SECRET" \
+                     no_proxy="$BOT_NO_PROXY" NO_PROXY="$BOT_NO_PROXY" \
   "$VENV/bin/bot" serve --advisor-url http://127.0.0.1:8380
 
 start admin   8390 "$VENV/bin/admin-site" serve --advisor-url http://127.0.0.1:8380 \

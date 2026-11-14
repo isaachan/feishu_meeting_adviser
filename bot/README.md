@@ -63,6 +63,11 @@ python -m unittest discover -s tests -v   # 31 项
 
 前置：飞书自建应用开通机器人能力、IM 权限、事件订阅（**长连接**方式）订阅
 `im.message.receive_v1`；详细配置见 `../docs/LOCAL_TESTING.md`。
+使用 SOCKS 代理时长连接依赖 `python-socks`；升级已有环境后重新执行上面的
+`pip install`，或运行 `scripts/local-up.sh` 自动补齐依赖。
+本地一键启动会让 bot 直连 `feishu.cn`，避免 macOS 系统代理造成长连接握手超时。
+单独启动 bot 时，如遇此问题，可在启动命令前设置
+`no_proxy="${no_proxy:-},feishu.cn,.feishu.cn"`。
 
 ## 边界
 

@@ -7,7 +7,7 @@ name = "bot"
 version = "0.1.0"
 description = "Feishu IM control/notify node for the meeting adviser"
 requires-python = ">=3.11"
-dependencies = ["lark-oapi>=1.4,<2"]
+dependencies = ["lark-oapi>=1.4,<2", "python-socks[asyncio]>=2.4.4,<3"]
 
 [project.optional-dependencies]
 dev = ["coverage==7.16.2", "pyright==1.1.414", "ruff==0.17.0"]
