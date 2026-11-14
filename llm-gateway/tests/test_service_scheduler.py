@@ -71,6 +71,21 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(body['request']['content_hash'],
                          payload()['content_hash'])
 
+    def test_owner_is_bound_to_task_identity(self):
+        body = payload(metadata={'owner_open_id': 'ou_A'})
+        body['content_hash'] = canonical_hash(
+            body['system'], body['input'], body['output'], body['backend'], None, 'ou_A')
+        self.service.submit(body)
+        other = body | {'metadata': {'owner_open_id': 'ou_B'}}
+        with self.assertRaises(RequestError) as caught:
+            self.service.submit(other)
+        self.assertEqual(caught.exception.code, 'invalid_request')
+        other['content_hash'] = canonical_hash(
+            body['system'], body['input'], body['output'], body['backend'], None, 'ou_B')
+        with self.assertRaises(RequestError) as caught:
+            self.service.submit(other)
+        self.assertEqual(caught.exception.code, 'content_conflict')
+
     def test_idempotent_resubmit_returns_current_state_without_requeue(self):
         self.service.submit(payload())
         status, body = self.service.submit(payload())

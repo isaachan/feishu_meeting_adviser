@@ -33,9 +33,12 @@ class Limits:
 
 
 def canonical_hash(system: str, input_value: dict, output: str, backend: str,
-                   model: str | None) -> str:
-    canonical = json.dumps({'system': system, 'input': input_value, 'output': output,
-                            'backend': backend, 'model': model},
+                   model: str | None, owner_open_id: str | None = None) -> str:
+    identity = {'system': system, 'input': input_value, 'output': output,
+                'backend': backend, 'model': model}
+    if owner_open_id is not None:
+        identity['owner_open_id'] = owner_open_id
+    canonical = json.dumps(identity,
                            sort_keys=True, ensure_ascii=False, separators=(',', ':'))
     return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
 
@@ -74,7 +77,11 @@ def validate_request(payload: dict, *, limits: Limits) -> dict:
         raise RequestError(422, 'invalid_request', 'metadata must be an object up to 4 KiB')
     if len(system.encode('utf-8')) + len(json.dumps(input_value).encode('utf-8')) > MAX_PAYLOAD_BYTES:
         raise RequestError(413, 'payload_too_large', 'system+input exceeds 2 MiB')
-    expected = canonical_hash(system, input_value, 'decision-v1', backend, model)
+    owner = metadata.get('owner_open_id')
+    if owner is not None and (not isinstance(owner, str)
+                              or not re.fullmatch(r'ou_[A-Za-z0-9_-]{1,128}', owner)):
+        raise RequestError(422, 'invalid_request', 'owner_open_id is invalid')
+    expected = canonical_hash(system, input_value, 'decision-v1', backend, model, owner)
     if payload.get('content_hash') != expected:
         raise RequestError(422, 'invalid_request', 'content_hash does not match the payload')
     return {'request_id': request_id, 'backend': backend, 'model': model, 'system': system,

@@ -82,7 +82,10 @@ class SessionSupervisor:
                                         ttl_s=30, now=self.clock()):
             LOG.warning('lease busy for %s; loop exits', session_id)
             return
-        executor = ModelJobExecutor(self.backend_factory(), role)
+        backend = self.backend_factory()
+        if hasattr(backend, 'owner_open_id'):
+            backend.owner_open_id = self.store.require_session(session_id)['owner_open_id']
+        executor = ModelJobExecutor(backend, role)
         backoff_until = 0.0
         try:
             while not self._stop.is_set():

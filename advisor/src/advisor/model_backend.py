@@ -102,10 +102,13 @@ ERROR_MAP = {
 }
 
 
-def remote_identity(system: str, input_value: dict, settings: AdviserSettings) -> tuple[str, str]:
-    canonical = json.dumps({'system': system, 'input': input_value,
-                            'output': 'decision-v1', 'backend': settings.remote_backend,
-                            'model': None},
+def remote_identity(system: str, input_value: dict, settings: AdviserSettings,
+                    owner_open_id: str | None = None) -> tuple[str, str]:
+    identity = {'system': system, 'input': input_value,
+                'output': 'decision-v1', 'backend': settings.remote_backend, 'model': None}
+    if owner_open_id is not None:
+        identity['owner_open_id'] = owner_open_id
+    canonical = json.dumps(identity,
                            sort_keys=True, ensure_ascii=False, separators=(',', ':'))
     content_hash = hashlib.sha256(canonical.encode('utf-8')).hexdigest()
     return 'rm' + content_hash, content_hash
@@ -121,6 +124,7 @@ class RemoteModelBackend:
         self.stop_event = stop_event or threading.Event()
         self.opener = opener or request.build_opener(request.ProxyHandler({}))
         self.metadata: dict = {}
+        self.owner_open_id: str | None = None
 
     def _call(self, method: str, path: str, body: dict | None):
         data = json.dumps(body, ensure_ascii=False).encode() if body is not None else None
@@ -146,12 +150,16 @@ class RemoteModelBackend:
             return {'state': 'queued', 'transient': True}
 
     def decide(self, snapshot: dict, role: str) -> Decision:
-        request_id, content_hash = remote_identity(role, snapshot, self.settings)
+        request_id, content_hash = remote_identity(role, snapshot, self.settings,
+                                                   self.owner_open_id)
+        metadata = {'client': 'adviser'}
+        if self.owner_open_id is not None:
+            metadata['owner_open_id'] = self.owner_open_id
         body = {'schema_version': 1, 'request_id': request_id, 'content_hash': content_hash,
                 'backend': self.settings.remote_backend, 'model': None,
                 'system': role, 'input': snapshot, 'output': 'decision-v1',
                 'deadline_seconds': int(self.settings.model_timeout_seconds),
-                'metadata': {'client': 'adviser'}}
+                'metadata': metadata}
         deadline = time.monotonic() + self.settings.model_timeout_seconds + 2.0
         started = time.monotonic()
         task = self._submit(body)
