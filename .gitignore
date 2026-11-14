@@ -20,6 +20,8 @@ config.*.yaml
 # 方案 C（现行）：运行数据与本地凭据
 /data/
 /scripts/local.env
+/scripts/prod.env
+/.venv-prod/
 
 # 方案 B（legacy/，仅参考）：运行数据
 /legacy/meeting-listener/models/
