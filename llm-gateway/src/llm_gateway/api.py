@@ -86,6 +86,11 @@ def create_handler(app: GatewayApp):
 
         def do_POST(self):
             try:
+                if self.path == '/v1/context-sessions':
+                    body = self._read_body()
+                    app.service.prepare(body.get('session_id'), body.get('owner_open_id'))
+                    self._send(202, {'state': 'accepted'})
+                    return
                 if self.path == '/v1/inference-jobs':
                     status, body = app.submit(self._read_body())
                     self._send(status, body)

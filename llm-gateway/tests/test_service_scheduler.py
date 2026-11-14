@@ -86,6 +86,35 @@ class ServiceTests(unittest.TestCase):
             self.service.submit(other)
         self.assertEqual(caught.exception.code, 'content_conflict')
 
+    def test_session_catalog_is_frozen_at_submission(self):
+        class Catalogs:
+            value = None
+
+            def prepare(self, session_id, owner):
+                pass
+
+            def get(self, session_id, owner):
+                return self.value
+
+        catalogs = Catalogs()
+        service = GatewayService(self.store, catalogs=catalogs)
+        body = payload(metadata={'owner_open_id': 'ou_A', 'session_id': 's-a'})
+        body['content_hash'] = canonical_hash(
+            body['system'], body['input'], body['output'], body['backend'], None, 'ou_A', 's-a')
+        service.submit(body)
+        stored = json.loads(self.store.get(body['request_id'])['metadata'])
+        self.assertIsNone(stored['_gateway_context'])
+        catalogs.value = {'source': 'nsdp', 'data': {'platforms': []}}
+        service.submit(body)
+        stored = json.loads(self.store.get(body['request_id'])['metadata'])
+        self.assertIsNone(stored['_gateway_context'])
+        second = dict(body, request_id='req-0002')
+        status, represented = service.submit(second)
+        self.assertEqual(status, 202)
+        self.assertNotIn('_gateway_context', represented['request']['metadata'])
+        stored = json.loads(self.store.get('req-0002')['metadata'])
+        self.assertEqual(stored['_gateway_context'], catalogs.value)
+
     def test_idempotent_resubmit_returns_current_state_without_requeue(self):
         self.service.submit(payload())
         status, body = self.service.submit(payload())

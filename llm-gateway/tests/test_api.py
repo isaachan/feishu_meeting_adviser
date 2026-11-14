@@ -81,6 +81,24 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(done['result']['decision']['reply'], 'HTTP 回答')
         self.assertIn('queued_ms', done['result']['timings'])
 
+    def test_session_prewarm_endpoint_binds_owner(self):
+        class Catalogs:
+            def __init__(self):
+                self.calls = []
+
+            def prepare(self, session_id, owner):
+                self.calls.append((session_id, owner))
+
+        catalogs = Catalogs()
+        self.service.catalogs = catalogs
+        status, _ = self.request('POST', '/v1/context-sessions',
+                                 {'session_id': 's-a', 'owner_open_id': 'ou_A'})
+        self.assertEqual(status, 202)
+        self.assertEqual(catalogs.calls, [('s-a', 'ou_A')])
+        status, _ = self.request('POST', '/v1/context-sessions',
+                                 {'session_id': '../bad', 'owner_open_id': 'ou_A'})
+        self.assertEqual(status, 422)
+
     def test_idempotent_resubmit_conflict_and_not_found(self):
         self.request('POST', '/v1/inference-jobs', payload())
         status, body = self.request('POST', '/v1/inference-jobs', payload())

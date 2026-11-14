@@ -473,6 +473,10 @@ class OpenCodeBackend:
                                   or not re.fullmatch(r'ou_[A-Za-z0-9_-]{1,128}', owner)):
             raise BackendError('backend_unavailable')
         self.owner_open_id = owner
+        context = metadata.get('_gateway_context')
+        if context is not None:
+            input_value = dict(input_value)
+            input_value['reference_context'] = {'nsdp_catalog': context}
         self.deadline = time.monotonic() + deadline_seconds
         try:
             for attempt in range(2):

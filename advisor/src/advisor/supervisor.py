@@ -86,6 +86,11 @@ class SessionSupervisor:
         backend = self.backend_factory()
         if hasattr(backend, 'owner_open_id'):
             backend.owner_open_id = self.store.require_session(session_id)['owner_open_id']
+        if hasattr(backend, 'session_id'):
+            backend.session_id = session_id
+        prepare = getattr(backend, 'prepare_session', None)
+        if callable(prepare):
+            prepare()
         executor = ModelJobExecutor(backend, role)
         backoff_until = 0.0
         try:

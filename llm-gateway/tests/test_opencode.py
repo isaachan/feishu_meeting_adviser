@@ -1,5 +1,6 @@
 """Gateway-side OpenCode adapter against a synthetic HTTP peer."""
 from pathlib import Path
+import json
 import tempfile
 import threading
 import unittest
@@ -41,6 +42,19 @@ class OpenCodeBackendTests(unittest.TestCase):
                                   deadline_seconds=8, stop_event=threading.Event(),
                                   metadata={'owner_open_id': 'ou_A'})
         self.assertIsNone(decision['reply'])
+
+    def test_catalog_is_supplied_as_reference_context(self):
+        backend = self.backend('skill-tool')
+        catalog = {'source': 'nsdp', 'fetched_at': 1,
+                   'data': {'tenants': ['NIO'], 'platforms': []}}
+        backend.decide('role', {'fresh_input_keys': ['s:1']}, deadline_seconds=8,
+                       stop_event=threading.Event(), metadata={'owner_open_id': 'ou_A',
+                                                               '_gateway_context': catalog})
+        requests = [json.loads(line) for line in (self.root / 'capture').read_text().splitlines()]
+        prompt = next(item['payload'] for item in requests
+                      if item.get('path', '').endswith('/prompt_async'))
+        supplied = json.loads(prompt['parts'][0]['text'])
+        self.assertEqual(supplied['reference_context']['nsdp_catalog'], catalog)
 
     def test_nsdp_auth_failure_is_recorded_independently_of_model_decision(self):
         backend = self.backend('nsdp-unauthorized')

@@ -21,6 +21,8 @@ python3 -m venv .venv
 
 默认内置 `nsdp-version` skill，用于查询版本和核对 Gate 日期；用 `--skills-dir` 可指定其他 skill 根目录（每个 skill 为 `<name>/SKILL.md`，将替代默认目录）。各 OpenCode 任务启动时读取配置，替换 skill 后新任务生效。gateway 所在主机需要安装 noam；查询时受控工具按任务组织者向 auth 按需读取 NSDP token，token 仅注入 noam 子进程。advisor 与 gateway 应同步部署，内部 API 仅在可信网络开放。
 
+每场会议异步执行一次 `noam nsdp info` 并保存独立版本目录；推理任务固定提交时已就绪的目录，预热期间不等待、不自动补判。目录保存在任务数据库旁的 `<数据库文件名>.catalog.sqlite3`，默认按最后访问时间保留 24 小时。
+
 启动输出一行 JSON（监听地址、数据库、恢复的任务数、pid）。Ctrl-C 干净停机：先停 HTTP，再停 worker，中断任务标记为 `failed(backend_unavailable)`，客户端按契约复用原 `request_id` 重试。
 
 接口（详见契约）：

@@ -78,7 +78,13 @@ def main(argv=None):
         database = args.database or default_database()
         store = GatewayStore(database)
         recovered = store.recover_interrupted()
-        service = GatewayService(store, limits=Limits(queue=args.queue))
+        from .catalog import MeetingCatalogs
+        from .nsdp_query import NsdpQuery
+        from .nsdp_tool_server import credential_provider
+        catalogs = MeetingCatalogs(database.with_name(database.name + '.catalog.sqlite3'),
+                                   NsdpQuery(credential_provider(args.auth_url),
+                                             noam_bin=args.noam_bin, timeout_s=120))
+        service = GatewayService(store, limits=Limits(queue=args.queue), catalogs=catalogs)
         scheduler = ExecutionScheduler(store, backend_factory(args), workers=args.workers)
         scheduler.start()
         server = create_server(GatewayApp(service, scheduler),
@@ -88,6 +94,7 @@ def main(argv=None):
         def sweep():
             while not expiry_stop.wait(600):
                 store.expire(retention_hours=args.retention_hours)
+                catalogs.expire(retention_hours=args.retention_hours)
 
         sweeper = threading.Thread(target=sweep, name='gateway-expiry', daemon=True)
         sweeper.start()
@@ -108,6 +115,7 @@ def main(argv=None):
             expiry_stop.set()
             scheduler.stop()
             server.server_close()
+            catalogs.close()
             store.close()
     except (OSError, ValueError) as exc:
         print('Operation stopped: ' + str(exc), file=sys.stderr)

@@ -33,11 +33,14 @@ class Limits:
 
 
 def canonical_hash(system: str, input_value: dict, output: str, backend: str,
-                   model: str | None, owner_open_id: str | None = None) -> str:
+                   model: str | None, owner_open_id: str | None = None,
+                   session_id: str | None = None) -> str:
     identity = {'system': system, 'input': input_value, 'output': output,
                 'backend': backend, 'model': model}
     if owner_open_id is not None:
         identity['owner_open_id'] = owner_open_id
+    if session_id is not None:
+        identity['session_id'] = session_id
     canonical = json.dumps(identity,
                            sort_keys=True, ensure_ascii=False, separators=(',', ':'))
     return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
@@ -65,6 +68,8 @@ def validate_request(payload: dict, *, limits: Limits) -> dict:
     input_value = payload.get('input')
     if not isinstance(input_value, dict):
         raise RequestError(422, 'invalid_request', 'input must be a JSON object')
+    if 'reference_context' in input_value:
+        raise RequestError(422, 'invalid_request', 'reference_context is reserved for gateway')
     if payload.get('output') != 'decision-v1':
         raise RequestError(422, 'invalid_request', 'output must be decision-v1')
     deadline = payload.get('deadline_seconds')
@@ -75,13 +80,19 @@ def validate_request(payload: dict, *, limits: Limits) -> dict:
         metadata = {}
     if not isinstance(metadata, dict) or len(json.dumps(metadata)) > MAX_METADATA_BYTES:
         raise RequestError(422, 'invalid_request', 'metadata must be an object up to 4 KiB')
+    if '_gateway_context' in metadata:
+        raise RequestError(422, 'invalid_request', 'reserved metadata')
     if len(system.encode('utf-8')) + len(json.dumps(input_value).encode('utf-8')) > MAX_PAYLOAD_BYTES:
         raise RequestError(413, 'payload_too_large', 'system+input exceeds 2 MiB')
     owner = metadata.get('owner_open_id')
     if owner is not None and (not isinstance(owner, str)
                               or not re.fullmatch(r'ou_[A-Za-z0-9_-]{1,128}', owner)):
         raise RequestError(422, 'invalid_request', 'owner_open_id is invalid')
-    expected = canonical_hash(system, input_value, 'decision-v1', backend, model, owner)
+    session_id = metadata.get('session_id')
+    if session_id is not None and (not owner or not isinstance(session_id, str)
+                                   or not re.fullmatch(r's-[A-Za-z0-9_-]{1,128}', session_id)):
+        raise RequestError(422, 'invalid_request', 'session_id is invalid')
+    expected = canonical_hash(system, input_value, 'decision-v1', backend, model, owner, session_id)
     if payload.get('content_hash') != expected:
         raise RequestError(422, 'invalid_request', 'content_hash does not match the payload')
     return {'request_id': request_id, 'backend': backend, 'model': model, 'system': system,
@@ -90,9 +101,20 @@ def validate_request(payload: dict, *, limits: Limits) -> dict:
 
 
 class GatewayService:
-    def __init__(self, store: GatewayStore, *, limits: Limits | None = None):
+    def __init__(self, store: GatewayStore, *, limits: Limits | None = None, catalogs=None):
         self.store = store
         self.limits = limits or Limits()
+        self.catalogs = catalogs
+
+    def prepare(self, session_id, owner):
+        if (not isinstance(session_id, str) or not re.fullmatch(r's-[A-Za-z0-9_-]{1,128}', session_id)
+                or not isinstance(owner, str) or not re.fullmatch(r'ou_[A-Za-z0-9_-]{1,128}', owner)):
+            raise RequestError(422, 'invalid_request', 'invalid session identity')
+        if self.catalogs is not None:
+            try:
+                self.catalogs.prepare(session_id, owner)
+            except ValueError:
+                raise RequestError(409, 'content_conflict', 'session owner conflict') from None
 
     def submit(self, payload: dict) -> tuple[int, dict]:
         request = validate_request(payload, limits=self.limits)
@@ -110,12 +132,17 @@ class GatewayService:
                      existing['state'], request['request_id'])
             return 200, self.represent(existing)
         self._check_queue()
+        metadata = dict(request['metadata'])
+        session_id, owner = metadata.get('session_id'), metadata.get('owner_open_id')
+        if session_id and owner and self.catalogs is not None:
+            self.prepare(session_id, owner)
+            metadata['_gateway_context'] = self.catalogs.get(session_id, owner)
         task = self.store.insert(
             request_id=request['request_id'], content_hash=payload['content_hash'],
             backend=request['backend'], model=request['model'],
             system=request['system'], input_json=json.dumps(request['input'], ensure_ascii=False),
             output='decision-v1', deadline_seconds=request['deadline_seconds'],
-            metadata_json=json.dumps(request['metadata'], ensure_ascii=False))
+            metadata_json=json.dumps(metadata, ensure_ascii=False))
         LOG.info('task submitted: request_id=%s backend=%s deadline=%ss '
                  'input_chars=%s', request['request_id'], request['backend'],
                  request['deadline_seconds'], len(request['system'])
@@ -141,13 +168,15 @@ class GatewayService:
         return self.represent(row)
 
     def represent(self, row: dict) -> dict:
+        metadata = json.loads(row['metadata']) if row['metadata'] else {}
+        metadata.pop('_gateway_context', None)
         value = {
             'request_id': row['request_id'],
             'state': row['state'],
             'created_at': _iso(row['created_ns']),
             'request': {'content_hash': row['content_hash'], 'backend': row['backend'],
                         'model': row['model'],
-                        'metadata': json.loads(row['metadata']) if row['metadata'] else {}},
+                        'metadata': metadata},
         }
         if row['state'] == 'succeeded' and row['result']:
             value['result'] = {
