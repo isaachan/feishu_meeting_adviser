@@ -10,7 +10,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from urllib import parse, request
+from urllib import error, parse, request
 
 from macos_gui.api import ApiError, GuiApiClient
 from macos_gui.capture import CaptureJob
@@ -85,8 +85,16 @@ class GuiE2eTests(unittest.TestCase):
         self.assertEqual(poll['user']['open_id'], 'ou_A')
         self.assertEqual(poll['user']['email'], 'ou_A@stub.local')
 
-        # 2) 空列表 → 入会（凭据已由扫码落库，无需再授权）
+        # 2) GUI 扫码后飞书已授权，入会仅要求补齐 NSDP 和 Jira。
         self.assertEqual(self.api.sessions(device_token)['sessions'], [])
+        with self.assertRaises(error.HTTPError) as caught:
+            http_post_json(f'http://127.0.0.1:{bed.ports["api"]}/sessions',
+                           {'owner_open_id': 'ou_A', 'meeting_ref': {'no': '123456789'}},
+                           key='gui-e2e-missing')
+        missing = json.loads(caught.exception.read())['error']['missing_credentials']
+        self.assertEqual([item['provider'] for item in missing], ['nsdp', 'jira'])
+        bed.token_submit('ou_A', 'nsdp', 'stub-nsdp-token')
+        bed.token_submit('ou_A', 'jira', 'stub-jira-token')
         status, created = http_post_json(
             f'http://127.0.0.1:{bed.ports["api"]}/sessions',
             {'owner_open_id': 'ou_A', 'meeting_ref': {'no': '123456789'}},

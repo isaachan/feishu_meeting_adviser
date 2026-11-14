@@ -274,6 +274,17 @@ class BotServiceTests(unittest.TestCase):
         self.assertIn('https://x/nsdp/submit?state=9', done)
         self.assertNotIn('authorize_url', done)
 
+    def test_join_reports_all_missing_credentials(self):
+        self.advisor.error = AdvisorApiError(409, 'authorization_required', '', {
+            'missing_credentials': [
+                {'provider': 'feishu', 'authorize_url': 'https://x/oauth'},
+                {'provider': 'nsdp', 'submit_url': 'https://x/nsdp'},
+                {'provider': 'jira', 'submit_url': 'https://x/jira'}]})
+        _, done = self.join_and_wait(message_id='om-all')
+        for text in ('飞书授权', 'NSDP token', 'Jira PAT', 'https://x/oauth',
+                     'https://x/nsdp', 'https://x/jira', '重新发送入会'):
+            self.assertIn(text, done)
+
     def test_nsdp_unavailable_message(self):
         self.advisor.error = AdvisorApiError(409, 'nsdp_unavailable', '')
         _, done = self.join_and_wait(message_id='om-2u')

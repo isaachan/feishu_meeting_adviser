@@ -117,6 +117,29 @@ class AdvisorApi:
 
     # -- POST /sessions ------------------------------------------------------
 
+    def _gate_join_credentials(self, owner, meeting_no):
+        missing = []
+        for provider, getter in (('feishu', self.auth.get_token),
+                                 ('nsdp', self.auth.get_nsdp_token),
+                                 ('jira', self.auth.get_jira_token)):
+            try:
+                getter(owner)
+            except AuthorizationRequired as exc:
+                if provider == 'feishu':
+                    try:
+                        url = self.auth.authorize_url(owner, f'join:{meeting_no}')
+                    except Exception:
+                        raise ApiError(409, 'auth_unavailable', 'auth node unreachable') from None
+                    missing.append({'provider': provider, 'authorize_url': url})
+                else:
+                    missing.append({'provider': provider, 'submit_url': exc.url})
+            except AuthUnavailable:
+                raise ApiError(409, 'auth_unavailable', 'auth node unreachable') from None
+        if missing:
+            first = missing[0]
+            raise ApiError(409, 'authorization_required', 'join credentials missing',
+                           missing_credentials=missing, **first)
+
     def create_session(self, body):
         owner = body.get('owner_open_id')
         meeting_ref = body.get('meeting_ref') or {}
@@ -125,6 +148,9 @@ class AdvisorApi:
                 or not meeting_no.isdigit() or not 6 <= len(meeting_no) <= 12:
             raise ApiError(400, 'bad_message', 'owner_open_id and meeting_ref.no required')
 
+        if self.legacy_nsdp:
+            self._gate_nsdp(owner)
+        self._gate_join_credentials(owner, meeting_no)
         active = self.store.db.execute(
             "SELECT * FROM sessions WHERE owner_open_id=? AND meeting_no=? "
             "AND phase IN ('recording','draining')", (owner, meeting_no)).fetchone()
@@ -133,15 +159,6 @@ class AdvisorApi:
                      active['session_id'], meeting_no, owner)
             return self._session_response(dict(active), existing=True)
 
-        self._gate_nsdp(owner)
-        try:
-            self.auth.get_token(owner)
-        except AuthorizationRequired:
-            url = self.auth.authorize_url(owner, f'join:{meeting_no}')
-            raise ApiError(409, 'authorization_required', 'user token missing/expired',
-                           authorize_url=url) from None
-        except AuthUnavailable:
-            raise ApiError(409, 'auth_unavailable', 'auth node unreachable') from None
         try:
             binding = self.calendar.validate(owner, meeting_ref)
         except CalendarError as exc:

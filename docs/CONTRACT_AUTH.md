@@ -1,6 +1,7 @@
 # Auth 服务契约（OAuth 凭据托管）
 
 > **v1.5（2026-11-14）Jira PAT 扩展**：支持组织者 Jira PAT 的一次性表单提交及受控只读查询，见 §9。
+> 入会时 advisor 分别检查三种 provider 的凭据是否存在或可用；NSDP/Jira 提交不验活，详见 CONTRACT_ADVISOR_API v1.6。
 >
 > **v1.4（2026-11-14）NSDP 工具凭据边界扩展**：可信 llm-gateway 的受控查询工具可按 advisor 提交并绑定的会话组织者身份调用 §8 的 NSDP token 读取接口。token 仅进入查询子进程的环境变量，不进入 OpenCode 进程、模型输入、推理任务存储或日志。工具按需读取，执行结束即释放；gateway 和 auth 的内部接口仍仅限可信网络。组织者身份传递见 [推理身份扩展](CONTRACT_INFERENCE_IDENTITY.md)。查询遇到缺失或 401 时工具返回结构化授权错误，advisor 负责通知组织者；当前不自动删除凭据，避免并发重新授权时误删新 token。飞书凭据的调用边界不变。
 

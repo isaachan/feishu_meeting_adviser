@@ -186,7 +186,7 @@ class TestBed:
     flow over HTTP); default 'off' keeps prior beds unchanged.
     """
 
-    def __init__(self, *, nsdp='off'):
+    def __init__(self, *, nsdp='off', auto_personal_tokens=True):
         self.tmp = tempfile.mkdtemp(prefix='m1-bed-')
         self.processes = []
         self.ports = {}
@@ -194,6 +194,7 @@ class TestBed:
         self.bus = None
         self.service = None
         self.nsdp_mode = nsdp
+        self.auto_personal_tokens = auto_personal_tokens
 
     def _advisor_args(self):
         args = ['--model', 'remote', '--remote-backend', 'fake',
@@ -346,21 +347,27 @@ class TestBed:
         with opener.open(request.Request(callback), timeout=5) as response:
             page = response.read().decode()
         assert '授权成功' in page, page
+        if self.auto_personal_tokens:
+            self.token_submit(open_id, 'nsdp', 'stub-nsdp-token')
+            self.token_submit(open_id, 'jira', 'stub-jira-token')
         return payload['authorize_url']
 
     def nsdp_submit(self, open_id, token):
         """Real NSDP submission flow over HTTP: start -> paste form -> saved."""
+        return self.token_submit(open_id, 'nsdp', token)
+
+    def token_submit(self, open_id, provider, token):
         from urllib.parse import parse_qs, urlencode, urlsplit
         opener = request.build_opener(request.ProxyHandler({}))
         req = request.Request(
             f'http://127.0.0.1:{self.ports["auth"]}/token-submissions/start',
-            data=json.dumps({'open_id': open_id, 'provider': 'nsdp'}).encode(),
+            data=json.dumps({'open_id': open_id, 'provider': provider}).encode(),
             method='POST', headers={'Content-Type': 'application/json'})
         with opener.open(req, timeout=5) as response:
             payload = json.loads(response.read())
         state = parse_qs(urlsplit(payload['submit_url']).query)['state'][0]
         form = request.Request(
-            f'http://127.0.0.1:{self.ports["auth"]}/nsdp/submit?state={state}',
+            f'http://127.0.0.1:{self.ports["auth"]}/{provider}/submit?state={state}',
             data=urlencode({'token': token}).encode(), method='POST',
             headers={'Content-Type': 'application/x-www-form-urlencoded'})
         with opener.open(form, timeout=5) as response:

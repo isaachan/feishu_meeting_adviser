@@ -29,6 +29,12 @@ class FakeAuth:
     def authorize_url(self, open_id, intent=''):
         return f'https://auth.internal/oauth/start?intent={intent}'
 
+    def get_nsdp_token(self, open_id):
+        return {'token': 'nsdp-token'}
+
+    def get_jira_token(self, open_id):
+        return {'token': 'jira-token'}
+
     def user_profile(self, open_id):
         if self.mode == 'auth_down':
             raise AuthUnavailable('test')
@@ -107,6 +113,41 @@ class ApiBase(unittest.TestCase):
 
 
 class CreateSessionTests(ApiBase):
+    def test_all_missing_credentials_are_reported_before_reusing_or_creating_session(self):
+        self.auth.mode = 'missing'
+        def missing(provider):
+            def check(owner):
+                raise AuthorizationRequired(f'https://auth.internal/{provider}/submit?state=x', provider)
+            return check
+        self.auth.get_nsdp_token = missing('nsdp')
+        self.auth.get_jira_token = missing('jira')
+        status, body = self.post_error('/sessions', {'owner_open_id': 'ou_A',
+                                                     'meeting_ref': {'no': '123456789'}}, key='all-missing')
+        self.assertEqual(status, 409)
+        missing_items = body['error']['missing_credentials']
+        self.assertEqual([item['provider'] for item in missing_items], ['feishu', 'nsdp', 'jira'])
+        self.assertEqual(self.spy.started, [])
+        self.assertEqual(self.store.list_sessions('ou_A'), [])
+
+    def test_auth_unavailable_blocks_join(self):
+        def unavailable(owner):
+            raise AuthUnavailable('network')
+        self.auth.get_jira_token = unavailable
+        status, body = self.post_error('/sessions', {'owner_open_id': 'ou_A',
+                                                     'meeting_ref': {'no': '123456789'}}, key='down')
+        self.assertEqual((status, body['error']['code']), (409, 'auth_unavailable'))
+        self.assertEqual(self.spy.started, [])
+
+    def test_reuse_requires_credentials(self):
+        self.join(key='original')
+        def missing(owner):
+            raise AuthorizationRequired('https://auth.internal/jira/submit?state=x', 'jira')
+        self.auth.get_jira_token = missing
+        status, body = self.post_error('/sessions', {'owner_open_id': 'ou_A',
+                                                     'meeting_ref': {'no': '123456789'}}, key='retry-new')
+        self.assertEqual((status, body['error']['provider']), (409, 'jira'))
+        self.assertEqual(len(self.spy.started), 1)
+
     def test_happy_path_returns_command_args_and_starts_supervisor(self):
         status, body = self.join()
         self.assertEqual(status, 200)

@@ -28,6 +28,12 @@ class FakeAuth:
     def get_token(self, open_id, *, rejected_token=None):
         return {'access_token': 'u-x', 'expires_at': time.time() + 3600, 'scopes': []}
 
+    def get_nsdp_token(self, open_id):
+        return {'token': 'nsdp-token'}
+
+    def get_jira_token(self, open_id):
+        return {'token': 'jira-token'}
+
     def authorize_url(self, open_id, intent=''):
         raise AuthorizationRequired('https://auth.internal/oauth/start?state=x')
 

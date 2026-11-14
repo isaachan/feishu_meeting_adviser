@@ -49,7 +49,11 @@ class HttpAuthClient:
             code = self._error_code(exc)
             if code == 'reauthorization_required' or exc.code == 404:
                 # not_authorized / reauthorization_required both mean: send a link
-                raise AuthorizationRequired(self.authorize_url(open_id)) from None
+                try:
+                    url = self.authorize_url(open_id)
+                except (error.HTTPError, error.URLError, OSError, ValueError, KeyError):
+                    raise AuthUnavailable('authorize_start') from None
+                raise AuthorizationRequired(url) from None
             if exc.code in (503, 400):
                 raise AuthUnavailable(code or exc.code) from None
             raise AuthUnavailable('internal') from None
@@ -76,16 +80,23 @@ class HttpAuthClient:
     def get_nsdp_token(self, open_id):
         """Returns {'token', 'updated_at'} or raises AuthorizationRequired
         (url = one-shot submit link) / AuthUnavailable."""
+        return self._get_personal_token(open_id, 'nsdp')
+
+    def get_jira_token(self, open_id):
+        return self._get_personal_token(open_id, 'jira')
+
+    def _get_personal_token(self, open_id, provider):
         try:
-            return self._call('GET', f'/credentials/{open_id}/token?provider=nsdp')
+            return self._call('GET', f'/credentials/{open_id}/token?provider={provider}')
         except error.HTTPError as exc:
             code = self._error_code(exc)
             if code == 'not_authorized' or exc.code == 404:
                 try:
-                    url = self.nsdp_submit_url(open_id)
-                except (error.HTTPError, error.URLError, OSError, ValueError):
+                    url = (self.nsdp_submit_url(open_id) if provider == 'nsdp'
+                           else self.jira_submit_url(open_id))
+                except (error.HTTPError, error.URLError, OSError, ValueError, KeyError):
                     raise AuthUnavailable('submit_start') from None
-                raise AuthorizationRequired(url, provider='nsdp') from None
+                raise AuthorizationRequired(url, provider=provider) from None
             if exc.code in (503, 400):
                 raise AuthUnavailable(code or exc.code) from None
             raise AuthUnavailable('internal') from None

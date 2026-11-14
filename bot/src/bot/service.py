@@ -113,6 +113,21 @@ class BotService:
 
     def _advisor_error_text(self, exc: AdvisorApiError) -> str:
         if exc.code == 'authorization_required':
+            missing = exc.extra.get('missing_credentials')
+            if isinstance(missing, list) and missing:
+                lines = ['入会前请完成以下授权或凭据提交：']
+                labels = {'feishu': '飞书授权', 'nsdp': 'NSDP token', 'jira': 'Jira PAT'}
+                for item in missing:
+                    if not isinstance(item, dict) or item.get('provider') not in labels:
+                        continue
+                    url = item.get('authorize_url') or item.get('submit_url')
+                    if isinstance(url, str) and url:
+                        lines.append(f"{labels[item['provider']]}：{url}")
+                lines.append('提交链接 10 分钟内有效；完成后请重新发送入会指令。请勿在聊天中发送 token。')
+                return '\n'.join(lines)
+            if exc.extra.get('provider') == 'jira':
+                return ('请先提交你的 Jira PAT（链接 10 分钟内有效）：\n'
+                        + exc.extra.get('submit_url', ''))
             if exc.extra.get('provider') == 'nsdp':
                 url = exc.extra.get('submit_url', '')
                 return ('听会需要查询 NSDP 版本计划，请先提交你的 NSDP token'

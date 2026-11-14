@@ -49,6 +49,9 @@ class FakeAuth:
             raise AuthorizationRequired(self.nsdp_submit_url(open_id), provider='nsdp')
         return {'token': 'nsdp-token', 'updated_at': 1.0}
 
+    def get_jira_token(self, open_id):
+        return {'token': 'jira-token', 'updated_at': 1.0}
+
     def invalidate_nsdp(self, open_id):
         self.invalidated.append(open_id)
 
@@ -134,9 +137,14 @@ class NsdpApiBase(unittest.TestCase):
 
 
 class NsdpGateTests(NsdpApiBase):
-    def test_normal_join_does_not_require_or_prefetch_nsdp(self):
+    def test_normal_join_requires_nsdp_without_prefetch(self):
         self.api.legacy_nsdp = False
         self.auth.invalidated.append('ou_A')
+        status, body = self.post_error('/sessions', {'owner_open_id': 'ou_A',
+                                                     'meeting_ref': {'no': '123456789'}}, key='missing')
+        self.assertEqual(status, 409)
+        self.assertEqual(body['error']['provider'], 'nsdp')
+        self.auth.invalidated.clear()
         status, body = self.join()
         self.assertEqual(status, 200)
         self.assertTrue(body['session_id'].startswith('s-'))

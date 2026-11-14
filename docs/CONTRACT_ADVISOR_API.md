@@ -1,6 +1,8 @@
 # Advisor 内部 API 契约（bot ↔ advisor）
 
-> **v1.5（2026-11-14）**：正常运行不再以 NSDP 凭据作为组织者接口或会议判断的前置条件，也不在建会时预取 NSDP。仅当 gateway 的受控查询工具报告授权缺失或失效时，经 outbox 通知组织者；会议其余判断继续。`nsdp_hold` 为兼容保留字段，正常运行会清除旧 hold。以下早期版本中相反的 NSDP 硬门描述以本条为准。
+> **v1.6（2026-11-14）**：`POST /sessions` 入会前检查组织者飞书 OAuth、NSDP token、Jira PAT；缺失时一次返回所有缺失项及链接，bot 转发组织者，完成后重发入会。仅入会设此门，NSDP/Jira 在会中查询失败不暂停其他判断；不在建会时预取数据。飞书 token 可复用 GUI 授权；NSDP/Jira 在入会时仅检查是否已提交，使用时才验证。凭据服务不可用则拒绝入会。以下早期版本中相反的入会规则以本条为准。
+>
+> **v1.5（2026-11-14）**：不在建会时预取 NSDP。gateway 的受控查询工具报告授权缺失或失效时，经 outbox 通知组织者；会议其余判断继续。`nsdp_hold` 为兼容保留字段，正常运行会清除旧 hold。
 
 状态：v1 于 2026-11-10 冻结（阶段 0.3）；**v1.1（2026-11-11）** 新增 NSDP 组织者凭据门（`authorization_required` 增加 `provider`/`submit_url` 变体与 `nsdp_unavailable`；组织者面全部指令前置该门；`GET /sessions/{id}/status` 响应新增 `nsdp_hold`）。**v1.2（2026-11-12）** 新增 §8 GUI 面（`/gui/login/start`·`/gui/login/poll`·`/gui/sessions`·`/gui/logout` + devices 表；经 HTTPS 反代对 laptop GUI 暴露，成为第三个对外入口，见 DEPLOYMENT §2）；**v1.2a（2026-11-13，T7）** NSDP 取数降级语义：`nsdp_unavailable` 不再拒绝入会（见 §1.1）。**v1.3（2026-11-13）** 新增 §9 运维面（admin-site：全量会话列表 + 手工停止）；**v1.4（2026-11-13）** §9.1 响应扩展身份目录与订阅列表（`owner_name`/`owner_email`/`subscriptions[]`，依赖 CONTRACT_AUTH v1.3）。服务端为 `advisor`（会话域 + 一次性操作），客户端为 `bot`（§1–§7）、`macos-gui`（§8）与 `admin-site`（§9）。变更需 bump API 版本并同步两侧实现与测试。上游设计：[ARCHITECTURE](ARCHITECTURE.md) D4/D6、[macos-gui/DESIGN](../macos-gui/DESIGN.md)；outbox 语义沿用旧 advisor（channel=`local`/`im`、uuid 幂等、uncertain 人工裁决）。
 
@@ -31,6 +33,8 @@
 **NSDP 门（v1.1）**：组织者面全部指令（入会/会议列表/状态/结束会议/审批/组织者撤销）在执行前要求该 open_id 已有 NSDP token；无/失效 → 409 `authorization_required`（NSDP 变体），bot 每次都回新提交链接（被动持续提醒）。订阅面（小B 的申请/取消）**不经过**该门。会话进行中 token 失效：监督器置 `nsdp_hold=1`（挂起该会话全部模型决策），经 outbox 向小A 周期性 DM 新提交链接（默认 5 分钟一条）；重新提交成功后自动恢复。NSDP 数据由 advisor 侧取（noam 子进程，token 仅存在于子进程环境），以 `kind:"nsdp"` 材料文档进入模型上下文。**v1.2a（2026-11-13，T7）**：NSDP 取数不可达（超时/后端故障）**不再拒绝入会**——降级为无 NSDP 材料建会，监督器首个维护周期起自动补取（成功即入材料，401 即挂起并提醒）；token 隐式验活由建会时点移至该首次取数。取数侧对同一 token 短 TTL 缓存（默认 10 分钟），避免连续建会重复跑全量 `nsdp info`。
 
 ## 2. `POST /sessions` —— 入会（S1）
+
+凭据缺失返回 409 `authorization_required`，`error.missing_credentials` 按 `feishu`、`nsdp`、`jira` 顺序列出缺失项；飞书项含 `authorize_url`，其他项含 `submit_url`。兼容旧客户端，首项同时复制到 `error` 顶层。链接仅发组织者，不含 token；提交链接一次性且有效期 10 分钟。检查先于新建或复用会话；提交本身不验活，NSDP/Jira 失效在实际查询时报告。
 
 ```json
 {"owner_open_id": "ou_A", "meeting_ref": {"no": "123456789", "password": ""},
