@@ -104,7 +104,7 @@ class SessionSupervisor:
                 self._nsdp_maintenance(session_id, session, now)
                 result = executor.take_finished()
                 if result is not None:
-                    self._apply_result(result, now)
+                    self._apply_result(result, now, executor.diagnostic_metadata())
                     backoff_until = now + self.settings.poll_interval * 5
                 if phase == 'draining':
                     self.close_ingest(session_id)
@@ -146,7 +146,14 @@ class SessionSupervisor:
         self.store.mark_job_running(job['job_id'])
         executor.start(job)
 
-    def _apply_result(self, result, now):
+    def _apply_result(self, result, now, metadata=None):
+        timings = (metadata or {}).get('remote_timings') or {}
+        if (self.nsdp is not None and
+                'nsdp_authorization_required' in timings.get('tool_events', [])):
+            session = self.store.session(result.job['session_id'])
+            if session:
+                self.nsdp.notify_owner(result.job['session_id'], session['owner_open_id'],
+                                       dedupe_s=self.settings.nsdp_nag_seconds)
         if result.error is None and result.decision is not None:
             self.store.finish_job(result.job, result.decision,
                                   now=now, settings=self.settings)

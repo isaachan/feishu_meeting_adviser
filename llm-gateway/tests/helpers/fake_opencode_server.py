@@ -103,6 +103,12 @@ class Handler(BaseHTTPRequestHandler):
                 tool_info['id']='msg_tool'
                 tool_part={'type':'tool','tool':'skill','state':{'status':'completed'}}
                 return self.send([user,{'info':tool_info,'parts':[tool_part]},item])
+            if mode=='nsdp-unauthorized':
+                tool_info=info.copy()
+                tool_info['id']='msg_tool'
+                tool_part={'type':'tool','tool':'meeting_nsdp_lookup_release',
+                           'state':{'status':'error','error':'NSDP query failed: authorization_required'}}
+                return self.send([user,{'info':tool_info,'parts':[tool_part]},item])
             return self.send([user,item,item] if mode=='multiple' else [user,item])
         return self.send({},404)
 

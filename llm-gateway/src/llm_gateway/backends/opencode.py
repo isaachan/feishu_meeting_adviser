@@ -98,6 +98,7 @@ class OpenCodeBackend:
         self.stop_event: threading.Event | None = None
         self.watch_done = threading.Event()
         self.tools: dict = {}
+        self.tool_events: set[str] = set()
 
     # ---- lifecycle ----
 
@@ -372,6 +373,11 @@ class OpenCodeBackend:
             if part.get('type') == 'tool' and self.owner_open_id:
                 if not self.tools.get(part.get('tool'), False):
                     raise BackendError('output_invalid')
+                state = part.get('state')
+                if (part.get('tool') == 'meeting_nsdp_lookup_release'
+                        and isinstance(state, dict) and state.get('status') == 'error'
+                        and 'NSDP query failed: authorization_required' in str(state.get('error', ''))):
+                    self.tool_events.add('nsdp_authorization_required')
                 has_tool = True
             elif part.get('type') in ('tool', 'patch', 'file', 'subtask', 'agent'):
                 raise BackendError('output_invalid')
@@ -447,6 +453,7 @@ class OpenCodeBackend:
     def decide(self, system: str, input_value: dict, *, deadline_seconds: int,
                stop_event: threading.Event, metadata: dict) -> dict:
         self.stop_event = stop_event
+        self.tool_events.clear()
         owner = metadata.get('owner_open_id')
         if owner is not None and (not isinstance(owner, str)
                                   or not re.fullmatch(r'ou_[A-Za-z0-9_-]{1,128}', owner)):

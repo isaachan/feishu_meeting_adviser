@@ -199,6 +199,6 @@ class NsdpService:
             return
         self.store.insert_owner_notice(
             session_id, owner_open_id,
-            '你的 NSDP token 缺失或已失效，会参谋已暂停本场会议的判断。'
+            '你的 NSDP token 缺失或已失效，本次版本计划查询无法完成。'
             '请打开链接重新提交（10 分钟内有效，一次性）：\n' + url,
             now=self.clock(), dedupe_s=dedupe_s)

@@ -166,6 +166,8 @@ class RemoteModelBackend:
                              request_id, (time.monotonic() - started) * 1000, timings)
                     return Decision.parse(result.get('decision'))
                 if state == 'failed':
+                    timings = task.get('timings') or {}
+                    self.metadata = {'remote_timings': timings} if timings else {}
                     code = (task.get('error') or {}).get('code', 'server_error')
                     LOG.warning('gateway failed: request_id=%s code=%s', request_id, code)
                     raise ModelError(ERROR_MAP.get(code, 'model_unavailable'))

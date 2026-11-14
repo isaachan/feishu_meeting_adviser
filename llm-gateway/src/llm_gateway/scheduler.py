@@ -65,6 +65,7 @@ class ExecutionScheduler:
                                   timings_json=self._timings(started))
                 LOG.info('execution cancelled (pre-start): request_id=%s', request_id)
                 return
+            backend = None
             try:
                 backend = self.backend_factory(task['backend'])
                 decision = backend.decide(
@@ -74,26 +75,26 @@ class ExecutionScheduler:
                     metadata=json.loads(task['metadata'] or '{}'))
             except BackendError as exc:
                 self.store.finish(request_id, 'cancelled' if exc.code == 'cancelled' else 'failed',
-                                  error_code=exc.code, timings_json=self._timings(started))
+                                  error_code=exc.code, timings_json=self._timings(started, backend))
                 LOG.warning('execution backend error: request_id=%s code=%s '
                             'execution_ms=%s', request_id, exc.code,
                             int((time.monotonic() - started) * 1000))
                 return
             except Exception:
                 self.store.finish(request_id, 'failed', error_code='server_error',
-                                  timings_json=self._timings(started))
+                                  timings_json=self._timings(started, backend))
                 LOG.exception('execution crashed: request_id=%s', request_id)
                 return
             try:
                 normalized = validate(decision)
             except InvalidDecision:
                 self.store.finish(request_id, 'failed', error_code='output_invalid',
-                                  timings_json=self._timings(started))
+                                  timings_json=self._timings(started, backend))
                 LOG.warning('execution output invalid: request_id=%s', request_id)
                 return
             self.store.finish(request_id, 'succeeded',
                               result_json=json.dumps(normalized, ensure_ascii=False),
-                              timings_json=self._timings(started))
+                              timings_json=self._timings(started, backend))
             LOG.info('execution done: request_id=%s execution_ms=%s reply="%s"',
                      request_id, int((time.monotonic() - started) * 1000),
                      str(normalized.get('reply') or '')[:120])
@@ -102,5 +103,9 @@ class ExecutionScheduler:
                 self._cancellations.pop(request_id, None)
 
     @staticmethod
-    def _timings(started: float) -> str:
-        return json.dumps({'execution_ms': int((time.monotonic() - started) * 1000)})
+    def _timings(started: float, backend=None) -> str:
+        result: dict = {'execution_ms': int((time.monotonic() - started) * 1000)}
+        events = getattr(backend, 'tool_events', set())
+        if 'nsdp_authorization_required' in events:
+            result['tool_events'] = ['nsdp_authorization_required']
+        return json.dumps(result)

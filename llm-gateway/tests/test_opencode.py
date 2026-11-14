@@ -42,6 +42,12 @@ class OpenCodeBackendTests(unittest.TestCase):
                                   metadata={'owner_open_id': 'ou_A'})
         self.assertIsNone(decision['reply'])
 
+    def test_nsdp_auth_failure_is_recorded_independently_of_model_decision(self):
+        backend = self.backend('nsdp-unauthorized')
+        backend.decide('role', {'fresh_input_keys': ['s:1']}, deadline_seconds=8,
+                       stop_event=threading.Event(), metadata={'owner_open_id': 'ou_A'})
+        self.assertEqual(backend.tool_events, {'nsdp_authorization_required'})
+
     def test_invalid_output_and_tool_requests_map_to_output_invalid(self):
         for mode in ('invalid', 'tool'):
             with self.subTest(mode=mode):

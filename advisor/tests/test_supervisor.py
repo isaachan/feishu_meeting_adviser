@@ -52,6 +52,7 @@ class SupervisorBase(unittest.TestCase):
         self.supervisor = SessionSupervisor(
             self.store, self.settings, backend_factory=lambda: self.backend,
             ingest_activity=lambda: self.activity)
+        self.addCleanup(self.supervisor.stop)
 
     def create(self, meeting_no='123456789', idle=900):
         return self.store.create_session(
@@ -62,7 +63,7 @@ class SupervisorBase(unittest.TestCase):
         now = time.time()
         caption = Caption(meeting_id=session_id, sentence_key=key, text=text,
                           received_at='now', event_time=int(now * 1000),
-                          start_time=int((now - 3) * 1000), end_time=int(now * 1000))
+                          start_time=int((now - 3) * 1000), end_time=int((now + 0.01) * 1000))
         assert self.store.ingest_caption(session_id, caption, now=now)
 
     def wait_until(self, predicate, timeout=5):
@@ -79,6 +80,20 @@ class SupervisorBase(unittest.TestCase):
 
 
 class AutoConsumeTests(SupervisorBase):
+    def test_tool_authorization_event_notifies_organizer(self):
+        from types import SimpleNamespace
+
+        session = self.create()
+        notices = []
+        self.supervisor.nsdp = SimpleNamespace(
+            notify_owner=lambda sid, owner, **kw: notices.append((sid, owner)))
+        self.store.fail_job = lambda *args, **kwargs: None
+        result = SimpleNamespace(job={'session_id': session['session_id'], 'job_id': 'job'},
+                                 error='model_failed', decision=None, elapsed_ms=1)
+        self.supervisor._apply_result(result, time.time(),
+            {'remote_timings': {'tool_events': ['nsdp_authorization_required']}})
+        self.assertEqual(notices, [(session['session_id'], 'ou_A')])
+
     def test_create_then_captions_produce_replies_automatically(self):
         session = self.create()
         self.supervisor.start_session(session['session_id'])
