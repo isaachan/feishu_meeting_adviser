@@ -80,6 +80,24 @@ class SupervisorBase(unittest.TestCase):
 
 
 class AutoConsumeTests(SupervisorBase):
+    def test_jira_authorization_notifies_even_without_nsdp(self):
+        from types import SimpleNamespace
+        from advisor.nsdp import NsdpService
+
+        session = self.create()
+        auth = SimpleNamespace(jira_submit_url=lambda owner: 'https://auth/jira/submit?state=x')
+        self.supervisor.jira_notifier = NsdpService(auth, None, self.store, clock=lambda: 1000)
+        self.store.insert_owner_notice(session['session_id'], 'ou_A', 'NSDP notice', now=1000)
+        self.store.fail_job = lambda *args, **kwargs: None
+        result = SimpleNamespace(job={'session_id': session['session_id'], 'job_id': 'job'},
+                                 error='model_failed', decision=None, elapsed_ms=1)
+        self.supervisor._apply_result(result, 1000,
+            {'remote_timings': {'tool_events': ['jira_authorization_required']}})
+        rows = self.im_rows(session['session_id'])
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(any('Jira PAT' in row['content'] and 'jira/submit' in row['content']
+                            for row in rows))
+
     def test_tool_authorization_event_notifies_organizer(self):
         from types import SimpleNamespace
 

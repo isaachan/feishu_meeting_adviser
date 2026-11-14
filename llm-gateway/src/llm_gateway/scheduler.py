@@ -106,6 +106,7 @@ class ExecutionScheduler:
     def _timings(started: float, backend=None) -> str:
         result: dict = {'execution_ms': int((time.monotonic() - started) * 1000)}
         events = getattr(backend, 'tool_events', set())
-        if 'nsdp_authorization_required' in events:
-            result['tool_events'] = ['nsdp_authorization_required']
+        allowed = sorted(set(events) & {'nsdp_authorization_required', 'jira_authorization_required'})
+        if allowed:
+            result['tool_events'] = allowed
         return json.dumps(result)

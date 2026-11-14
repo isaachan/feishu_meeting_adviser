@@ -13,6 +13,8 @@
 
 NSDP 工具按此身份绑定凭据；`tool_events` 中的 `nsdp_authorization_required` 随任务 timings 返回，由 advisor 触发组织者通知。
 
+Jira 只读工具同样绑定组织者，从 auth 的 Jira provider 取 PAT，以隔离的 noam 子进程执行 issue、JQL 搜索、字段和项目查询。`jira_authorization_required` 随任务 timings 返回，由 advisor 通知该组织者提交 PAT；不阻塞会议，403 不触发重新授权。NSDP 和 Jira 通知各自去重。
+
 ## 会话上下文扩展（2026-11-14）
 
 - advisor 在会话监督启动时异步调用 `POST /v1/context-sessions`，请求 `{"session_id":"s-…","owner_open_id":"ou_…"}`；202 表示已接受预热，不等待查询完成。若通知丢失，首个带会话身份的推理任务也会触发预热。

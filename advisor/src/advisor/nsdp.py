@@ -202,3 +202,15 @@ class NsdpService:
             '你的 NSDP token 缺失或已失效，本次版本计划查询无法完成。'
             '请打开链接重新提交（10 分钟内有效，一次性）：\n' + url,
             now=self.clock(), dedupe_s=dedupe_s)
+
+    def notify_jira_owner(self, session_id, owner_open_id, *, dedupe_s=300.0):
+        try:
+            url = self.auth.jira_submit_url(owner_open_id)
+        except Exception:
+            LOG.exception('jira submit-url failed for %s', owner_open_id)
+            return
+        self.store.insert_owner_notice(
+            session_id, owner_open_id,
+            '你的 Jira PAT 缺失或已失效，本次 Jira 查询无法完成。'
+            '请打开链接提交（10 分钟内有效，一次性）：\n' + url,
+            now=self.clock(), dedupe_s=dedupe_s, provider='jira')

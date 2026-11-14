@@ -40,6 +40,7 @@ class AuthService:
         self.store = CredentialStore(data / 'credentials')
         self.profiles = ProfileStore(data / 'profiles')
         self.nsdp_store = NsdpCredentialStore(data / 'credentials' / 'nsdp')
+        self.jira_store = NsdpCredentialStore(data / 'credentials' / 'jira', provider='jira')
         self.states = StateTable(data / 'pending_states.json', clock, ttl_s=state_ttl_s)
         self._flight_guard = threading.Lock()
         self._flights = {}
@@ -257,4 +258,39 @@ class AuthService:
             raise AuthError('oauth_invalid_open_id')
         with self.nsdp_store.locked(open_id):
             self.nsdp_store.delete(open_id)
+        return {'ok': True}
+
+    def jira_submission_start(self, open_id):
+        if not valid_open_id(open_id):
+            raise AuthError('oauth_invalid_open_id')
+        entry = self.states.issue(open_id, 'jira:token', self.base_url + '/jira/submit', '')
+        return {'submit_url': f"{entry['redirect_uri']}?state={entry['state']}",
+                'state': entry['state'], 'expires_at': entry['expires_at']}
+
+    def jira_peek(self, state):
+        entry = self.states.peek(state)
+        if entry.get('intent') != 'jira:token':
+            raise AuthError('oauth_invalid_callback')
+        return entry
+
+    def jira_submit(self, state, token):
+        entry = self.states.take(state)
+        if entry.get('intent') != 'jira:token':
+            raise AuthError('oauth_invalid_callback')
+        if not isinstance(token, str) or not token.strip():
+            raise AuthError('nsdp_invalid_token')
+        open_id = entry['open_id']
+        with self.jira_store.locked(open_id):
+            self.jira_store.write(open_id, token.strip(), now=self.clock())
+        return {'open_id': open_id}
+
+    def get_jira_token(self, open_id):
+        record = self.jira_store.read(open_id)
+        if record is None:
+            raise AuthError('oauth_not_authorized')
+        return {'token': record['token'], 'updated_at': record['updated_at']}
+
+    def invalidate_jira(self, open_id):
+        with self.jira_store.locked(open_id):
+            self.jira_store.delete(open_id)
         return {'ok': True}

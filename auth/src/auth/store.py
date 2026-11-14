@@ -151,8 +151,9 @@ class NsdpCredentialStore:
     ``not_authorized`` so the organizer gets a fresh submit link).
     """
 
-    def __init__(self, directory):
+    def __init__(self, directory, provider='nsdp'):
         self.directory = Path(directory)
+        self.provider = provider
 
     def _paths(self, open_id):
         if not valid_open_id(open_id):
@@ -173,7 +174,7 @@ class NsdpCredentialStore:
         if value is None:
             return None
         if (not isinstance(value, dict) or value.get('version') != 1
-                or value.get('provider') != 'nsdp' or value.get('open_id') != open_id
+                or value.get('provider') != self.provider or value.get('open_id') != open_id
                 or not isinstance(value.get('token'), str)
                 or not _NSDP_TOKEN.fullmatch(value['token'])
                 or type(value.get('updated_at')) not in (int, float)):
@@ -184,7 +185,7 @@ class NsdpCredentialStore:
         path, _ = self._paths(open_id)
         if not isinstance(token, str) or not _NSDP_TOKEN.fullmatch(token):
             raise AuthError('nsdp_invalid_token')
-        write_private_json(path, {'version': 1, 'provider': 'nsdp', 'open_id': open_id,
+        write_private_json(path, {'version': 1, 'provider': self.provider, 'open_id': open_id,
                                   'token': token, 'updated_at': now})
 
     def delete(self, open_id):

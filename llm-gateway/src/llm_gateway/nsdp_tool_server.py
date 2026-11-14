@@ -14,14 +14,16 @@ from .nsdp_query import NsdpQuery, QueryError
 _OWNER = re.compile(r'ou_[A-Za-z0-9_-]{1,128}\Z')
 
 
-def credential_provider(base_url):
+def credential_provider(base_url, provider='nsdp'):
+    if provider not in ('nsdp', 'jira'):
+        raise ValueError('invalid provider')
     opener = request.build_opener(request.ProxyHandler({}))
 
     def get(owner):
         if not _OWNER.fullmatch(owner):
             raise QueryError('owner_missing')
         url = (base_url.rstrip('/') + '/credentials/' + parse.quote(owner, safe='')
-               + '/token?provider=nsdp')
+               + '/token?provider=' + provider)
         try:
             with opener.open(url, timeout=10) as response:
                 body = response.read(65537)

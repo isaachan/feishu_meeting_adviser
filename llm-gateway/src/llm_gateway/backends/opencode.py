@@ -81,13 +81,14 @@ class OpenCodeBackend:
     def __init__(self, *, executable: str, model: str, auth_path: Path | None,
                  runtime_base: Path | None, command: list | None = None,
                  skills_dir: Path | None = None, auth_url: str = 'http://127.0.0.1:8381',
-                 noam_bin: str = 'noam'):
+                 noam_bin: str = 'noam', jira_url: str = ''):
         self.executable = executable
         self.auth_path = Path(auth_path) if auth_path else None
         self.command = command
         self.skills_dir = Path(skills_dir) if skills_dir else Path(__file__).resolve().parents[1] / 'skills'
         self.auth_url = auth_url
         self.noam_bin = noam_bin
+        self.jira_url = jira_url
         self.owner_open_id = None
         self.workdir = Path(runtime_base or (Path(tempfile.gettempdir()) /
                                              'llm-gateway-runtime')) / 'opencode'
@@ -117,6 +118,7 @@ class OpenCodeBackend:
         env = os.environ.copy()
         # Organizer credentials are acquired only by the scoped query tool.
         env.pop('NSDP_TOKEN', None)
+        env.pop('JIRA_TOKEN', None)
         if self.password is None:
             raise BackendError('backend_unavailable')
         password = self.password
@@ -155,11 +157,15 @@ class OpenCodeBackend:
         permission = {'*': 'deny'}
         mcp = {}
         if self.owner_open_id:
-            permission.update({'skill': 'allow', 'meeting_nsdp_*': 'allow'})
+            permission.update({'skill': 'allow', 'meeting_nsdp_*': 'allow', 'meeting_jira_*': 'allow'})
             mcp = {'meeting_nsdp': {'type': 'local', 'enabled': True,
                    'command': [sys.executable, '-m', 'llm_gateway.nsdp_tool_server',
                                '--owner', self.owner_open_id, '--auth-url', self.auth_url,
-                               '--noam-bin', self.noam_bin]}}
+                                '--noam-bin', self.noam_bin]},
+                   'meeting_jira': {'type': 'local', 'enabled': True,
+                    'command': [sys.executable, '-m', 'llm_gateway.jira_tool_server',
+                                '--owner', self.owner_open_id, '--auth-url', self.auth_url,
+                                '--noam-bin', self.noam_bin, '--jira-url', self.jira_url]}}
         config = {
             'model': f'{self.provider}/{self.model_name}',
             'enabled_providers': [self.provider],
@@ -304,13 +310,15 @@ class OpenCodeBackend:
         mcp = self._request('GET', '/mcp')
         expected_permission = {'*': 'deny'}
         if self.owner_open_id:
-            expected_permission.update({'skill': 'allow', 'meeting_nsdp_*': 'allow'})
+            expected_permission.update({'skill': 'allow', 'meeting_nsdp_*': 'allow', 'meeting_jira_*': 'allow'})
         if (not isinstance(config, dict) or config.get('permission') != expected_permission
                 or config.get('plugin') != [] or config.get('instructions') != []
                 or config.get('enabled_providers') != [self.provider]):
             raise BackendError('backend_unavailable')
         if self.owner_open_id:
-            if not isinstance(mcp, dict) or mcp.get('meeting_nsdp', {}).get('status') != 'connected':
+            if (not isinstance(mcp, dict) or set(mcp) != {'meeting_nsdp', 'meeting_jira'}
+                    or any(mcp.get(name, {}).get('status') != 'connected'
+                           for name in ('meeting_nsdp', 'meeting_jira'))):
                 raise BackendError('backend_unavailable')
         elif mcp != {}:
             raise BackendError('backend_unavailable')
@@ -323,7 +331,7 @@ class OpenCodeBackend:
             raise BackendError('backend_unavailable')
         catch_all = next((i for i in range(len(rules) - 1, -1, -1) if rules[i] ==
                           {'permission': '*', 'pattern': '*', 'action': 'deny'}), None)
-        allowed_permissions = {'external_directory', 'skill', 'meeting_nsdp_*'} if self.owner_open_id else {'external_directory'}
+        allowed_permissions = {'external_directory', 'skill', 'meeting_nsdp_*', 'meeting_jira_*'} if self.owner_open_id else {'external_directory'}
         if catch_all is None or any(rule.get('permission') not in allowed_permissions
                                     for rule in rules[catch_all + 1:]):
             raise BackendError('backend_unavailable')
@@ -343,16 +351,20 @@ class OpenCodeBackend:
             matching = [rule for rule in rules if isinstance(rule, dict)
                         and fnmatch.fnmatchcase(tool, rule.get('permission', ''))]
             expected = ('allow' if self.owner_open_id and
-                        (tool == 'skill' or fnmatch.fnmatchcase(tool, 'meeting_nsdp_*')) else 'deny')
+                        (tool == 'skill' or fnmatch.fnmatchcase(tool, 'meeting_nsdp_*')
+                         or fnmatch.fnmatchcase(tool, 'meeting_jira_*')) else 'deny')
             if not matching or matching[-1].get('action') != expected:
                 raise BackendError('backend_unavailable')
         self.tools = {tool: bool(self.owner_open_id and
-                      (tool == 'skill' or fnmatch.fnmatchcase(tool, 'meeting_nsdp_*')))
+                      (tool == 'skill' or fnmatch.fnmatchcase(tool, 'meeting_nsdp_*')
+                       or fnmatch.fnmatchcase(tool, 'meeting_jira_*')))
                       for tool in tools}
         # OpenCode's tool/ids endpoint lists built-ins, not the connected MCP
         # tools. The MCP server exposes exactly this one configured tool.
         if self.owner_open_id:
             self.tools['meeting_nsdp_lookup_release'] = True
+            for name in ('get_issue', 'search_issues', 'fields', 'projects'):
+                self.tools['meeting_jira_' + name] = True
 
     # ---- one decision ----
 
@@ -391,6 +403,10 @@ class OpenCodeBackend:
                         and isinstance(state, dict) and state.get('status') == 'error'
                         and 'NSDP query failed: authorization_required' in str(state.get('error', ''))):
                     self.tool_events.add('nsdp_authorization_required')
+                if (str(part.get('tool', '')).startswith('meeting_jira_')
+                        and isinstance(state, dict) and state.get('status') == 'error'
+                        and 'Jira query failed: authorization_required' in str(state.get('error', ''))):
+                    self.tool_events.add('jira_authorization_required')
                 has_tool = True
             elif part.get('type') in ('tool', 'patch', 'file', 'subtask', 'agent'):
                 raise BackendError('output_invalid')
@@ -416,7 +432,8 @@ class OpenCodeBackend:
             permissions = [{'permission': '*', 'pattern': '*', 'action': 'deny'}]
             if self.owner_open_id:
                 permissions.extend([{'permission': 'skill', 'pattern': '*', 'action': 'allow'},
-                                    {'permission': 'meeting_nsdp_*', 'pattern': '*', 'action': 'allow'}])
+                                    {'permission': 'meeting_nsdp_*', 'pattern': '*', 'action': 'allow'},
+                                    {'permission': 'meeting_jira_*', 'pattern': '*', 'action': 'allow'}])
             session = self._request('POST', '/session', {
                 'title': 'Meeting decision',
                 'permission': permissions})

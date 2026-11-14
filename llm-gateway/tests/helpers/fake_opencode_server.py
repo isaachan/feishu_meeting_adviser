@@ -55,12 +55,13 @@ class Handler(BaseHTTPRequestHandler):
             rules=[{'permission':'*','pattern':'*','action':'deny'}]
             if 'meeting_nsdp' in config['mcp']:
                 rules.extend([{'permission':'skill','pattern':'*','action':'allow'},
-                              {'permission':'meeting_nsdp_*','pattern':'*','action':'allow'}])
+                              {'permission':'meeting_nsdp_*','pattern':'*','action':'allow'},
+                              {'permission':'meeting_jira_*','pattern':'*','action':'allow'}])
             if mode=='permissions':rules.append({'permission':'bash','pattern':'*','action':'allow'})
             return self.send([{'name':'meeting-decision','permission':rules}])
         if self.path=='/mcp':
             if 'meeting_nsdp' in config['mcp']:
-                return self.send({'meeting_nsdp':{'status':'connected'}})
+                return self.send({name:{'status':'connected'} for name in config['mcp']})
             return self.send({'synthetic':{'status':'connected'}} if mode=='mcp' else {})
         if self.path=='/provider':
             if mode=='slow-provider':
@@ -108,6 +109,12 @@ class Handler(BaseHTTPRequestHandler):
                 tool_info['id']='msg_tool'
                 tool_part={'type':'tool','tool':'meeting_nsdp_lookup_release',
                            'state':{'status':'error','error':'NSDP query failed: authorization_required'}}
+                return self.send([user,{'info':tool_info,'parts':[tool_part]},item])
+            if mode=='jira-unauthorized':
+                tool_info=info.copy()
+                tool_info['id']='msg_tool'
+                tool_part={'type':'tool','tool':'meeting_jira_get_issue',
+                           'state':{'status':'error','error':'Jira query failed: authorization_required'}}
                 return self.send([user,{'info':tool_info,'parts':[tool_part]},item])
             return self.send([user,item,item] if mode=='multiple' else [user,item])
         return self.send({},404)

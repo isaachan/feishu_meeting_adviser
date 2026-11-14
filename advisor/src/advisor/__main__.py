@@ -98,11 +98,13 @@ def main() -> None:
 
     ingest = IngestServer(store, RemoteSttSessionFactory(args.stt_url),
                           port=args.ingest_port)
+    from .nsdp import NsdpService, StubNsdpClient
+    jira_notifier = nsdp_service or NsdpService(HttpAuthClient(args.auth_url), StubNsdpClient(), store)
     supervisor = SessionSupervisor(store, settings, backend_factory=backend_factory,
                                    ingest_activity=ingest.activity_snapshot,
                                    close_ingest=ingest.close_session,
                                    source_connected=ingest.source_connected,
-                                   nsdp=nsdp_service)
+                                    nsdp=nsdp_service, jira_notifier=jira_notifier)
     if args.calendar == 'stub' or args.calendar_stub:
         calendar_validator = StubCalendarValidator(args.calendar_stub_description)
     else:

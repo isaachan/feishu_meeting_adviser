@@ -2,6 +2,7 @@
 import argparse
 import json
 import logging
+import os
 from pathlib import Path
 import signal
 import sys
@@ -41,6 +42,8 @@ def parser():
     serve.add_argument('--auth-url', default='http://127.0.0.1:8381',
                        help='internal auth service URL for read-only tools')
     serve.add_argument('--noam-bin', default='noam', help='noam CLI executable for NSDP lookup')
+    serve.add_argument('--jira-url', default=os.environ.get('JIRA_URL', ''),
+                       help='trusted HTTPS Jira Data Center base URL for read-only queries')
     serve.add_argument('--runtime-dir', type=Path, default=None,
                        help='base directory for isolated backend runtimes')
     return root
@@ -62,7 +65,7 @@ def backend_factory(options):
                 auth_path=options.opencode_auth,
                 runtime_base=options.runtime_dir,
                 skills_dir=options.skills_dir, auth_url=options.auth_url,
-                noam_bin=options.noam_bin)
+                noam_bin=options.noam_bin, jira_url=options.jira_url)
         raise ValueError('unsupported backend')
     return factory
 

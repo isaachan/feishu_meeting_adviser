@@ -68,6 +68,11 @@ class HttpAuthClient:
                             {'open_id': open_id, 'provider': 'nsdp'})
         return result['submit_url']
 
+    def jira_submit_url(self, open_id):
+        result = self._call('POST', '/token-submissions/start',
+                            {'open_id': open_id, 'provider': 'jira'})
+        return result['submit_url']
+
     def get_nsdp_token(self, open_id):
         """Returns {'token', 'updated_at'} or raises AuthorizationRequired
         (url = one-shot submit link) / AuthUnavailable."""

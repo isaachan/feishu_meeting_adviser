@@ -47,6 +47,9 @@ _TOKEN_SAVED_PAGE = ('<!doctype html><meta charset="utf-8"><title>已保存</tit
                      '<p>NSDP token 已保存。请回到飞书，重新发送刚才的指令。</p>')
 _TOKEN_INVALID_PAGE = ('<!doctype html><meta charset="utf-8"><title>提交无效</title>'
                        '<p>token 格式无效或链接已失效，未保存任何凭据。请回到飞书重新发起。</p>')
+_JIRA_FORM_PAGE = _TOKEN_FORM_PAGE.replace('NSDP token', 'Jira PAT').replace('版本计划', 'Jira')
+_JIRA_SAVED_PAGE = ('<!doctype html><meta charset="utf-8"><title>已保存</title>'
+                    '<p>Jira PAT 已保存。后续 Jira 查询将使用该凭据。</p>')
 
 
 def _api_error(exc: AuthError):
@@ -153,15 +156,16 @@ class _Handler(BaseHTTPRequestHandler):
             else:
                 self._reply_page(400, _INVALID_PAGE)
             return
-        if parsed.path == '/nsdp/submit':
+        if parsed.path in ('/nsdp/submit', '/jira/submit'):
             query = parse.parse_qs(parsed.query, keep_blank_values=True)
             state = query.get('state', [None])[0]
             try:
-                self._service().nsdp_peek(state)
+                (self._service().jira_peek if parsed.path == '/jira/submit'
+                 else self._service().nsdp_peek)(state)
             except AuthError:
                 self._reply_page(400, _INVALID_PAGE)
                 return
-            self._reply_page(200, _TOKEN_FORM_PAGE)
+            self._reply_page(200, _JIRA_FORM_PAGE if parsed.path == '/jira/submit' else _TOKEN_FORM_PAGE)
             return
         if parsed.path.startswith('/credentials/') and parsed.path.endswith('/token'):
             open_id = parsed.path[len('/credentials/'):-len('/token')]
@@ -171,6 +175,8 @@ class _Handler(BaseHTTPRequestHandler):
             try:
                 if provider == 'nsdp':
                     self._reply_json(200, self._service().get_nsdp_token(open_id))
+                elif provider == 'jira':
+                    self._reply_json(200, self._service().get_jira_token(open_id))
                 elif provider == 'feishu':
                     self._reply_json(200, self._service().get_valid_token(open_id, rejected_token=rejected))
                 else:
@@ -223,20 +229,24 @@ class _Handler(BaseHTTPRequestHandler):
         if parsed.path == '/token-submissions/start':
             try:
                 body = self._read_json()
-                if body.get('provider') != 'nsdp':
+                if body.get('provider') not in ('nsdp', 'jira'):
                     raise AuthError('nsdp_invalid_provider')
-                result = self._service().nsdp_submission_start(body.get('open_id'))
+                start = (self._service().jira_submission_start if body['provider'] == 'jira'
+                         else self._service().nsdp_submission_start)
+                result = start(body.get('open_id'))
             except AuthError as exc:
                 status, payload = _api_error(exc)
                 self._reply_json(status, payload)
                 return
             self._reply_json(200, result)
             return
-        if parsed.path == '/nsdp/submit':
+        if parsed.path in ('/nsdp/submit', '/jira/submit'):
             query = parse.parse_qs(parsed.query, keep_blank_values=True)
             state = query.get('state', [None])[0]
             try:
-                outcome = self._service().nsdp_submit(state, self._read_form_token())
+                submit = (self._service().jira_submit if parsed.path == '/jira/submit'
+                          else self._service().nsdp_submit)
+                outcome = submit(state, self._read_form_token())
             except AuthError as exc:
                 page = _TOKEN_INVALID_PAGE if exc.reason in ('nsdp_invalid_token',
                                                              'oauth_state_used',
@@ -244,15 +254,17 @@ class _Handler(BaseHTTPRequestHandler):
                 self._reply_page(400, page)
                 return
             assert outcome['open_id']
-            self._reply_page(200, _TOKEN_SAVED_PAGE)
+            self._reply_page(200, _JIRA_SAVED_PAGE if parsed.path == '/jira/submit' else _TOKEN_SAVED_PAGE)
             return
         if parsed.path.startswith('/credentials/') and parsed.path.endswith('/invalidate'):
             open_id = parsed.path[len('/credentials/'):-len('/invalidate')]
             try:
                 body = self._read_json()
-                if body.get('provider') != 'nsdp':
+                if body.get('provider') not in ('nsdp', 'jira'):
                     raise AuthError('nsdp_invalid_provider')
-                result = self._service().invalidate_nsdp(open_id)
+                invalidate = (self._service().invalidate_jira if body['provider'] == 'jira'
+                              else self._service().invalidate_nsdp)
+                result = invalidate(open_id)
             except AuthError as exc:
                 status, payload = _api_error(exc)
                 self._reply_json(status, payload)

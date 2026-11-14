@@ -1,5 +1,7 @@
 # 架构 · 方案 C（v0.4 草案）
 
+> 2026-11-14 Jira 扩展：gateway 按需加载 Jira skill，通过受控只读 noam 工具使用组织者个人 PAT；auth 通过一次性 HTTPS 表单按 open_id 保存 PAT。授权缺失或 401 经 advisor outbox 通知组织者，不影响其他会议判断；403 表示权限不足。部署须配置 gateway Jira HTTPS 地址并暴露提交表单。
+
 > 2026-11-14 更新：advisor 负责通用会议快照、调度和结果校验；gateway 运行 OpenCode 会议智能体，按需加载 skill 并通过受控只读工具查询 NSDP。受控工具根据 advisor 绑定的组织者身份向 auth 取凭据。身份与凭据边界分别见 [推理身份扩展](CONTRACT_INFERENCE_IDENTITY.md) 和 [Auth v1.4](CONTRACT_AUTH.md)。下文旧的 NSDP 预取及推理契约不变描述以本条为准。
 
 > **已知问题：版本目录冷启动。** 每场会议的 NSDP 版本目录由 gateway 异步预热，`noam nsdp info` 可能需要约 60 秒。预热期间会议继续，版本目录准备好后不对之前字幕自动补做判断；因此这段时间涉及版本的查询或提醒可能被遗漏。这是已接受的权衡。

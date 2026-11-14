@@ -27,7 +27,7 @@ class SessionSupervisor:
     def __init__(self, store: SessionStore, settings: AdviserSettings, *,
                  backend_factory, ingest_activity=None, close_ingest=None,
                  source_connected=None, clock=time.time, monotonic=time.monotonic,
-                 nsdp=None, legacy_nsdp=False):
+                 nsdp=None, legacy_nsdp=False, jira_notifier=None):
         self.store = store
         self.settings = settings
         self.backend_factory = backend_factory
@@ -37,6 +37,7 @@ class SessionSupervisor:
         self.clock = clock
         self.monotonic = monotonic
         self.nsdp = nsdp
+        self.jira_notifier = jira_notifier or nsdp
         self.legacy_nsdp = legacy_nsdp
         self._nsdp_next: dict[str, float] = {}
         self._nsdp_last_nag: dict[str, float] = {}
@@ -164,6 +165,12 @@ class SessionSupervisor:
             if session:
                 self.nsdp.notify_owner(result.job['session_id'], session['owner_open_id'],
                                        dedupe_s=self.settings.nsdp_nag_seconds)
+        if (self.jira_notifier is not None and
+                'jira_authorization_required' in timings.get('tool_events', [])):
+            session = self.store.session(result.job['session_id'])
+            if session:
+                self.jira_notifier.notify_jira_owner(result.job['session_id'], session['owner_open_id'],
+                                                     dedupe_s=self.settings.nsdp_nag_seconds)
         if result.error is None and result.decision is not None:
             self.store.finish_job(result.job, result.decision,
                                   now=now, settings=self.settings)

@@ -492,14 +492,14 @@ class SessionStore:
 
     @_locked
     def insert_owner_notice(self, session_id, recipient_open_id, content, *,
-                            now=None, dedupe_s=300.0):
+                            now=None, dedupe_s=300.0, provider='nsdp'):
         """Queue one IM notice row for the organizer (nsdp re-auth nudges).
 
         The uuid is bucketed by dedupe window so retries never duplicate a nudge.
         """
         moment = time.time() if now is None else now
         notice_uuid = str(uuid5(NAMESPACE_URL,
-                                f'nsdp-notice:{session_id}:{int(moment // max(1.0, dedupe_s))}'))
+                                f'{provider}-notice:{session_id}:{int(moment // max(1.0, dedupe_s))}'))
         with self.unit_of_work() as tx:
             tx.connection.execute(
                 "INSERT OR IGNORE INTO outbox(uuid,session_id,kind,content,evidence,"

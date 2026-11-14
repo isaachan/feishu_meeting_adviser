@@ -120,10 +120,32 @@ class NsdpTests(unittest.TestCase):
 
     def test_provider_validation(self):
         with self.assertRaises(error.HTTPError) as caught:
-            self.post_json('/token-submissions/start', {'open_id': 'ou_A', 'provider': 'jira'})
+            self.post_json('/token-submissions/start', {'open_id': 'ou_A', 'provider': 'unknown'})
         self.assertEqual(caught.exception.code, 400)
-        with self.assertRaises(error.HTTPError) as caught:
+
+    def test_jira_submission_isolated_and_one_shot(self):
+        _, submission = self.post_json('/token-submissions/start',
+                                       {'open_id': 'ou_A', 'provider': 'jira'})
+        path = submission['submit_url'][len('https://auth.internal'):]
+        self.assertTrue(path.startswith('/jira/submit?'))
+        _, page = self.get(path)
+        self.assertIn('Jira PAT', page)
+        _, page = self.post_form(path, {'token': 'jira-secret-A'})
+        self.assertNotIn('jira-secret-A', page)
+        self.assertEqual(json.loads(self.get('/credentials/ou_A/token?provider=jira')[1])['token'],
+                         'jira-secret-A')
+        for url in ('/credentials/ou_B/token?provider=jira',
+                    '/credentials/ou_A/token?provider=nsdp'):
+            with self.assertRaises(error.HTTPError) as caught:
+                self.get(url)
+            self.assertEqual(caught.exception.code, 404)
+        with self.assertRaises(error.HTTPError):
+            self.post_form(path, {'token': 'replacement-secret'})
+        self.post_json('/credentials/ou_A/invalidate', {'provider': 'jira'})
+        with self.assertRaises(error.HTTPError):
             self.get('/credentials/ou_A/token?provider=jira')
+        with self.assertRaises(error.HTTPError) as caught:
+            self.get('/credentials/ou_A/token?provider=unknown')
         self.assertEqual(caught.exception.code, 400)
 
     def test_feishu_read_still_works_without_provider_param(self):
