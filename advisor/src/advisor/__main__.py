@@ -2,6 +2,8 @@
 
 import argparse
 import logging
+import signal
+import threading
 from pathlib import Path
 
 from . import __version__
@@ -119,6 +121,10 @@ def main() -> None:
     server = build_api_server(api, host=args.api_host, port=args.api_port)
     LOG.info('advisor %s: api on %s, ingest on %s (model=%s)',
              __version__, server.server_address, args.ingest_port, args.model)
+    def stop(signum, frame):
+        threading.Thread(target=server.shutdown, daemon=True).start()
+
+    signal.signal(signal.SIGTERM, stop)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

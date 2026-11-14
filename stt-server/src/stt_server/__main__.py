@@ -38,7 +38,7 @@ def parser() -> argparse.ArgumentParser:
     return root
 
 
-def _health_server(service: SttService, port: int) -> ThreadingHTTPServer:
+def _health_server(service: SttService, port: int, host: str = '127.0.0.1') -> ThreadingHTTPServer:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):  # noqa: N802 - http.server API
             if self.path == '/stats':
@@ -65,7 +65,7 @@ def _health_server(service: SttService, port: int) -> ThreadingHTTPServer:
         def log_message(self, format, *args):  # noqa: A002, N802 - silence
             _ = format, args
 
-    return ThreadingHTTPServer(('0.0.0.0', port), Handler)
+    return ThreadingHTTPServer((host, port), Handler)
 
 
 async def _run(args) -> None:
@@ -77,7 +77,7 @@ async def _run(args) -> None:
                          auth=_build_auth(args))
     health = None
     if args.health_port:
-        health = _health_server(service, args.health_port)
+        health = _health_server(service, args.health_port, args.host)
         threading.Thread(target=health.serve_forever, daemon=True,
                          name='stt-health').start()
 
