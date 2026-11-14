@@ -7,9 +7,13 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 
 from llm_gateway.backends.opencode import OpenCodeBackend
+from llm_gateway.catalog import MeetingCatalogs
+from llm_gateway.nsdp_query import NsdpQuery
+from llm_gateway.nsdp_tool_server import credential_provider
 
 
 class AuthHandler(BaseHTTPRequestHandler):
@@ -37,6 +41,10 @@ class NsdpIntegrationTests(unittest.TestCase):
         self.noam.write_text('#!/usr/bin/env python3\n'
                              'import os, sys\n'
                              'assert os.environ.get("NSDP_TOKEN") == "synthetic-token"\n'
+                             'if sys.argv[1:] == ["nsdp", "info"]:\n'
+                             ' print(\'{"tenants":["NIO"],"platforms":[{"platform_name":"NT3",'
+                             '"versions":["BL1.5.0"]}]}\')\n'
+                             ' sys.exit(0)\n'
                              'assert sys.argv[1:] == ["nsdp", "releases", "--release", "BL1.5.0"]\n'
                              'print("BL1.5.0 G4 2026-12-01")\n')
         self.noam.chmod(0o700)
@@ -105,6 +113,47 @@ class NsdpIntegrationTests(unittest.TestCase):
         self.assertEqual(AuthHandler.paths, ['/credentials/ou_A/token?provider=nsdp'])
         self.assertIsNotNone(decision['reply'])
         self.assertEqual(decision['reply_sentence_keys'], ['s:1'])
+
+    @unittest.skipUnless(os.environ.get('LIVE_OPENCODE_TEST') == '1', 'requires real OpenCode model')
+    def test_live_catalog_helps_identify_asr_version(self):
+        query = NsdpQuery(credential_provider(self.auth_url), noam_bin=str(self.noam))
+        catalogs = MeetingCatalogs(self.root / 'catalog.sqlite3', query)
+        self.addCleanup(catalogs.close)
+        catalogs.prepare('s-a', 'ou_A')
+        deadline = time.monotonic() + 10
+        while catalogs.get('s-a', 'ou_A') is None and time.monotonic() < deadline:
+            time.sleep(0.05)
+        catalog = catalogs.get('s-a', 'ou_A')
+        self.assertIsNotNone(catalog)
+        backend = OpenCodeBackend(executable='opencode', model='zai-coding-plan/glm-5.3',
+                                  auth_path=None, runtime_base=self.root,
+                                  auth_url=self.auth_url, noam_bin=str(self.noam))
+        original_result = backend._result
+        verified = []
+
+        def observe(message, message_id):
+            for part in message.get('parts', []):
+                state = part.get('state', {})
+                if (part.get('type') == 'tool' and part.get('tool') == 'meeting_nsdp_lookup_release'
+                        and state.get('status') == 'completed'):
+                    verified.append((state.get('input'), state.get('output')))
+            return original_result(message, message_id)
+
+        backend._result = observe
+        decision = backend.decide(
+            'meeting-snapshot-v1',
+            {'generation': 1,
+             'captions': [{'sentence_key': 's:1',
+                           'text': '会参谋，版本比艾勒一五零的 G4 是不是 2026年12月2日？'}],
+             'fresh_input_keys': ['s:1'], 'reply_allowed_keys': ['s:1'],
+             'pending_reply': None, 'sent_replies': []},
+            deadline_seconds=90, stop_event=threading.Event(),
+            metadata={'owner_open_id': 'ou_A', '_gateway_context': catalog})
+        self.assertIsNotNone(decision['reply'])
+        self.assertEqual(decision['reply_sentence_keys'], ['s:1'])
+        self.assertGreaterEqual(len(AuthHandler.paths), 2)  # info and version lookup
+        self.assertTrue(any(isinstance(args, dict) and args.get('release') == 'BL1.5.0'
+                            and '2026-12-01' in str(output) for args, output in verified), verified)
 
     @unittest.skipUnless(os.environ.get('LIVE_OPENCODE_TEST') == '1', 'requires real OpenCode model')
     def test_real_opencode_reports_missing_authorization(self):
