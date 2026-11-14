@@ -1,11 +1,9 @@
 """Adviser runtime settings (single-user defaults; config file in stage 3)."""
 from dataclasses import dataclass
-from pathlib import Path
 
 
 @dataclass(frozen=True, slots=True)
 class AdviserSettings:
-    role_file: Path | None = None
     remote_url: str = 'http://127.0.0.1:8377'
     remote_backend: str = 'opencode'
     model_timeout_seconds: float = 90

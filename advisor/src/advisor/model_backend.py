@@ -69,24 +69,10 @@ class Decision:
 
 
 def load_role(settings: AdviserSettings) -> tuple[str, str]:
-    try:
-        if settings.role_file:
-            path = settings.role_file
-            if path.is_symlink() or not path.is_file():
-                raise ModelError('model_role_unavailable')
-            raw = path.read_bytes()
-        else:
-            from importlib.resources import files
-            raw = files('advisor').joinpath('meeting_adviser.md').read_bytes()
-        if not 1 <= len(raw) <= 100000:
-            raise ModelError('model_role_unavailable')
-        role = raw.decode('utf-8')
-        if not role.strip():
-            raise ModelError('model_role_unavailable')
-        import hashlib as _hashlib
-        return role, _hashlib.sha256(role.encode('utf-8')).hexdigest()
-    except (OSError, UnicodeDecodeError):
-        raise ModelError('model_role_unavailable') from None
+    # Contract marker only; the meeting agent and business skills belong to
+    # the gateway, not to the meeting state and scheduling service.
+    role = 'meeting-snapshot-v1'
+    return role, hashlib.sha256(role.encode('utf-8')).hexdigest()
 
 
 ERROR_MAP = {
