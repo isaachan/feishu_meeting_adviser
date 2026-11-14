@@ -3,7 +3,7 @@
 在服务器（当前基线：本机 localhost）运行 [远程推理契约](../legacy/docs/CONTRACT_REMOTE_INFERENCE.md)：接收 advisor 的推理任务，调度并隔离地执行 OpenCode（GLM），返回结构化决定。网关不解析会议语义，不保存长期会议状态。
 
 - 首版**无认证**，仅限 localhost/可信内网（见 [plan.md](../plan.md) 已确认方向第 8 条；补认证已列入根 TODO）
-- 后端：`fake`（确定性模拟）与 `opencode`（GLM，进程级隔离：每任务新实例、deny-all、私有 XDG、guardian EOF 清理）
+- 后端：`fake`（确定性模拟）与 `opencode`（GLM，进程级隔离：每任务新实例、私有 XDG、guardian EOF 清理）。带组织者身份的任务仅开放 OpenCode `skill` 和受控的 `meeting_nsdp_lookup_release` 查询工具，其余工具拒绝。
 
 ## 运行
 
@@ -13,9 +13,13 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -e '.[dev]'
 .venv/bin/llm-gateway serve --host 127.0.0.1 --port 8377 \
   [--database ../data/llm-gateway/tasks.sqlite3] \
-  [--opencode-auth ~/.local/share/opencode/auth.json]
-  [--opencode-executable /usr/bin/opencode]   # 系统级安装时显式指定，避免默认路径不匹配
+  [--opencode-auth ~/.local/share/opencode/auth.json] \
+  [--opencode-executable /usr/bin/opencode] \
+  [--skills-dir /path/to/skills] [--auth-url http://127.0.0.1:8381] \
+  [--noam-bin /path/to/noam]
 ```
+
+默认 skill 目录仅包含测试用 placeholder；用 `--skills-dir` 指定正式 skill 根目录（每个 skill 为 `<name>/SKILL.md`）。各 OpenCode 任务启动时读取配置，替换 skill 后新任务生效。gateway 所在主机需要安装 noam；查询时受控工具按任务组织者向 auth 按需读取 NSDP token，token 仅注入 noam 子进程。advisor 与 gateway 应同步部署，内部 API 仅在可信网络开放。
 
 启动输出一行 JSON（监听地址、数据库、恢复的任务数、pid）。Ctrl-C 干净停机：先停 HTTP，再停 worker，中断任务标记为 `failed(backend_unavailable)`，客户端按契约复用原 `request_id` 重试。
 
@@ -38,4 +42,4 @@ GET  /healthz
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-测试全部使用合成输入与本地桩服务器（含 OpenCode 协议桩），不访问真实模型或会议数据。
+默认测试使用合成输入与本地桩服务器（含 OpenCode 协议桩）。设置 `LIVE_OPENCODE_TEST=1` 时，`test_nsdp_integration.py` 额外使用真实 OpenCode 模型和合成 auth/noam 桩验证工具链路。

@@ -52,9 +52,12 @@ class FakeSttServer:
         self._utterance = 0
         self.loop = asyncio.new_event_loop()
         self.started = threading.Event()
+        self.thread = None
+        self.stop_signal = None
 
     def start(self):
-        threading.Thread(target=self._serve, daemon=True).start()
+        self.thread = threading.Thread(target=self._serve, daemon=True)
+        self.thread.start()
         self.started.wait(timeout=5)
         return self
 
@@ -73,7 +76,11 @@ class FakeSttServer:
                 if not isinstance(raw, bytes):
                     message = json.loads(raw)
                     if message.get('type') == 'stop':
-                        await ws.send(json.dumps({'type': 'stopped', 'finals': len(self.finals)}))
+                        from websockets.exceptions import ConnectionClosed
+                        try:
+                            await ws.send(json.dumps({'type': 'stopped', 'finals': len(self.finals)}))
+                        except ConnectionClosed:
+                            return
                         await ws.close()
                         return
                     continue  # gap: nothing to flush in the stub
@@ -94,13 +101,9 @@ class FakeSttServer:
             async with websockets.serve(handler, '127.0.0.1', 0,
                                         max_size=2 ** 21) as server:
                 self.port = server.sockets[0].getsockname()[1]
+                self.stop_signal = asyncio.Event()
                 self.started.set()
-                try:
-                    while True:
-                        await asyncio.sleep(0.05)
-                finally:
-                    server.close()
-                    await server.wait_closed()
+                await self.stop_signal.wait()
         try:
             self.loop.run_until_complete(main())
         except BaseException as exc:  # noqa: BLE001 - surface bed startup faults
@@ -108,9 +111,14 @@ class FakeSttServer:
             traceback.print_exc(file=sys.stderr)
             self.start_error = exc
             self.started.set()
+        finally:
+            self.loop.close()
 
     def stop(self):
-        self.loop.call_soon_threadsafe(self.loop.stop)
+        if self.stop_signal is not None and not self.loop.is_closed():
+            self.loop.call_soon_threadsafe(self.stop_signal.set)
+        if self.thread is not None:
+            self.thread.join(timeout=5)
 
     @property
     def url(self):

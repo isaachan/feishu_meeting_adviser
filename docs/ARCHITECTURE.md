@@ -1,5 +1,7 @@
 # 架构 · 方案 C（v0.4 草案）
 
+> 2026-11-14 更新：advisor 负责通用会议快照、调度和结果校验；gateway 运行 OpenCode 会议智能体，按需加载 skill 并通过受控只读工具查询 NSDP。受控工具根据 advisor 绑定的组织者身份向 auth 取凭据。身份与凭据边界分别见 [推理身份扩展](CONTRACT_INFERENCE_IDENTITY.md) 和 [Auth v1.4](CONTRACT_AUTH.md)。下文旧的 NSDP 预取及推理契约不变描述以本条为准。
+
 状态：设计基线。相对旧方案 B 的决策翻转与动机见 [README](../README.md)；需求场景见 [REQUIREMENTS](REQUIREMENTS.md)。
 修订：v0.2 新增 bot 控制面（入会指令）、云端 OAuth 鉴权、流令牌准入、会话监督器；v0.3 将 bot 与 auth 拆为独立部署节点（不再驻 advisor 进程内）；v0.4 评审修订：ingest 改为每条音频源一条连接、授权链接统一经 advisor 下发（bot 不直连 auth）、删除暂停/恢复、订阅 revoked 定为终态、材料来源定为建会时从日历事件描述自动带出、拓扑图编号修正。
 

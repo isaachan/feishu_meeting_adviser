@@ -8,7 +8,7 @@
 
 - **auth 只做凭据**：授权 URL 生成、回调换取、静默刷新、按 open_id 保管。不做业务校验（组织者/时间窗在 advisor）；不碰 IM。
 - **调用面两类**：
-  - 内部 API（HTTP，`127.0.0.1:8381`，仅 advisor，v1 无认证）；
+  - 内部 API（HTTP，`127.0.0.1:8381`，advisor 与受控 NSDP 查询工具，v1 无认证）；
   - OAuth 面（HTTPS，`https://<域名>/oauth/callback`，浏览器经 TLS 反代到达；域名可仅内网/VPN 解析，见 [DEPLOYMENT](DEPLOYMENT.md) §2）。
 - 飞书协议端点与参数沿用旧实现已验证常量：
 
@@ -140,9 +140,9 @@ API v1（v1.1 见 §8；v1.2 变更：§2.1 discovery 变体、§2.3 `/authorize
 
 ## 8. NSDP token 提交通道（v1.1）
 
-组织者（小A）的个人 NSDP token：长期有效、无过期时间可判、无刷新语义。失效只能在使用时由 401 发现（advisor 侧），失效即删除凭据（下次读取 `not_authorized` → 重新走提交流程）。仅组织者需要；小B 无此通道。
+组织者（小A）的个人 NSDP token：长期有效、无过期时间可判、无刷新语义。失效只能在工具使用时由 401 发现；v1.4 不自动删除，通知组织者重新提交以覆盖旧 token。仅组织者需要；小B 无此通道。
 
-### 8.1 内部 API（仅 advisor 调用）
+### 8.1 内部 API（advisor 与受控 NSDP 查询工具）
 
 - `POST /token-submissions/start` `{"open_id": "ou_A", "provider": "nsdp"}` → 200 `{"submit_url": "https://<域名>/nsdp/submit?state=…", "state": "rnd-…", "expires_at": …}`。state 复用 §2.1 的 state 表语义（随机、一次性、TTL 10 min、绑定 open_id；intent=`nsdp:token` 与飞书 OAuth state 区分）。
 - `GET /credentials/{open_id}/token?provider=nsdp` → 200 `{"token": "…", "updated_at": …}`；无记录 → 404 `not_authorized`。
@@ -157,4 +157,4 @@ API v1（v1.1 见 §8；v1.2 变更：§2.1 discovery 变体、§2.3 `/authorize
 ### 8.3 存储与红线
 
 - `<auth 数据目录>/credentials/nsdp/<open_id>.json`（0700/0600、原子写、`O_NOFOLLOW`，同 §5 纪律）：`{version:1, provider:"nsdp", open_id, token, updated_at}`。
-- 红线：NSDP token 绝不进入 IM 文本（链接里只有 state）、不下发 laptop、不出现在任何 HTML 页面（含错误页）；仅 advisor 经内部 API 读取，用后不留存；提交时不验活、不回显。
+- 红线：NSDP token 绝不进入 IM 文本（链接里只有 state）、不下发 laptop、不出现在任何 HTML 页面（含错误页）；由受控查询工具经内部 API 按需读取，用后不留存；提交时不验活、不回显。

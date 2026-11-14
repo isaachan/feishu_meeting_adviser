@@ -33,7 +33,7 @@
 | stt-server（WS） | `127.0.0.1:8392`（沿用旧部署） | 仅 localhost | auth 固定 `none`（准入已由 advisor 完成） |
 | llm-gateway（HTTP） | `127.0.0.1:8377`（沿用） | 仅 localhost | 与旧部署一致 |
 
-网络边界一句话：**对外三个入口——auth 的 OAuth 回调（浏览器可达，HTTPS 域名经反代）、advisor 的 ingest WS（受信网络）与 advisor 的 GUI 面 `/gui/*`（HTTPS 经同一反代域名，v0.5）**；云内互调全部 localhost：bot→advisor、advisor→auth、advisor→stt-server、advisor→llm-gateway。
+网络边界一句话：**对外三个入口——auth 的 OAuth 回调（浏览器可达，HTTPS 域名经反代）、advisor 的 ingest WS（受信网络）与 advisor 的 GUI 面 `/gui/*`（HTTPS 经同一反代域名，v0.5）**；云内互调全部 localhost：bot→advisor、advisor→auth、advisor→stt-server、advisor→llm-gateway、受控查询工具→auth。
 
 ## 3. 凭据与配置
 
@@ -64,7 +64,7 @@ bot 无业务持久状态（重启丢失的仅 IM 去重缓存，飞书事件重
 ## 5. 运维基线（v1）
 
 - 部署前置：飞书应用后台注册 OAuth 回调 URI（与 §2 精确一致，指向 auth 节点）、开通 IM 三权限与长连接事件（沿用旧 docs/APP_PERMISSIONS_EVENTS.md 清单）。
-- advisor 节点前置：安装 noam CLI——NSDP 版本计划取数经 `noam nsdp` 子进程（token 仅经子进程环境传递，见 CONTRACT_ADVISOR_API §1.1 / CONTRACT_AUTH §8）；不在 PATH 时以 `--noam-bin` 指定路径。缺失不阻断启动（启动时探测并记 ERROR 日志），但 NSDP 取数将持续降级为无版本计划材料。
+- llm-gateway 节点前置：安装 noam CLI；使用 `--noam-bin` 指定路径、`--auth-url` 指定受信 auth 服务，正式 skill 根目录用 `--skills-dir` 指定。NSDP 查询按需执行，token 仅经查询子进程环境传递；缺少 noam 或 auth 不可达时工具返回失败。advisor 与 gateway 的身份扩展须同步部署。
 - 进程管理：systemd 五个独立单元（`advisor`、`bot`、`auth`、`stt-server`、`llm-gateway`），各自有界停机（advisor 需 draining 会话排空后再退出；bot/auth 可直接重启）。
 - 独立升级：三核心节点互不牵连——bot 短暂下线仅审批/通知延迟，字幕与模型链路不受影响；auth 短暂下线仅影响新授权/校验，进行中会话不受影响；advisor 升级前确认无 draining 会话。
 - 健康检查：各节点 healthz；最小指标：ingest 连接数/上行速率/积压、STT 会话数、gateway 队列深度、活跃会话数、bot 长连接状态。

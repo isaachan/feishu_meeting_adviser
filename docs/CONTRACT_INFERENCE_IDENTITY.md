@@ -11,4 +11,4 @@
 - gateway 校验字段格式与摘要；同一 `request_id` 不能绑定不同组织者。组织者身份与任务一同持久化，用于执行及重试；不传递用户 token。
 - 当前内部接口没有服务间认证，因此只有受信任的 advisor 和运维进程可访问 gateway；摘要不是鉴权机制。跨机器部署应先增加服务间身份认证和网络隔离。
 
-本扩展仅规定身份绑定，不代表 NSDP 工具或授权反馈已接入。
+NSDP 工具按此身份绑定凭据；`tool_events` 中的 `nsdp_authorization_required` 随任务 timings 返回，由 advisor 触发组织者通知。

@@ -36,11 +36,23 @@ class LatencyTests(unittest.TestCase):
             bed.ingest_frame(ws, seq)
         bed.drain_acks(ws, 6, timeout=8)
 
+        # ACK confirms audio ingestion, not completion of STT or the first
+        # model decision. Wait for the warm-up reply before establishing the
+        # baseline; pending_model_inputs is a transient queue depth.
+        warmup_deadline = time.monotonic() + 20
+        while time.monotonic() < warmup_deadline:
+            if any('网关合成回答' in text for text in bus.dms_to('ou_A')):
+                break
+            time.sleep(0.1)
+        else:
+            self.fail('warm-up reply never delivered')
+        caption_count = bed.advisor_db_read(
+            'SELECT count(*) FROM context WHERE session_id=?', (session_id,))[0][0]
+
         dm_count_before = len([t for t in bus.dms_to('ou_A') if '网关合成回答' in t])
         t0 = time.monotonic()  # "说完": the utterance's final frames go out now
-        for seq in range(8, 14):
+        for seq in range(7, 13):
             bed.ingest_frame(ws, seq)
-        ws.close()
 
         api = f'http://127.0.0.1:{bed.ports["api"]}'
         t_caption = t_decision = t_im = None
@@ -48,8 +60,9 @@ class LatencyTests(unittest.TestCase):
         while time.monotonic() < deadline and t_im is None:
             time.sleep(0.1)
             if t_caption is None:
-                status = http_get_json(f'{api}/sessions/{session_id}/status')
-                if status.get('pending_model_inputs', 0) > 1:
+                count = bed.advisor_db_read(
+                    'SELECT count(*) FROM context WHERE session_id=?', (session_id,))[0][0]
+                if count > caption_count:
                     t_caption = time.monotonic()
             if t_decision is None:
                 pending = http_get_json(f'{api}/outbox/pending?limit=5')['rows']
@@ -59,6 +72,7 @@ class LatencyTests(unittest.TestCase):
                 t_im = time.monotonic()
 
         bus.user_says(bed.service, 'ou_A', '结束会议')
+        ws.close()
         self.assertIsNotNone(t_caption, 'captions never landed')
         self.assertIsNotNone(t_im, 'reply never delivered')
         table = {

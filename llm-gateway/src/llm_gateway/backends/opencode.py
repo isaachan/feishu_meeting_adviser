@@ -6,6 +6,7 @@ stores, per-decision instance, guardian EOF kill) with gateway error codes.
 import base64
 import fnmatch
 import json
+import logging
 import os
 from pathlib import Path
 import queue
@@ -25,6 +26,7 @@ from .._private import FileLock, LockBusy, private_directory
 from ..decisions import DECISION_SCHEMA, InvalidDecision, validate
 from .base import BackendError
 
+LOG = logging.getLogger(__name__)
 AGENT = 'meeting-decision'
 SNAPSHOT_RULES = (' Only fresh_input_keys may trigger a new decision. '
     'control_sentence_keys must come from fresh_input_keys; reply_sentence_keys must come '
@@ -99,6 +101,7 @@ class OpenCodeBackend:
         self.watch_done = threading.Event()
         self.tools: dict = {}
         self.tool_events: set[str] = set()
+        self.logged_tools: set[str] = set()
 
     # ---- lifecycle ----
 
@@ -374,6 +377,16 @@ class OpenCodeBackend:
                 if not self.tools.get(part.get('tool'), False):
                     raise BackendError('output_invalid')
                 state = part.get('state')
+                if isinstance(state, dict) and state.get('status') in ('completed', 'error'):
+                    call_id = part.get('callID') or part.get('id')
+                    if isinstance(call_id, str) and call_id not in self.logged_tools:
+                        self.logged_tools.add(call_id)
+                        inputs = state.get('input')
+                        name = inputs.get('name') if part['tool'] == 'skill' and isinstance(inputs, dict) else None
+                        if not isinstance(name, str) or not re.fullmatch(r'[a-z0-9-]{1,64}', name):
+                            name = None
+                        LOG.info('tool completed: tool=%s status=%s skill=%s',
+                                 part['tool'], state['status'], name)
                 if (part.get('tool') == 'meeting_nsdp_lookup_release'
                         and isinstance(state, dict) and state.get('status') == 'error'
                         and 'NSDP query failed: authorization_required' in str(state.get('error', ''))):
@@ -454,6 +467,7 @@ class OpenCodeBackend:
                stop_event: threading.Event, metadata: dict) -> dict:
         self.stop_event = stop_event
         self.tool_events.clear()
+        self.logged_tools.clear()
         owner = metadata.get('owner_open_id')
         if owner is not None and (not isinstance(owner, str)
                                   or not re.fullmatch(r'ou_[A-Za-z0-9_-]{1,128}', owner)):
