@@ -5,6 +5,7 @@ model supplies only the release filter. Credentials never appear in arguments
 or in the returned diagnostic on failure.
 """
 import os
+import json
 import re
 import subprocess
 import tempfile
@@ -29,10 +30,28 @@ class NsdpQuery:
         self.run = run
 
     def releases(self, owner: str, release: str) -> str:
-        if not isinstance(owner, str) or not owner:
-            raise QueryError('owner_missing')
         if not isinstance(release, str) or not _RELEASE.fullmatch(release):
             raise QueryError('invalid_release')
+        return self._execute(owner, ['nsdp', 'releases', '--release', release])[:100_000]
+
+    def info(self, owner: str) -> dict:
+        """Fetch the organizer's complete NSDP catalog without truncating JSON."""
+        text = self._execute(owner, ['nsdp', 'info'])
+        if len(text.encode('utf-8')) > 2 * 1024 * 1024:
+            raise QueryError('output_too_large')
+        try:
+            value = json.loads(text)
+        except ValueError:
+            raise QueryError('output_invalid') from None
+        if (not isinstance(value, dict) or not isinstance(value.get('tenants'), list)
+                or not isinstance(value.get('platforms'), list)
+                or any(not isinstance(item, dict) for item in value['platforms'])):
+            raise QueryError('output_invalid')
+        return value
+
+    def _execute(self, owner: str, args: list[str]) -> str:
+        if not isinstance(owner, str) or not owner:
+            raise QueryError('owner_missing')
         token = self.credential_provider(owner)
         if not isinstance(token, str) or not token:
             raise QueryError('authorization_required')
@@ -46,7 +65,7 @@ class NsdpQuery:
             env['NSDP_TOKEN'] = token
             try:
                 result = self.run(
-                    [self.noam_bin, 'nsdp', 'releases', '--release', release],
+                    [self.noam_bin, *args],
                     env=env, capture_output=True, text=True, encoding='utf-8',
                     errors='replace', timeout=self.timeout_s, stdin=subprocess.DEVNULL)
             except subprocess.TimeoutExpired:
@@ -64,4 +83,4 @@ class NsdpQuery:
             raise QueryError('empty')
         if token in text:
             raise QueryError('unavailable')
-        return text[:100_000]
+        return text

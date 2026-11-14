@@ -1,5 +1,6 @@
 """Tests for the credential boundary of the read-only NSDP query."""
 import subprocess
+import json
 import unittest
 from types import SimpleNamespace
 
@@ -43,6 +44,29 @@ class NsdpQueryTests(unittest.TestCase):
         with self.assertRaises(QueryError) as caught:
             NsdpQuery(lambda _: 'secret-token', run=run).releases('ou_a', 'BL1.5.0')
         self.assertEqual(str(caught.exception), 'timeout')
+
+    def test_info_returns_valid_catalog_using_owner_credentials(self):
+        catalog = {'tenants': ['NIO'], 'platforms': [{'versions': ['BL1.7.0']}]}
+        calls = []
+
+        def run(argv, **kwargs):
+            calls.append((argv, kwargs['env']['NSDP_TOKEN']))
+            return SimpleNamespace(returncode=0, stdout=json.dumps(catalog), stderr='')
+
+        result = NsdpQuery(lambda owner: {'ou_a': 'synthetic-token'}[owner], run=run).info('ou_a')
+        self.assertEqual(result, catalog)
+        self.assertEqual(calls, [(['noam', 'nsdp', 'info'], 'synthetic-token')])
+
+    def test_info_rejects_invalid_or_oversized_catalog(self):
+        for stdout, code in [('{', 'output_invalid'),
+                             (json.dumps({'tenants': [], 'platforms': [1]}), 'output_invalid'),
+                             ('x' * (2 * 1024 * 1024 + 1), 'output_too_large')]:
+            with self.subTest(code=code):
+                def run(*args, **kwargs):
+                    return SimpleNamespace(returncode=0, stdout=stdout, stderr='')
+                with self.assertRaises(QueryError) as caught:
+                    NsdpQuery(lambda _: 'synthetic-token', run=run).info('ou_a')
+                self.assertEqual(caught.exception.code, code)
 
 
 if __name__ == '__main__':
