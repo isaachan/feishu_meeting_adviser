@@ -113,6 +113,7 @@ def main(argv=None):
         finally:
             signal.signal(signal.SIGINT, previous)
             expiry_stop.set()
+            sweeper.join(timeout=2)
             scheduler.stop()
             server.server_close()
             catalogs.close()
