@@ -77,6 +77,36 @@ class NsdpIntegrationTests(unittest.TestCase):
         self.assertEqual(AuthHandler.paths, ['/credentials/ou_A/token?provider=nsdp'])
 
     @unittest.skipUnless(os.environ.get('LIVE_OPENCODE_TEST') == '1', 'requires real OpenCode model')
+    def test_real_opencode_selects_version_skill_and_checks_gate(self):
+        backend = OpenCodeBackend(executable='opencode', model='zai-coding-plan/glm-5.3',
+                                  auth_path=None, runtime_base=self.root,
+                                  auth_url=self.auth_url, noam_bin=str(self.noam))
+        original_result = backend._result
+        calls = []
+
+        def observe(message, message_id):
+            for part in message.get('parts', []):
+                if part.get('type') == 'tool':
+                    calls.append((part.get('tool'), part.get('state', {}).get('input')))
+            return original_result(message, message_id)
+
+        backend._result = observe
+        decision = backend.decide(
+            'meeting-snapshot-v1',
+            {'generation': 1,
+             'captions': [{'sentence_key': 's:1',
+                           'text': '会参谋，请核对 BL1.5.0 的 G4 是不是 2026年12月2日？'}],
+             'fresh_input_keys': ['s:1'], 'reply_allowed_keys': ['s:1'],
+             'pending_reply': None, 'sent_replies': []},
+            deadline_seconds=90, stop_event=threading.Event(), metadata={'owner_open_id': 'ou_A'})
+        self.assertTrue(any(name == 'skill' and isinstance(args, dict)
+                            and args.get('name') == 'nsdp-version' for name, args in calls), calls)
+        self.assertTrue(any(name == 'meeting_nsdp_lookup_release' for name, _ in calls), calls)
+        self.assertEqual(AuthHandler.paths, ['/credentials/ou_A/token?provider=nsdp'])
+        self.assertIsNotNone(decision['reply'])
+        self.assertEqual(decision['reply_sentence_keys'], ['s:1'])
+
+    @unittest.skipUnless(os.environ.get('LIVE_OPENCODE_TEST') == '1', 'requires real OpenCode model')
     def test_real_opencode_reports_missing_authorization(self):
         AuthHandler.status = 404
         backend = OpenCodeBackend(executable='opencode', model='zai-coding-plan/glm-5.3',

@@ -37,7 +37,7 @@ def parser():
     serve.add_argument('--opencode-auth', type=Path, default=None,
                        help='opencode auth.json providing the model provider key')
     serve.add_argument('--skills-dir', type=Path, default=None,
-                       help='OpenCode skill directory (default: packaged placeholder)')
+                       help='OpenCode skill directory (default: packaged skills)')
     serve.add_argument('--auth-url', default='http://127.0.0.1:8381',
                        help='internal auth service URL for read-only tools')
     serve.add_argument('--noam-bin', default='noam', help='noam CLI executable for NSDP lookup')
