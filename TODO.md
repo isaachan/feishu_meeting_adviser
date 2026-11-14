@@ -1,5 +1,6 @@
 # 方案 C 待办
 
+- [ ] **T10 · 同一会议复用长期 OpenCode session（待技术验证）**：会议内多次判断复用同一 OpenCode session；先验证多轮上下文与工具结果、并发/取消/重试、重启恢复和长会话压缩，再确定进程隔离与契约迁移。讨论、职责边界和验收要点见 [docs/OPENCODE_MEETING_SESSION.md](docs/OPENCODE_MEETING_SESSION.md)。
 - [x] **T1 · `会议列表` 指令（2026-11-11 立项并完成）**：小A 对 bot 发「会议列表」，bot 经 advisor 用其已授权的日历 token 列出近期会议（含 9 位会议号、时间、是否组织者、是否进行中），供直接复制入会。规则式实现，不进 LLM，不进入会议模型上下文。范围：advisor 新增 `GET /meetings`（复用 FeishuCalendarValidator 读日历），bot 新增指令解析与格式化回复。
 - [ ] **T2 · 闲聊/自由问答（待需求评审）**：与 v1 非目标（消息不进模型上下文）冲突；若要做需 REQUIREMENTS 变更评审（谁可聊、上下文边界、成本）。
 - [x] **T4 · NSDP 组织者 token 通道（2026-11-11 立项并完成）**：场景（已对齐）——NSDP token 仅属于组织者（小A）、仅用于 advisor 听会决策取数，与小A/小B 对话问答无关，小B 全程无感；组织者面全部指令前置硬门（无 token → 409 `authorization_required` NSDP 变体 + 一次性提交链接，每条指令都回新链接）；建会时 advisor 经 noam 子进程按材料线索（版本号/平台码）取版本计划入材料（兼作 token 隐式验活，NSDP 不可达 fail-closed 拒绝入会）；会中 401 → 删凭据 + `nsdp_hold` 挂起该会话全部模型决策 + outbox 周期 DM 小A（默认 5 分钟一条），重新提交后自动恢复。实现：auth v1.1（CONTRACT_AUTH §8：`/token-submissions/start`、HTTPS 表单 `/nsdp/submit`、`?provider=nsdp` 读、invalidate；state 一次性 10min、提交不验活、token 不进 IM/不回显）；advisor（`nsdp.py`、api 门 + prefetch、supervisor hold/nag/resume、schema v2 `sessions.nsdp_hold`）；bot（provider 话术）；test_bed `nsdp='stub'` 模式 + e2e `test_m1_s6_nsdp.py`。单测 auth 39 / advisor 99 / bot 33、integrations 16 全绿。
