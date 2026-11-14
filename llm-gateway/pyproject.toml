@@ -18,6 +18,9 @@ llm-gateway = "llm_gateway.__main__:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+llm_gateway = ["skills/*/SKILL.md"]
+
 [tool.ruff]
 target-version = "py311"
 

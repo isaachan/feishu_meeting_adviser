@@ -53,9 +53,14 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(value)
         if self.path=='/agent':
             rules=[{'permission':'*','pattern':'*','action':'deny'}]
+            if 'meeting_nsdp' in config['mcp']:
+                rules.extend([{'permission':'skill','pattern':'*','action':'allow'},
+                              {'permission':'meeting_nsdp_*','pattern':'*','action':'allow'}])
             if mode=='permissions':rules.append({'permission':'bash','pattern':'*','action':'allow'})
             return self.send([{'name':'meeting-decision','permission':rules}])
         if self.path=='/mcp':
+            if 'meeting_nsdp' in config['mcp']:
+                return self.send({'meeting_nsdp':{'status':'connected'}})
             return self.send({'synthetic':{'status':'connected'}} if mode=='mcp' else {})
         if self.path=='/provider':
             if mode=='slow-provider':
@@ -93,6 +98,11 @@ class Handler(BaseHTTPRequestHandler):
             if mode=='incomplete':info['time']={}
             item={'info':info,'parts':parts}
             user={'info':{'role':'user','id':'msg_user','sessionID':'ses_fake1'},'parts':[]}
+            if mode=='skill-tool':
+                tool_info=info.copy()
+                tool_info['id']='msg_tool'
+                tool_part={'type':'tool','tool':'skill','state':{'status':'completed'}}
+                return self.send([user,{'info':tool_info,'parts':[tool_part]},item])
             return self.send([user,item,item] if mode=='multiple' else [user,item])
         return self.send({},404)
 
@@ -108,7 +118,12 @@ class Handler(BaseHTTPRequestHandler):
             assert body['agent']=='meeting-decision'
             assert 'format' not in body
             assert 'additionalProperties' in config['agent']['meeting-decision']['prompt']
-            assert all(enabled is False for enabled in body['tools'].values())
+            if 'meeting_nsdp' in config['mcp']:
+                assert body['tools']['skill'] is True
+                assert body['tools']['meeting_nsdp_lookup_release'] is True
+                assert body['tools']['bash'] is False
+            else:
+                assert all(enabled is False for enabled in body['tools'].values())
             return self.send(None,204)
         return self.send(True)
 

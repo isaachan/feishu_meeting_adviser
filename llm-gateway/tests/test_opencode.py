@@ -35,6 +35,13 @@ class OpenCodeBackendTests(unittest.TestCase):
         self.assertEqual((decision['reply'], decision['reply_sentence_keys']),
                          ('SYNTHETIC GLM REPLY', ['s:1']))
 
+    def test_skill_tool_call_followed_by_final_decision(self):
+        backend = self.backend('skill-tool')
+        decision = backend.decide('role', {'fresh_input_keys': ['s:1']},
+                                  deadline_seconds=8, stop_event=threading.Event(),
+                                  metadata={'owner_open_id': 'ou_A'})
+        self.assertIsNone(decision['reply'])
+
     def test_invalid_output_and_tool_requests_map_to_output_invalid(self):
         for mode in ('invalid', 'tool'):
             with self.subTest(mode=mode):
