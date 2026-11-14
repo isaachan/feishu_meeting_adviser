@@ -38,19 +38,24 @@ def main():
         if sessions and not args.drain:
             raise RuntimeError(f'{len(sessions)} active/draining sessions; retry with --drain')
         if args.drain:
-            # Prevent new bot-initiated meetings during drain; restart on failure.
-            systemctl('stop', 'meeting-advisor@bot.service')
-            try:
+            # Keep bot alive while pending outbox messages drain.
+            deadline = time.monotonic() + args.timeout
+            while sessions:
                 for session in sessions:
                     api('/admin/sessions/' + session['session_id'] + '/end', 'POST')
-                deadline = time.monotonic() + args.timeout
-                while active():
-                    if time.monotonic() >= deadline:
-                        raise RuntimeError('drain timed out; services remain running')
-                    time.sleep(2)
-            except Exception:
-                systemctl('start', 'meeting-advisor@bot.service', check=False)
-                raise
+                if time.monotonic() >= deadline:
+                    raise RuntimeError('drain timed out; services remain running')
+                time.sleep(2)
+                sessions = active()
+        # Close the join race before stopping dependencies. If a meeting arrived,
+        # restore bot and fail rather than interrupt it.
+        systemctl('stop', 'meeting-advisor@bot.service')
+        try:
+            if active():
+                raise RuntimeError('new session appeared during shutdown; retry')
+        except Exception:
+            systemctl('start', 'meeting-advisor@bot.service', check=False)
+            raise
     for name in SERVICES:
         systemctl('stop', f'meeting-advisor@{name}.service')
     print('Production services stopped')

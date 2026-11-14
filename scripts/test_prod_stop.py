@@ -23,12 +23,13 @@ class StopTests(unittest.TestCase):
     @patch.object(stop, 'systemctl')
     @patch.object(stop.subprocess, 'run')
     @patch.object(stop, 'api')
+    @patch.object(stop.time, 'sleep')
     @patch('sys.argv', ['prod-stop', '--drain'])
-    def test_drains_before_stopping(self, api, run, ctl):
+    def test_drains_before_stopping(self, sleep, api, run, ctl):
         run.return_value.returncode = 0
         api.side_effect = [
             {'sessions': [{'session_id': 's-1', 'phase': 'recording'}]},
-            {'phase': 'draining'}, {'sessions': []},
+            {'phase': 'draining'}, {'sessions': []}, {'sessions': []},
         ]
         stop.main()
         self.assertEqual(api.call_args_list[1].args, ('/admin/sessions/s-1/end', 'POST'))
@@ -39,13 +40,13 @@ class StopTests(unittest.TestCase):
     @patch.object(stop.subprocess, 'run')
     @patch.object(stop, 'api')
     @patch('sys.argv', ['prod-stop', '--drain', '--timeout', '0'])
-    def test_timeout_restarts_bot(self, api, run, ctl):
+    def test_timeout_leaves_bot_running(self, api, run, ctl):
         run.return_value.returncode = 0
         sessions = {'sessions': [{'session_id': 's-1', 'phase': 'draining'}]}
         api.side_effect = [sessions, {'phase': 'draining'}, sessions]
         with self.assertRaisesRegex(RuntimeError, 'timed out'):
             stop.main()
-        self.assertEqual(ctl.call_args_list[-1].args, ('start', 'meeting-advisor@bot.service'))
+        ctl.assert_not_called()
 
 
 if __name__ == '__main__':
