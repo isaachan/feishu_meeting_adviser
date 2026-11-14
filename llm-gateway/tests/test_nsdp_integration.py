@@ -3,6 +3,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -113,6 +114,41 @@ class NsdpIntegrationTests(unittest.TestCase):
         self.assertEqual(AuthHandler.paths, ['/credentials/ou_A/token?provider=nsdp'])
         self.assertIsNotNone(decision['reply'])
         self.assertEqual(decision['reply_sentence_keys'], ['s:1'])
+
+    @unittest.skipUnless(os.environ.get('LIVE_OPENCODE_TEST') == '1', 'requires real OpenCode model')
+    def test_unaddressed_version_question_and_incorrect_claim(self):
+        for text in ('BL1.5.0 的 G4 是哪一天？',
+                     'BL1.5.0 的 G4 是 2026 年 12 月 2 日。'):
+            with self.subTest(text=text):
+                AuthHandler.paths = []
+                backend = OpenCodeBackend(executable='opencode', model='zai-coding-plan/glm-5.3',
+                                          auth_path=None, runtime_base=self.root,
+                                          auth_url=self.auth_url, noam_bin=str(self.noam))
+                original_result = backend._result
+                outputs = []
+
+                def observe(message, message_id):
+                    for part in message.get('parts', []):
+                        state = part.get('state', {})
+                        if (part.get('type') == 'tool'
+                                and part.get('tool') == 'meeting_nsdp_lookup_release'
+                                and state.get('status') == 'completed'):
+                            outputs.append(state.get('output', ''))
+                    return original_result(message, message_id)
+
+                backend._result = observe
+                decision = backend.decide(
+                    'meeting-snapshot-v1',
+                    {'generation': 1, 'captions': [{'sentence_key': 's:1', 'text': text}],
+                     'fresh_input_keys': ['s:1'], 'reply_allowed_keys': ['s:1'],
+                     'pending_reply': None, 'sent_replies': []},
+                    deadline_seconds=90, stop_event=threading.Event(),
+                    metadata={'owner_open_id': 'ou_A'})
+                self.assertIn('/credentials/ou_A/token?provider=nsdp', AuthHandler.paths)
+                self.assertTrue(any('2026-12-01' in str(output) for output in outputs), outputs)
+                self.assertIsNotNone(decision['reply'])
+                self.assertEqual(decision['reply_sentence_keys'], ['s:1'])
+                self.assertRegex(decision['reply'], re.compile(r'(?:12\s*[月./-]\s*0?1|十二月一)'))
 
     @unittest.skipUnless(os.environ.get('LIVE_OPENCODE_TEST') == '1', 'requires real OpenCode model')
     def test_live_catalog_helps_identify_asr_version(self):
