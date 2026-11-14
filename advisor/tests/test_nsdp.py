@@ -87,7 +87,8 @@ class NsdpApiBase(unittest.TestCase):
         self.nsdp = NsdpService(self.auth, self.client, self.store)
         self.api = AdvisorApi(self.store, self.spy, auth_client=self.auth,
                               calendar_validator=self.calendar,
-                              ingest_url='ws://127.0.0.1:8400/ingest', nsdp=self.nsdp)
+                              ingest_url='ws://127.0.0.1:8400/ingest', nsdp=self.nsdp,
+                              legacy_nsdp=True)
         self.server = build_api_server(self.api, host='127.0.0.1', port=0)
         self.port = self.server.server_address[1]
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
@@ -133,6 +134,15 @@ class NsdpApiBase(unittest.TestCase):
 
 
 class NsdpGateTests(NsdpApiBase):
+    def test_normal_join_does_not_require_or_prefetch_nsdp(self):
+        self.api.legacy_nsdp = False
+        self.auth.invalidated.append('ou_A')
+        status, body = self.join()
+        self.assertEqual(status, 200)
+        self.assertTrue(body['session_id'].startswith('s-'))
+        self.assertEqual(self.client.calls, [])
+        self.assertEqual(self.store.materials(body['session_id'])['documents'], [])
+
     def test_join_blocked_without_nsdp_token(self):
         self.auth.mode = 'missing'
         status, body = self.post_error('/sessions',
@@ -285,7 +295,7 @@ class SupervisorHoldTests(unittest.TestCase):
             ingest_activity=lambda: {}, close_ingest=lambda _sid: None,
             source_connected=lambda *_: True,
             clock=lambda: self.now[0], monotonic=lambda: self.now[0],
-            nsdp=self.nsdp)
+            nsdp=self.nsdp, legacy_nsdp=True)
 
     def _create_session(self):
         session = self.store.create_session(
@@ -329,6 +339,17 @@ class SupervisorHoldTests(unittest.TestCase):
         document = self.store.materials(session_id)['documents'][0]
         self.assertEqual(document['kind'], 'nsdp')
         self.assertEqual(document['text'], '刷新后的版本计划')
+
+    def test_normal_mode_does_not_prefetch_or_block_on_old_hold(self):
+        session_id = self._create_session()
+        self.store.set_nsdp_hold(session_id, True)
+        self._push_caption(session_id, '新字幕')
+        supervisor = self._make_supervisor()
+        supervisor.legacy_nsdp = False
+        supervisor.start_session(session_id)
+        self.addCleanup(supervisor.stop, timeout=2)
+        self.assertTrue(self._wait(lambda: self._job_rows(session_id) > 0))
+        self.assertEqual(self.client.calls, [])
 
     def test_hold_nag_resume_cycle(self):
         session_id = self._create_session()

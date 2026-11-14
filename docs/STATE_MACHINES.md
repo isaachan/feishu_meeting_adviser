@@ -1,5 +1,7 @@
 # 状态机规格 · 订阅与会话（阶段 0.6 冻结）
 
+> 2026-11-14 修订：NSDP 授权不再触发会议判断 hold；旧的 `nsdp_hold` 会在会话恢复时清除。查询授权问题通过组织者通知处理，不改变会话 phase 或订阅状态。
+
 本文是 advisor 实现与测试的对照规格（带迁移约束与错误码），语义冻结自 [REQUIREMENTS](REQUIREMENTS.md) S3/S5 与 [ARCHITECTURE](ARCHITECTURE.md) 4.2/4.3。API 错误码见 [CONTRACT_ADVISOR_API](CONTRACT_ADVISOR_API.md) §1.1；ingest 侧错误码见 [CONTRACT_RECORDER_STREAM](CONTRACT_RECORDER_STREAM.md) §3.4。变更需同步本文与两侧契约。
 
 ## 1. 订阅状态机

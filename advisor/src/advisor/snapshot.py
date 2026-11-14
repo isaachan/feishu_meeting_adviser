@@ -94,6 +94,10 @@ class SnapshotBuilder:
         }
         material = self.data.materials(session_id)
         if material and material['state'] != 'disabled':
+            # Old sessions may contain advisor-prefetched NSDP briefs; queries
+            # now happen on demand and stale prefetches are not meeting facts.
+            material['documents'] = [doc for doc in material['documents']
+                                     if doc.get('kind') != 'nsdp']
             result['meeting_context'] = material
 
         while len(encode(result)) + role_characters > settings.context_characters:

@@ -74,8 +74,8 @@ start auth    8381 env AUTH_FEISHU_APP_ID="$AUTH_FEISHU_APP_ID" \
 start stt     8393 "$VENV/bin/stt-server" serve --host 0.0.0.0 --port 8392 \
   --health-port 8393 --auth none --model-dir "$STT_MODEL_DIR"
 
-start gateway 8377 "$VENV/bin/llm-gateway" serve --host 0.0.0.0 --port 8377 \
-  --database "$DATA/gateway.sqlite3"
+start gateway 8377 "$VENV/bin/llm-gateway" serve --host 127.0.0.1 --port 8377 \
+  --database "$DATA/gateway.sqlite3" --noam-bin "$NOAM_BIN"
 
 start advisor 8380 "$VENV/bin/advisor" serve --data-dir "$DATA/advisor" \
   --api-host 0.0.0.0 --api-port 8380 --ingest-port 8400 \

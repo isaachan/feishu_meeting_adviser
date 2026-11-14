@@ -71,7 +71,8 @@ class AdvisorApi:
 
     def __init__(self, store: SessionStore, supervisor, *,
                  auth_client, calendar_validator, ingest_url, host='127.0.0.1',
-                 clock=time.time, nsdp=None, nsdp_join_budget_s=12.0):
+                 clock=time.time, nsdp=None, nsdp_join_budget_s=12.0,
+                 legacy_nsdp=False):
         self.store = store
         self.supervisor = supervisor
         self.auth = auth_client
@@ -80,6 +81,7 @@ class AdvisorApi:
         self.host = host
         self.clock = clock
         self.nsdp = nsdp
+        self.legacy_nsdp = legacy_nsdp
         self.nsdp_join_budget_s = nsdp_join_budget_s
         self._gui_logins: dict = {}
         self._gui_lock = threading.Lock()
@@ -89,7 +91,7 @@ class AdvisorApi:
 
         小B (subscriber surface) never passes through here.
         """
-        if self.nsdp is None:
+        if self.nsdp is None or not self.legacy_nsdp:
             return
         try:
             self.nsdp.require_token(owner)
@@ -146,7 +148,7 @@ class AdvisorApi:
             raise ApiError(409, exc.code, 'calendar validation failed') from None
 
         nsdp_text = ''
-        if self.nsdp is not None:
+        if self.nsdp is not None and self.legacy_nsdp:
             try:
                 # Short join budget: degrade fast — the supervisor backfills.
                 nsdp_text = self.nsdp.fetch(owner, binding.get('description') or '',

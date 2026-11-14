@@ -1,5 +1,7 @@
 # Advisor 内部 API 契约（bot ↔ advisor）
 
+> **v1.5（2026-11-14）**：正常运行不再以 NSDP 凭据作为组织者接口或会议判断的前置条件，也不在建会时预取 NSDP。仅当 gateway 的受控查询工具报告授权缺失或失效时，经 outbox 通知组织者；会议其余判断继续。`nsdp_hold` 为兼容保留字段，正常运行会清除旧 hold。以下早期版本中相反的 NSDP 硬门描述以本条为准。
+
 状态：v1 于 2026-11-10 冻结（阶段 0.3）；**v1.1（2026-11-11）** 新增 NSDP 组织者凭据门（`authorization_required` 增加 `provider`/`submit_url` 变体与 `nsdp_unavailable`；组织者面全部指令前置该门；`GET /sessions/{id}/status` 响应新增 `nsdp_hold`）。**v1.2（2026-11-12）** 新增 §8 GUI 面（`/gui/login/start`·`/gui/login/poll`·`/gui/sessions`·`/gui/logout` + devices 表；经 HTTPS 反代对 laptop GUI 暴露，成为第三个对外入口，见 DEPLOYMENT §2）；**v1.2a（2026-11-13，T7）** NSDP 取数降级语义：`nsdp_unavailable` 不再拒绝入会（见 §1.1）。**v1.3（2026-11-13）** 新增 §9 运维面（admin-site：全量会话列表 + 手工停止）；**v1.4（2026-11-13）** §9.1 响应扩展身份目录与订阅列表（`owner_name`/`owner_email`/`subscriptions[]`，依赖 CONTRACT_AUTH v1.3）。服务端为 `advisor`（会话域 + 一次性操作），客户端为 `bot`（§1–§7）、`macos-gui`（§8）与 `admin-site`（§9）。变更需 bump API 版本并同步两侧实现与测试。上游设计：[ARCHITECTURE](ARCHITECTURE.md) D4/D6、[macos-gui/DESIGN](../macos-gui/DESIGN.md)；outbox 语义沿用旧 advisor（channel=`local`/`im`、uuid 幂等、uncertain 人工裁决）。
 
 ## 1. 传输与通用约定

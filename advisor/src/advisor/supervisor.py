@@ -27,7 +27,7 @@ class SessionSupervisor:
     def __init__(self, store: SessionStore, settings: AdviserSettings, *,
                  backend_factory, ingest_activity=None, close_ingest=None,
                  source_connected=None, clock=time.time, monotonic=time.monotonic,
-                 nsdp=None):
+                 nsdp=None, legacy_nsdp=False):
         self.store = store
         self.settings = settings
         self.backend_factory = backend_factory
@@ -37,6 +37,7 @@ class SessionSupervisor:
         self.clock = clock
         self.monotonic = monotonic
         self.nsdp = nsdp
+        self.legacy_nsdp = legacy_nsdp
         self._nsdp_next: dict[str, float] = {}
         self._nsdp_last_nag: dict[str, float] = {}
         self._stop = threading.Event()
@@ -97,11 +98,15 @@ class SessionSupervisor:
                     session = self.store.require_session(session_id)
                 except StorageError:
                     return
+                if not self.legacy_nsdp and session['nsdp_hold']:
+                    self.store.set_nsdp_hold(session_id, False, now=self.clock())
+                    session = self.store.require_session(session_id)
                 phase = session['phase']
                 if phase == 'ended':
                     return
                 now = self.clock()
-                self._nsdp_maintenance(session_id, session, now)
+                if self.legacy_nsdp:
+                    self._nsdp_maintenance(session_id, session, now)
                 result = executor.take_finished()
                 if result is not None:
                     self._apply_result(result, now, executor.diagnostic_metadata())
@@ -132,7 +137,7 @@ class SessionSupervisor:
 
     def _launch(self, executor, session_id, role_version, now):
         session = self.store.session(session_id)
-        if session is not None and session['nsdp_hold']:
+        if self.legacy_nsdp and session is not None and session['nsdp_hold']:
             return  # hard gate: no model decisions while NSDP authorization is missing
         job = self.store.prepare_job(session_id, self.settings, role_version, now=now)
         if job is None:
