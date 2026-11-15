@@ -1,0 +1,23 @@
+name: Windows GUI build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - name: Build Windows app
+        shell: powershell
+        run: ./windows-gui/build.ps1
+      - name: Upload Windows application
+        uses: actions/upload-artifact@v4
+        with:
+          name: MeetingAdvisor-windows-x64
+          path: windows-gui/dist/MeetingAdvisor/
+          if-no-files-found: error
