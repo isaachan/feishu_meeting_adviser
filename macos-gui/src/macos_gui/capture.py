@@ -7,6 +7,7 @@ stats() and notices completion via state -> 'stopped'.
 """
 import threading
 import time
+import sys
 from pathlib import Path
 
 from recorder.audio import CaptureSession
@@ -19,9 +20,16 @@ ARGS_KEYS = ('session', 'event', 'url', 'token')
 
 
 def default_source_factory(mic_enabled: bool):
-    """Real sources (mac first): SCK loopback lazily imported, optional mic."""
+    """Select platform sources; all session and uplink logic remains shared."""
+    if sys.platform == 'win32':
+        from recorder.audio.windows_loopback import WindowsLoopbackSource
+        from recorder.audio.windows_mic import WindowsMicSource
+        sources: list[AudioSource] = [WindowsLoopbackSource()]
+        if mic_enabled:
+            sources.append(WindowsMicSource())
+        return sources
     from recorder.audio.sck_capture import SwiftLoopbackSource
-    sources: list[AudioSource] = [SwiftLoopbackSource('loopback')]
+    sources = [SwiftLoopbackSource('loopback')]
     if mic_enabled:
         sources.append(MicSource('mic'))
     return sources
@@ -99,11 +107,14 @@ class CaptureJob:
 
         def runner():
             drainer = threading.Thread(target=drain, daemon=True, name='uplink-pump')
+            started_uplinks = []
+            failed = None
             try:
                 session.start()
                 drainer.start()
                 for uplink in uplinks:
                     uplink.start()
+                    started_uplinks.append(uplink)
                 with self._lock:
                     if self.state == 'running':
                         self.state = 'stopping' if self._stop.is_set() else 'running'
@@ -111,35 +122,41 @@ class CaptureJob:
                     if all(uplink.stopped.is_set() for uplink in uplinks):
                         break
                     time.sleep(self._poll_interval)
+            except Exception as exc:
+                failed = str(exc)
             finally:
                 if self._interrupted.is_set():
-                    for uplink in uplinks:
+                    for uplink in started_uplinks:
                         uplink.stop_interrupt()
                 else:
-                    wait_capture_drained()
-                    for uplink in uplinks:
+                    if drainer.is_alive():
+                        wait_capture_drained()
+                    for uplink in started_uplinks:
                         uplink.stop_clean()
-                for uplink in uplinks:
+                for uplink in started_uplinks:
                     uplink.join(timeout=15)
                 self._stop.set()
-                drainer.join(timeout=2)
+                if drainer.ident is not None:
+                    drainer.join(timeout=2)
                 summary = session.stop()
-                self._record_result(summary)
+                self._record_result(summary, error=failed)
 
         threading.Thread(target=runner, daemon=True, name='capture-runner').start()
 
-    def _record_result(self, summary):
+    def _record_result(self, summary, error=None):
         sources = {}
         for uplink in self._uplinks:
             sources[uplink.source_id] = uplink.stats() | {
                 'exit_code': uplink.exit_code, 'exit_reason': uplink.exit_reason}
-        if self._interrupted.is_set():
+        if error:
+            exit_code = EXIT_CONN
+        elif self._interrupted.is_set():
             exit_code = EXIT_INTERRUPT
         else:
             failed = [u.exit_code for u in self._uplinks if u.exit_code != 0]
             exit_code = failed[0] if failed else EXIT_OK
         self.result = {'session_id': self.args['session'], 'exit_code': exit_code,
-                       'sources': sources, 'summary': summary}
+                       'sources': sources, 'summary': summary, 'error': error}
         self.state = 'stopped'
         self._finished.set()
 
@@ -162,5 +179,9 @@ class CaptureJob:
             rows[uplink.source_id] = uplink.stats() | {
                 'connected': not uplink.stopped.is_set(),
                 'exit_code': uplink.exit_code, 'exit_reason': uplink.exit_reason}
+            if session is not None:
+                source = session.sources.get(uplink.source_id)
+                if source is not None and callable(getattr(source, 'stats', None)):
+                    rows[uplink.source_id]['capture'] = source.stats()
         return {'state': self.state, 'session_id': self.args.get('session'),
                 'sources': rows}

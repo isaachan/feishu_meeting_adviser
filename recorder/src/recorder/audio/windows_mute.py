@@ -4,6 +4,7 @@ Unknown and stale readings are deliberately not interpreted as unmuted.
 This module only detects state; the capture source must enforce the gate.
 """
 import ctypes
+from ctypes import wintypes
 import os
 import threading
 import time
@@ -22,12 +23,19 @@ def _process_name(pid):
         return ''
     try:
         kernel = ctypes.windll.kernel32
+        kernel.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        kernel.OpenProcess.restype = wintypes.HANDLE
+        kernel.QueryFullProcessImageNameW.argtypes = (wintypes.HANDLE, wintypes.DWORD,
+                                                      wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD))
+        kernel.QueryFullProcessImageNameW.restype = wintypes.BOOL
+        kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+        kernel.CloseHandle.restype = wintypes.BOOL
         handle = kernel.OpenProcess(0x1000, False, pid)
         if not handle:
             return ''
         try:
             buf = ctypes.create_unicode_buffer(1024)
-            size = ctypes.c_ulong(len(buf))
+            size = wintypes.DWORD(len(buf))
             if kernel.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
                 return buf.value.rsplit('\\', 1)[-1].lower()
         finally:

@@ -89,6 +89,15 @@ class WindowsMicTests(unittest.TestCase):
         self.assertTrue(old.closed)
         self.assertEqual(self.source.stats()['device'], 'Second')
 
+    def test_unknown_produces_synthetic_silence_without_opening_device(self):
+        self.set_state(False, None)
+        self.now[0] += 0.2
+        self.source._tick()
+        frames = [item for item in self.items if isinstance(item, AudioFrame)]
+        self.assertEqual(len(frames), 1)
+        self.assertEqual(set(frames[0].data), {0})
+        self.assertFalse(self.backend.streams)
+
 
 if __name__ == '__main__':
     unittest.main()

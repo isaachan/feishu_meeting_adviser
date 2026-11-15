@@ -9,6 +9,7 @@ import struct
 import threading
 import time
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -152,7 +153,26 @@ class CaptureJobTests(unittest.TestCase):
     def test_missing_args_rejected(self):
         with self.assertRaises(ValueError):
             CaptureJob({'session': 's', 'url': 'ws://x/ingest'},
-                       out_root=self.out_root, sources=[FakeSource('loopback')])
+                        out_root=self.out_root, sources=[FakeSource('loopback')])
+
+    def test_failed_source_start_is_reported_and_finishes(self):
+        class BrokenSource(FakeSource):
+            def start(self, sink):
+                raise RuntimeError('source unavailable')
+
+        args = dict(ARGS, url=f'ws://127.0.0.1:{self.server.port}/ingest')
+        job = CaptureJob(args, out_root=self.out_root, sources=[BrokenSource('loopback')])
+        job.start()
+        self.assertTrue(job.wait(timeout=5))
+        self.assertEqual(job.result['exit_code'], 3)
+        self.assertIn('source unavailable', job.result['error'])
+
+    def test_windows_selects_platform_sources(self):
+        from macos_gui.capture import default_source_factory
+        with patch('macos_gui.capture.sys.platform', 'win32'):
+            sources = default_source_factory(True)
+        self.assertEqual([type(source).__name__ for source in sources],
+                         ['WindowsLoopbackSource', 'WindowsMicSource'])
 
 
 if __name__ == '__main__':

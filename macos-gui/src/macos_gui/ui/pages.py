@@ -4,11 +4,12 @@ Pages are dumb views: they emit signals and expose update methods; navigation
 and business wiring live in app.Controller.
 """
 import io
+import sys
 import time
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import (QHBoxLayout, QLabel, QLineEdit, QListWidget,
+from PySide6.QtWidgets import (QCheckBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
                                QListWidgetItem, QPushButton, QVBoxLayout, QWidget)
 
 
@@ -99,6 +100,9 @@ class ListPage(QWidget):
         self.session_list = QListWidget()
         self.session_list.itemSelectionChanged.connect(self._update_buttons)
         layout.addWidget(self.session_list)
+        self.mic_checkbox = QCheckBox('采集本机麦克风（跟随飞书静音状态）')
+        self.mic_checkbox.setVisible(sys.platform == 'win32')
+        layout.addWidget(self.mic_checkbox)
         footer = QHBoxLayout()
         self.status_label = QLabel('')
         footer.addWidget(self.status_label)
@@ -116,6 +120,10 @@ class ListPage(QWidget):
     def _emit_start(self):
         session = self._selected_session()
         if session is not None:
+            if sys.platform == 'win32':
+                session = dict(session)
+                session['recorder_command_args'] = dict(session['recorder_command_args'])
+                session['recorder_command_args']['mic'] = self.mic_checkbox.isChecked()
             self.start_capture.emit(session)
 
     def _update_buttons(self):
@@ -168,7 +176,8 @@ class MonitorPage(QWidget):
         self.rows_layout = QVBoxLayout()
         layout.addLayout(self.rows_layout)
         layout.addStretch(1)
-        self.hint_label = QLabel('关闭窗口不会停止采集（从 Dock 图标重新打开）。')
+        self.hint_label = QLabel('采集中请保持窗口打开。' if sys.platform == 'win32' else
+                                 '关闭窗口不会停止采集（从 Dock 图标重新打开）。')
         self.hint_label.setStyleSheet('color: #888')
         layout.addWidget(self.hint_label)
         footer = QHBoxLayout()
@@ -212,4 +221,16 @@ class MonitorPage(QWidget):
                 f"{source_id}：{connected} · 已发 {row.get('sent_frames', 0)} · "
                 f"已确认 {row.get('acked_sequence', 0)} · 缓冲 {row.get('buffered', 0)} · "
                 f"重连 {row.get('reconnects', 0)}"
-                + (f" · {reason}" if reason else ''))
+                + (f" · {reason}" if reason else '')
+                + self._capture_status(source_id, row.get('capture')))
+
+    @staticmethod
+    def _capture_status(source_id, capture):
+        if not capture:
+            return ''
+        if source_id == 'mic':
+            state = {'unknown': '飞书状态未知，麦克风已暂停', 'muted': '飞书已静音，麦克风已暂停',
+                     'open': '飞书已开麦', 'no_device': '无默认麦克风',
+                     'error': '麦克风不可用'}.get(capture.get('state'), '')
+            return ' · ' + ' '.join(filter(None, (state, capture.get('device'), capture.get('detail'))))
+        return ' · ' + str(capture.get('state', ''))

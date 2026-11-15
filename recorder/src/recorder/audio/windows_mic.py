@@ -87,6 +87,8 @@ class WindowsMicSource(AudioSource):
         self._candidate = None
         self._candidate_since = 0.0
         self._status = {'state': 'unknown', 'detail': '等待飞书麦克风状态', 'device': None}
+        self._finished = False
+        self._silence_at = None
 
     def start(self, sink):
         self._sink = sink
@@ -155,13 +157,39 @@ class WindowsMicSource(AudioSource):
                 self._active = True
                 self._buffer = None
                 self._position = 0.0
+                self._silence_at = None
                 self._emit('gap_end')
             stream.start()
         except Exception:
             self._close_stream()
             raise
 
+    def _silence(self):
+        now = self.clock()
+        with self._lock:
+            if self._active:
+                self._silence_at = None
+                return
+            if self._silence_at is None:
+                self._silence_at = now
+                return
+            count = int((now - self._silence_at) * self.rate)
+            if count < 1600:
+                return
+            count = min(count, self.rate)
+            self._silence_at += count / self.rate
+            self._seq += 1
+            self._sink(AudioFrame(self.source_id, self._seq, self._offset,
+                                  self.rate, 1, b'\0' * (count * 4), now))
+            self._offset += count
+
     def _tick(self):
+        try:
+            self._update_device()
+        finally:
+            self._silence()
+
+    def _update_device(self):
         state = self.detector.get_state()
         allowed = state.get('known') and state.get('muted') is False and not self._manual_pause
         if not allowed:
@@ -222,8 +250,12 @@ class WindowsMicSource(AudioSource):
         self._manual_pause = False
 
     def stop(self):
+        if self._finished:
+            return
+        self._finished = True
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=5)
         self.detector.stop()
-        self._emit('source_stopped')
+        if self._sink is not None:
+            self._emit('source_stopped')

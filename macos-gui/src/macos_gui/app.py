@@ -5,6 +5,7 @@ Synchronous core methods (do_*) are headless-testable; their async wrappers
 make the UI responsive. HTTP calls block only inside the worker thread.
 """
 import threading
+import sys
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QTimer, Signal
@@ -289,7 +290,10 @@ class MainWindow(QMainWindow):
         """D7：采集中关窗 = 隐藏窗口继续采集；无采集 = 正常退出。"""
         if self.controller.capturing:
             event.ignore()
-            self.hide()
+            if sys.platform == 'win32':
+                self.monitor_page.set_state('请先停止采集，再关闭窗口')
+            else:
+                self.hide()
         else:
             event.accept()
 
@@ -338,6 +342,8 @@ class MainWindow(QMainWindow):
         notes = {0: '采集已停止（干净收尾）', 2: '会话已失效，请回飞书重新入会',
                  3: '连接不可恢复，采集已停止', 130: '采集已中断'}
         note = notes.get(code) if isinstance(code, int) else None
+        if isinstance(result, dict) and result.get('error'):
+            note = f"采集启动失败：{result['error']}"
         if note is None:
             note = '采集已结束'
         self.list_page.set_status(note)

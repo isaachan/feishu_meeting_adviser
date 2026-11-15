@@ -5,6 +5,7 @@ install them via the dev extra; core-logic tests never require Qt).
 """
 import os
 import unittest
+from unittest.mock import patch
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
@@ -140,6 +141,19 @@ class AppSmokeTests(unittest.TestCase):
         pixmap = qr_pixmap('https://accounts.feishu.cn/open-apis/authen/v1/authorize?x=1')
         self.assertFalse(pixmap.isNull())
         self.assertGreater(pixmap.width(), 100)
+
+    def test_windows_mic_selection_is_explicit_and_preserves_server_args(self):
+        with patch('macos_gui.ui.pages.sys.platform', 'win32'):
+            page = ListPage()
+            snapshot = self.client.sessions_payload
+            page.update_sessions(snapshot)
+            page.session_list.setCurrentRow(0)
+            selected = []
+            page.start_capture.connect(selected.append)
+            page.mic_checkbox.setChecked(True)
+            page._emit_start()
+            self.assertTrue(selected[0]['recorder_command_args']['mic'])
+            self.assertFalse(snapshot['sessions'][0]['recorder_command_args']['mic'])
 
 
 class ScriptedClient:
