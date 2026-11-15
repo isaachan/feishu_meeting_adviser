@@ -174,6 +174,22 @@ class CaptureJobTests(unittest.TestCase):
         self.assertEqual([type(source).__name__ for source in sources],
                          ['WindowsLoopbackSource', 'WindowsMicSource'])
 
+    def test_source_final_frame_is_drained_before_stream_end(self):
+        class FinalFrameSource(FakeSource):
+            def stop(self):
+                if not self.stopped:
+                    self.push_frames(4)
+                super().stop()
+
+        args = dict(ARGS, url=f'ws://127.0.0.1:{self.server.port}/ingest')
+        source = FinalFrameSource('loopback')
+        job = CaptureJob(args, out_root=self.out_root, sources=[source])
+        job.start()
+        self.assertTrue(wait_until(lambda: self.server.connections >= 1))
+        job.request_stop()
+        self.assertTrue(job.wait(timeout=15))
+        self.assertEqual(self.server.stream_ends.get('loopback'), 1)
+
 
 if __name__ == '__main__':
     unittest.main()

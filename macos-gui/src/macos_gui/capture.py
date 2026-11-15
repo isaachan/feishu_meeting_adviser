@@ -80,6 +80,7 @@ class CaptureJob:
                 speaker=self.args.get('speaker') if source.source_id == 'mic' else None))
         self._session, self._uplinks = session, uplinks
         subscriber = session.subscribe()
+        pump_stop = threading.Event()
         self.state = 'running'
 
         def pump(item):
@@ -90,7 +91,7 @@ class CaptureJob:
                     uplink.offer(item)
 
         def drain():
-            while not self._stop.is_set():
+            while not pump_stop.is_set():
                 try:
                     pump(subscriber.get(timeout=0.1))
                 except Exception:  # queue.Empty
@@ -125,6 +126,14 @@ class CaptureJob:
             except Exception as exc:
                 failed = str(exc)
             finally:
+                # Stop the hardware and drain CaptureSession writers before
+                # stream_end. Otherwise a mic can keep recording while the
+                # network shutdown waits, and its final frames are lost.
+                try:
+                    summary = session.stop()
+                except Exception as exc:
+                    summary = {}
+                    failed = failed or str(exc)
                 if self._interrupted.is_set():
                     for uplink in started_uplinks:
                         uplink.stop_interrupt()
@@ -136,9 +145,9 @@ class CaptureJob:
                 for uplink in started_uplinks:
                     uplink.join(timeout=15)
                 self._stop.set()
+                pump_stop.set()
                 if drainer.ident is not None:
                     drainer.join(timeout=2)
-                summary = session.stop()
                 self._record_result(summary, error=failed)
 
         threading.Thread(target=runner, daemon=True, name='capture-runner').start()

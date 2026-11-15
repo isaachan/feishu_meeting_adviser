@@ -142,8 +142,12 @@ class WindowsMicSource(AudioSource):
         if stream is not None:
             try:
                 stream.stop()
-            finally:
+            except Exception:
+                pass
+            try:
                 stream.close()
+            except Exception:
+                pass
         if active:
             self._emit('gap_begin')
 
