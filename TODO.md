@@ -1,5 +1,6 @@
 # 方案 C 待办
 
+- [ ] **T11 · advisor/STT 停机握手竞态**：结束会议时，advisor 的 STT 客户端存在并发接收和提前关闭连接的风险，STT 发送 `stopped` 时可能记录 `ConnectionClosedOK`，末尾识别结果的完整交付需验证。修复方案与验收见 [docs/STT_SHUTDOWN_HANDSHAKE.md](docs/STT_SHUTDOWN_HANDSHAKE.md)。
 - [ ] **T10 · 同一会议复用长期 OpenCode session（待技术验证）**：会议内多次判断复用同一 OpenCode session；先验证多轮上下文与工具结果、并发/取消/重试、重启恢复和长会话压缩，再确定进程隔离与契约迁移。讨论、职责边界和验收要点见 [docs/OPENCODE_MEETING_SESSION.md](docs/OPENCODE_MEETING_SESSION.md)。
 - [x] **T1 · `会议列表` 指令（2026-11-11 立项并完成）**：小A 对 bot 发「会议列表」，bot 经 advisor 用其已授权的日历 token 列出近期会议（含 9 位会议号、时间、是否组织者、是否进行中），供直接复制入会。规则式实现，不进 LLM，不进入会议模型上下文。范围：advisor 新增 `GET /meetings`（复用 FeishuCalendarValidator 读日历），bot 新增指令解析与格式化回复。
 - [ ] **T2 · 闲聊/自由问答（待需求评审）**：与 v1 非目标（消息不进模型上下文）冲突；若要做需 REQUIREMENTS 变更评审（谁可聊、上下文边界、成本）。
