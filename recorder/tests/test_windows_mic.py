@@ -3,10 +3,12 @@ import tempfile
 import unittest
 import wave
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from recorder.audio import CaptureSession
 from recorder.audio.frames import AudioFrame, SourceEvent
-from recorder.audio.windows_mic import WindowsMicSource
+from recorder.audio.windows_mic import WindowsMicBackend, WindowsMicSource, _ensure_soundcard_loaded
 
 
 class Detector:
@@ -127,6 +129,50 @@ class WindowsMicTests(unittest.TestCase):
                 self.assertEqual(wav.getnframes(), 160)
             frames = [item for item in list(received.queue) if isinstance(item, AudioFrame)]
             self.assertEqual(len(frames), 1)
+
+    def test_soundcard_load_precedes_com_and_s_false_is_balanced(self):
+        calls = []
+
+        class Ole32:
+            def CoInitializeEx(self, reserved, flags):
+                calls.append('initialize')
+                return 1  # S_FALSE: already initialized, still success
+
+            def CoUninitialize(self):
+                calls.append('uninitialize')
+
+        with patch('recorder.audio.windows_mic._ensure_soundcard_loaded',
+                   side_effect=lambda: calls.append('load')):
+            with patch('ctypes.windll', SimpleNamespace(ole32=Ole32()), create=True):
+                cleanup = WindowsMicBackend().initialize_thread()
+                cleanup()
+        self.assertEqual(calls, ['load', 'initialize', 'uninitialize'])
+
+    def test_soundcard_import_is_reused_across_capture_threads(self):
+        with patch('recorder.audio.windows_mic._soundcard_ready', None):
+            with patch('recorder.audio.windows_mic._soundcard_error', None):
+                with patch('recorder.audio.windows_mic.importlib.import_module') as load:
+                    _ensure_soundcard_loaded()
+                    _ensure_soundcard_loaded()
+                    load.assert_called_once_with('soundcard')
+
+    def test_com_failure_does_not_run_cleanup(self):
+        ole32 = SimpleNamespace(CoInitializeEx=lambda *_: -2147417850,
+                                CoUninitialize=lambda: self.fail('unexpected cleanup'))
+        with patch('recorder.audio.windows_mic._ensure_soundcard_loaded'):
+            with patch('ctypes.windll', SimpleNamespace(ole32=ole32), create=True):
+                with self.assertRaisesRegex(RuntimeError, '0x80010106'):
+                    WindowsMicBackend().initialize_thread()
+
+    def test_start_before_meeting_then_open_and_return_to_unknown(self):
+        self.set_state(False, None)
+        self.assertFalse(self.backend.streams)
+        self.set_state(True, False)
+        self.assertTrue(self.backend.streams[-1].started)
+        self.set_state(False, None)
+        self.assertTrue(self.backend.streams[-1].closed)
+        self.set_state(True, False)
+        self.assertTrue(self.backend.streams[-1].started)
 
 
 if __name__ == '__main__':

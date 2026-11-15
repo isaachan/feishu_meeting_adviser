@@ -1,14 +1,64 @@
 """Windows microphone source: UIA mute gate and default-device monitoring."""
 import threading
 import time
+import importlib
 
 from .frames import AudioFrame, SourceEvent
 from .sources import AudioSource
 from .windows_mute import FeishuMuteDetector
 
 
+_soundcard_lock = threading.Lock()
+_soundcard_ready = None
+_soundcard_error = None
+
+
+def _ensure_soundcard_loaded():
+    """Load soundcard on a fresh, long-lived thread before initializing workers.
+
+    soundcard initializes COM at import time and incorrectly treats S_FALSE
+    (already initialized) as an error. Its module-global COM owner must stay
+    on the thread that imported it, not on a short-lived capture worker.
+    """
+    global _soundcard_ready
+    with _soundcard_lock:
+        if _soundcard_ready is None:
+            ready = threading.Event()
+            _soundcard_ready = ready
+
+            def bootstrap():
+                global _soundcard_error
+                try:
+                    importlib.import_module('soundcard')
+                except Exception as exc:
+                    _soundcard_error = exc
+                finally:
+                    ready.set()
+                # Keep soundcard's owning COM apartment alive for the app's
+                # lifetime. Daemon thread exits when the process exits.
+                threading.Event().wait()
+
+            threading.Thread(target=bootstrap, daemon=True,
+                             name='soundcard-com-owner').start()
+        ready = _soundcard_ready
+    if not ready.wait(10):
+        raise RuntimeError('初始化音频设备库超时')
+    if _soundcard_error is not None:
+        raise RuntimeError(f'初始化音频设备库失败：{_soundcard_error}') from _soundcard_error
+
+
 class WindowsMicBackend:
     """Discover the Windows default endpoint separately from PortAudio's cache."""
+
+    def initialize_thread(self):
+        import ctypes
+
+        _ensure_soundcard_loaded()
+        ole32 = ctypes.windll.ole32
+        hr = ole32.CoInitializeEx(None, 0)
+        if hr not in (0, 1):  # S_OK and S_FALSE both require CoUninitialize.
+            raise RuntimeError(f'初始化麦克风线程失败：0x{hr & 0xffffffff:08X}')
+        return ole32.CoUninitialize
 
     def default_device(self):
         import soundcard
@@ -202,7 +252,10 @@ class WindowsMicSource(AudioSource):
             self._status = {'state': mode, 'detail': state.get('detail', ''), 'device': None}
             return
         try:
-            device = self.backend.default_device()
+            try:
+                device = self.backend.default_device()
+            except Exception as exc:
+                raise RuntimeError(f'获取系统默认麦克风失败：{exc}') from exc
             if not device:
                 self._close_stream()
                 self._status = {'state': 'no_device', 'detail': '没有默认麦克风', 'device': None}
@@ -226,22 +279,25 @@ class WindowsMicSource(AudioSource):
             self._status = {'state': 'error', 'detail': str(exc), 'device': None}
 
     def _run(self):
-        # soundcard uses COM on this thread.
-        initialized = False
+        cleanup = None
         try:
-            import ctypes
-            initialized = ctypes.windll.ole32.CoInitializeEx(None, 0) in (0, 1)
-        except Exception:
-            pass
-        try:
+            initialize = getattr(self.backend, 'initialize_thread', None)
+            if initialize is not None:
+                try:
+                    cleanup = initialize()
+                except Exception as exc:
+                    self._status = {'state': 'error', 'detail': str(exc), 'device': None}
+                    while not self._stop.is_set():
+                        self._silence()
+                        self._stop.wait(self.interval)
+                    return
             while not self._stop.is_set():
                 self._tick()
                 self._stop.wait(self.interval)
         finally:
             self._close_stream()
-            if initialized:
-                import ctypes
-                ctypes.windll.ole32.CoUninitialize()
+            if cleanup is not None:
+                cleanup()
 
     def stats(self):
         return dict(self._status)
