@@ -1,6 +1,10 @@
 import struct
+import tempfile
 import unittest
+import wave
+from pathlib import Path
 
+from recorder.audio import CaptureSession
 from recorder.audio.frames import AudioFrame, SourceEvent
 from recorder.audio.windows_mic import WindowsMicSource
 
@@ -11,6 +15,12 @@ class Detector:
 
     def get_state(self):
         return dict(self.state)
+
+    def start(self):
+        pass
+
+    def stop(self):
+        pass
 
 
 class Stream:
@@ -97,6 +107,26 @@ class WindowsMicTests(unittest.TestCase):
         self.assertEqual(len(frames), 1)
         self.assertEqual(set(frames[0].data), {0})
         self.assertFalse(self.backend.streams)
+
+    def test_gate_precedes_retention_and_subscriber(self):
+        import numpy as np
+
+        self.source.interval = 60
+        with tempfile.TemporaryDirectory() as directory:
+            session = CaptureSession([self.source], Path(directory))
+            received = session.subscribe()
+            session.start()
+            data = np.ones((160, 1), dtype=np.float32)
+            self.set_state(True, False)
+            self.source._callback(data, len(data), None, None)
+            self.detector.state = {'known': False, 'muted': None}
+            self.source._callback(data, len(data), None, None)
+            self.source._tick()
+            session.stop()
+            with wave.open(str(Path(directory) / 'mic.wav'), 'rb') as wav:
+                self.assertEqual(wav.getnframes(), 160)
+            frames = [item for item in list(received.queue) if isinstance(item, AudioFrame)]
+            self.assertEqual(len(frames), 1)
 
 
 if __name__ == '__main__':
