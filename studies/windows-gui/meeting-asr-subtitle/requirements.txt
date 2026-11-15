@@ -1,0 +1,11 @@
+sherpa-onnx==2.0.1
+sounddevice==0.5.6
+soundcard
+process-audio-capture==1.0.0
+uiautomation==2.0.29
+
+numpy
+fastapi==0.162.0
+uvicorn==0.54.0
+pydantic==2.14.2
+websockets>=12
