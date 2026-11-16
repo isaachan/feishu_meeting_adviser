@@ -68,6 +68,7 @@ sudo systemctl enable --now nginx
 sudo systemctl reload nginx
 sudo systemctl daemon-reload
 for service in "${services[@]}"; do
+  printf 'Starting %s ...\n' "$service"
   sudo systemctl enable --now "meeting-advisor@$service.service"
   case "$service" in
     auth) port=8381 ;; stt-server) port=8393 ;; llm-gateway) port=8377 ;;
@@ -76,15 +77,18 @@ for service in "${services[@]}"; do
   if [[ -n "$port" ]]; then
     ready=0
     for ((i=0; i<120; i++)); do
-      if curl --noproxy '*' -fsS "http://127.0.0.1:$port/healthz" >/dev/null; then ready=1; break; fi
+      if curl --noproxy '*' -fs "http://127.0.0.1:$port/healthz" >/dev/null; then ready=1; break; fi
       sleep 1
     done
-    [[ "$ready" == 1 ]] || { echo "$service health check failed" >&2; exit 1; }
+    [[ "$ready" == 1 ]] || { echo "$service health check failed on port $port" >&2; exit 1; }
+    status="healthy on port $port"
   else
     sleep 2
     systemctl is-active --quiet "meeting-advisor@$service.service"
+    status="running"
   fi
-  "$ROOT/.venv-prod/$service/bin/$service" --version
+  version="$("$ROOT/.venv-prod/$service/bin/$service" --version)"
+  printf '%s: %s (version %s)\n' "$service" "$status" "$version"
 done
 git -C "$ROOT" rev-parse HEAD > "$ROOT/data/prod/deployed-commit"
 echo "Production services started; commit $(<"$ROOT/data/prod/deployed-commit")"
