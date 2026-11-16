@@ -84,6 +84,8 @@ def upgrade_schema(database: SQLiteDatabase) -> None:
                        "TEXT NOT NULL DEFAULT ''")
             db.execute('ALTER TABLE sessions ADD COLUMN last_audio_at REAL')
             db.execute('ALTER TABLE sessions ADD COLUMN drain_deadline_at REAL')
+            db.execute('ALTER TABLE sessions ADD COLUMN owner_presence TEXT')
+            db.execute('ALTER TABLE sessions ADD COLUMN observed_at REAL')
             db.execute("UPDATE sessions SET phase='running' WHERE phase='recording'")
             db.execute("UPDATE sessions SET organizer_open_id=owner_open_id "
                        "WHERE organizer_open_id=''")
@@ -357,6 +359,66 @@ class SessionStore:
                     'WHERE session_id=? AND active=1',
                     (int(moment * 1_000_000_000), session_id))
         return self.session(session_id)
+
+    # -- session observation input (STATE_MACHINES v2 §4; stub until SM-08) --
+
+    def apply_observation(self, session_id, *, owner_presence=None, meeting_status=None,
+                          observed_at=None, now=None, max_age_s=60.0):
+        """Apply one presence/meeting snapshot; the only paused/ended driver.
+
+        Rules (frozen): S2 needs the confirmed present→left turn (creation
+        time absence/unknown never pauses); S3 needs present while paused;
+        meeting ended drains; unknown/stale snapshots never migrate.
+        Pausing discards in-flight work immediately (jobs abandoned, unsent
+        pending IM cancelled) in the same transaction.
+        """
+        moment = time.time() if now is None else now
+        snap_at = observed_at if observed_at is not None else moment
+        ns = int(moment * 1_000_000_000)
+        with self.unit_of_work() as tx:
+            session = tx.sessions.require(session_id)
+            phase = session['phase']
+            if phase == 'ended':
+                return {'session_id': session_id, 'phase': 'ended', 'applied': False,
+                        'reason': 'ended'}
+            if session['observed_at'] is not None and snap_at <= session['observed_at']:
+                return {'session_id': session_id, 'phase': phase, 'applied': False,
+                        'reason': 'stale'}
+            if moment - snap_at > max_age_s:
+                return {'session_id': session_id, 'phase': phase, 'applied': False,
+                        'reason': 'stale'}
+            prev = session['owner_presence']
+            confirmed = owner_presence if owner_presence in ('present', 'left') else prev
+            target = None
+            if meeting_status == 'ended' and phase in ('running', 'paused'):
+                target = 'draining'
+            elif phase == 'running' and owner_presence == 'left' and prev == 'present':
+                target = 'paused'
+            elif phase == 'paused' and owner_presence == 'present':
+                target = 'running'
+            if target is None:
+                tx.connection.execute(
+                    'UPDATE sessions SET owner_presence=?,observed_at=? WHERE session_id=?',
+                    (confirmed, snap_at, session_id))
+                return {'session_id': session_id, 'phase': phase, 'applied': True}
+            assert (phase, target) in SESSION_TRANSITIONS
+            deadline = moment + DEFAULT_DRAIN_DEADLINE_S if target == 'draining' else None
+            tx.connection.execute(
+                'UPDATE sessions SET phase=?,owner_presence=?,observed_at=?,'
+                'drain_deadline_at=CASE WHEN ? IS NULL THEN drain_deadline_at ELSE ? END '
+                'WHERE session_id=?',
+                (target, confirmed, snap_at, deadline, deadline, session_id))
+            if target == 'paused':
+                # 已定「立即作废」：在途任务作废、未发送回答取消（同事务）
+                tx.connection.execute(
+                    "UPDATE jobs SET state='abandoned' WHERE session_id=? "
+                    "AND state IN ('pending','running')", (session_id,))
+                tx.outbox.cancel_pending(session_id)
+            if target == 'ended':
+                tx.connection.execute(
+                    'UPDATE session_claims SET active=0,released_ns=? '
+                    'WHERE session_id=? AND active=1', (ns, session_id))
+        return {'session_id': session_id, 'phase': target, 'applied': True}
 
     @_locked
     def active_sessions_by_meeting_no(self, meeting_no):

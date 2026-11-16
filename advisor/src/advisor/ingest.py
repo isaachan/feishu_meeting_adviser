@@ -95,16 +95,28 @@ class IngestServer:
         with self._live_guard:
             return (session_id, source) in self._live
 
-    def close_session(self, session_id: str) -> None:
-        """Close all live connections of a session (draining sweep)."""
+    def close_session(self, session_id: str, *, error_code: str | None = None) -> None:
+        """Close all live connections of a session (draining/paused sweep).
+
+        With error_code, clients first receive a contract error frame
+        (e.g. session_paused) so recorders stop reconnecting.
+        """
         loop = self.loop
         if loop is None:
             return
+        async def _close(ws):
+            if error_code is not None:
+                try:
+                    await ws.send(json.dumps(
+                        {'type': 'error', 'code': error_code,
+                         'message': f'session is {error_code}'}))
+                except Exception:
+                    pass
+            await ws.close(1000, error_code or 'session_draining')
         targets = [connection.ws for connection in list(self._connections)
                    if connection.session_id == session_id]
         for websocket in targets:
-            future = asyncio.run_coroutine_threadsafe(
-                websocket.close(1000, 'session_draining'), loop)
+            future = asyncio.run_coroutine_threadsafe(_close(websocket), loop)
             try:
                 future.result(timeout=2)
             except Exception:

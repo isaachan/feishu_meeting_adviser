@@ -32,7 +32,7 @@ class SessionSupervisor:
         self.settings = settings
         self.backend_factory = backend_factory
         self.ingest_activity = ingest_activity or (lambda: {})
-        self.close_ingest = close_ingest or (lambda _sid: None)
+        self._close_ingest = close_ingest
         self.source_connected = source_connected
         self.clock = clock
         self.monotonic = monotonic
@@ -46,6 +46,14 @@ class SessionSupervisor:
         self._guard = threading.Lock()
         self._started_at: dict[str, float] = {}
         self._lease_owner = f'advisor-{os.getpid()}'
+
+    def close_ingest(self, session_id, *, paused=False):
+        if self._close_ingest is None:
+            return
+        if paused:
+            self._close_ingest(session_id, error_code='session_paused')
+        else:
+            self._close_ingest(session_id)
 
     def start(self):
         """Restart recovery: resume loops for all non-ended sessions."""
@@ -125,9 +133,14 @@ class SessionSupervisor:
                         LOG.info('session %s drained to ended', session_id)
                         return
                 else:
-                    if self._idle_expired(session_id):
+                    if phase == 'paused':
+                        # owner is away: refuse live capture (idempotent sweep)
+                        self.close_ingest(session_id, paused=True)
+                    if self._idle_expired(session_id, session):
                         self.store.set_phase(session_id, 'draining', now=now)
-                        LOG.info('session %s idle -> draining', session_id)
+                        LOG.info('session %s idle -> draining (phase=%s)', session_id, phase)
+                    elif phase == 'paused':
+                        pass  # 不发起新任务；恢复由观测输入驱动（STATE_MACHINES §4）
                     else:
                         expired = self.store.discard_expired_replies(
                             session_id, self.settings, now=now)
@@ -182,8 +195,15 @@ class SessionSupervisor:
                      list(result.decision.reply_sentence_keys),
                      result.elapsed_ms)
         else:
-            self.store.fail_job(result.job, result.error or 'model_failed',
-                                retry_at=now + 5, now=now)
+            try:
+                self.store.fail_job(result.job, result.error or 'model_failed',
+                                    retry_at=now + 5, now=now)
+            except StorageError:
+                # job was abandoned (paused/drain discard): late failures drop
+                LOG.info('late job failure dropped (job no longer running): '
+                         'session=%s job=%s', result.job['session_id'],
+                         result.job['job_id'][:12])
+                return
             LOG.warning('model job failed: session=%s job=%s reason=%s '
                         'elapsed_ms=%.0f', result.job['session_id'],
                         result.job['job_id'][:12], result.error, result.elapsed_ms)
@@ -248,16 +268,22 @@ class SessionSupervisor:
         self.nsdp.notify_owner(session_id, owner_open_id,
                                dedupe_s=self.settings.nsdp_nag_seconds)
 
-    def _idle_expired(self, session_id):
-        activity = self.ingest_activity()
-        last = activity.get(session_id)
-        started = self._started_at.get(session_id)
-        if started is None:
-            started = self.monotonic()
-            with self._guard:
-                self._started_at[session_id] = started
-        idle_for = self.monotonic() - (last if last is not None else started)
-        return idle_for > self._idle_timeout(session_id)
+    def _idle_expired(self, session_id, session=None):
+        """STATE_MACHINES v2 §1.1: absolute persisted deadline, real audio only.
+
+        deadline = max(started_at, last_audio_at) + idle_timeout_s — wall
+        clock, restart-safe; heartbeats/control frames never touch
+        last_audio_at (only ingest audio acks do). Paused does not freeze
+        the clock: the same deadline applies.
+        """
+        try:
+            row = session or self.store.require_session(session_id)
+        except StorageError:
+            return False
+        timeout = row['idle_timeout_s'] if row['idle_timeout_s'] is not None \
+            else self.settings.idle_timeout_s
+        base = row['last_audio_at'] or row['started_at']
+        return self.clock() >= base + timeout
 
     def _idle_timeout(self, session_id):
         try:

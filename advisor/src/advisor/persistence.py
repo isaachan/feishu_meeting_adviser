@@ -34,6 +34,7 @@ SCHEMA = (
         material_version TEXT, material_state TEXT NOT NULL DEFAULT 'disabled',
         created_ns INTEGER NOT NULL, started_at REAL NOT NULL, ended_ns INTEGER,
         last_audio_at REAL, drain_deadline_at REAL,
+        owner_presence TEXT, observed_at REAL,
         idle_timeout_s INTEGER NOT NULL DEFAULT 900,
         nsdp_hold INTEGER NOT NULL DEFAULT 0,
         lease_owner TEXT, lease_expires_at REAL)''',
