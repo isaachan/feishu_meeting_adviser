@@ -359,6 +359,14 @@ class BotService:
             text = (row.get('payload') or {}).get('text', '')
             if not open_id or not text:
                 continue
+            # Two-phase send (STATE_MACHINES v2 §1.3): claim `sending` before
+            # touching Feishu so a crash mid-send lands in recoverable state
+            # instead of an untracked duplicate.
+            try:
+                self.advisor.outbox_result(row['uuid'], 'sending')
+            except AdvisorApiError as exc:
+                LOG.info('outbox claim skipped: uuid=%s (%s)', row['uuid'], exc.code)
+                continue
             LOG.info('outbox delivering: uuid=%s -> %s text="%s"', row['uuid'],
                      open_id, text[:120])
             try:

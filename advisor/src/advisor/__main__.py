@@ -43,6 +43,8 @@ def main() -> None:
     serve.add_argument('--observe-timeout-s', type=float, default=10)
     serve.add_argument('--max-observation-age-s', type=float, default=60)
     serve.add_argument('--approval-ttl-s', type=float, default=1800)
+    serve.add_argument('--drain-deadline-s', type=float, default=600)
+    serve.add_argument('--reply-validity-s', type=float, default=3600)
     serve.add_argument('--model', choices=['remote', 'rule'], default='remote')
     serve.add_argument('--remote-backend', choices=['fake', 'opencode'], default='opencode',
                        help='gateway backend tag sent with inference jobs')
@@ -80,7 +82,7 @@ def main() -> None:
     if not database.exists():
         SessionStore.initialize(database)
     if min(args.observe_poll_s, args.observe_timeout_s, args.max_observation_age_s,
-           args.approval_ttl_s) <= 0:
+           args.approval_ttl_s, args.drain_deadline_s, args.reply_validity_s) <= 0:
         parser.error('meeting observation budgets must be positive')
     settings = AdviserSettings(remote_url=args.gateway_url,
                                 remote_backend=args.remote_backend,
@@ -88,6 +90,8 @@ def main() -> None:
                                 observe_timeout_s=args.observe_timeout_s,
                                 max_observation_age_s=args.max_observation_age_s,
                                 approval_ttl_s=args.approval_ttl_s,
+                                drain_deadline_s=args.drain_deadline_s,
+                                reply_validity_s=args.reply_validity_s,
                                nsdp_refresh_seconds=args.nsdp_refresh_s,
                                nsdp_retry_seconds=args.nsdp_retry_s,
                                nsdp_nag_seconds=args.nsdp_nag_s)
@@ -135,6 +139,7 @@ def main() -> None:
                       calendar_validator=calendar_validator,
                       ingest_url=args.ingest_url, nsdp=nsdp_service,
                       approval_ttl_s=settings.approval_ttl_s,
+                      drain_deadline_s=settings.drain_deadline_s,
                      nsdp_join_budget_s=args.nsdp_join_budget_s)
     stop_ingest = start_ingest_thread(ingest)
     supervisor.start()

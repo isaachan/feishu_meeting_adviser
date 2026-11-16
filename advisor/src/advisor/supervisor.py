@@ -149,6 +149,26 @@ class SessionSupervisor:
                 if phase == 'draining':
                     self.close_ingest(session_id)
                     self._reap_disconnected_sources(session_id)
+                    stuck = self.store.expire_stuck_sending(session_id, now=now)
+                    if stuck:
+                        LOG.info('session %s stuck sending -> uncertain: %s',
+                                 session_id, stuck)
+                    expired = self.store.discard_expired_replies(
+                        session_id, self.settings, now=now)
+                    if expired:
+                        LOG.info('session %s expired replies cancelled: %s',
+                                 session_id, expired)
+                    deadline = session['drain_deadline_at']
+                    if deadline is None:
+                        deadline = self.store.ensure_drain_deadline(
+                            session_id, now=now,
+                            duration_s=self.settings.drain_deadline_s)
+                    if now >= deadline:
+                        # S6: bounded finish even with bot/gateway/STT down
+                        diagnostic = self.store.force_end(session_id, now=now)
+                        LOG.warning('session %s drain deadline forced ended: %s',
+                                    session_id, diagnostic)
+                        return
                     if not executor.running and self.store.drain_ready(session_id):
                         self.store.set_phase(session_id, 'ended', now=now)
                         LOG.info('session %s drained to ended', session_id)
@@ -158,7 +178,9 @@ class SessionSupervisor:
                         # owner is away: refuse live capture (idempotent sweep)
                         self.close_ingest(session_id, paused=True)
                     if self._idle_expired(session_id, session):
-                        self.store.set_phase(session_id, 'draining', now=now)
+                        self.store.set_phase(
+                            session_id, 'draining', now=now,
+                            drain_deadline_at=now + self.settings.drain_deadline_s)
                         LOG.info('session %s idle -> draining (phase=%s)', session_id, phase)
                     elif phase == 'paused':
                         pass  # 不发起新任务；恢复由观测输入驱动（STATE_MACHINES §4）

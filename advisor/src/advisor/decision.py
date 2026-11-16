@@ -88,6 +88,9 @@ class DecisionApplier:
                     decision.reply])))
                 recipients = tx.subscriptions.approved_recipients(
                     job['session_id'], session['owner_open_id'])
+                validity = (settings.reply_validity_s
+                            if settings is not None and hasattr(settings, 'reply_validity_s')
+                            else 3600)
                 tx.outbox.save_reply(
                     message_uuid=message_uuid,
                     session_id=job['session_id'],
@@ -97,7 +100,8 @@ class DecisionApplier:
                     created_ns=int(now * 1_000_000_000),
                     context_version=session['material_version'],
                     recipients=recipients,
-                    now=now)
+                    now=now,
+                    reply_validity_s=validity)
                 LOG.info('reply queued: session=%s uuid=%s recipients=%s reply="%s"',
                          job['session_id'], message_uuid[:12], recipients,
                          decision.reply[:120])

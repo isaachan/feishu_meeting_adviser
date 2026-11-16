@@ -168,6 +168,20 @@ def upgrade_schema(database: SQLiteDatabase) -> None:
                     "DO UPDATE SET active=1,released_ns=NULL",
                     (user, row['session_id'], row['created_ns']))
             db.execute('PRAGMA user_version=7')
+        version = 7
+    if version == 7:
+        with database.transaction():
+            db = database.connection
+            columns = {row['name'] for row in db.execute('PRAGMA table_info(sessions)')}
+            outbox_columns = {row['name'] for row in db.execute('PRAGMA table_info(outbox)')}
+            if 'drain_diagnostics' not in columns:
+                db.execute('ALTER TABLE sessions ADD COLUMN drain_diagnostics TEXT')
+            if 'delivery_deadline_at' not in outbox_columns:
+                db.execute('ALTER TABLE outbox ADD COLUMN delivery_deadline_at REAL')
+            db.execute('UPDATE outbox SET delivery_deadline_at=created_ns/1000000000.0+3600 '
+                       "WHERE channel='im' AND state IN ('pending','sending') "
+                       'AND delivery_deadline_at IS NULL')
+            db.execute('PRAGMA user_version=8')
         return
     # fresh (0/empty) and unknown versions are judged by require_schema
 
@@ -399,7 +413,8 @@ class SessionStore:
                 else:
                     deadline = drain_deadline_at
             tx.connection.execute(
-                'UPDATE sessions SET phase=?,ended_ns=?,drain_deadline_at=? WHERE session_id=?',
+                'UPDATE sessions SET phase=?,ended_ns=?,drain_deadline_at='
+                'COALESCE(?,drain_deadline_at) WHERE session_id=?',
                 (phase, int(moment * 1_000_000_000) if phase == 'ended' else None,
                  deadline, session_id))
             if phase == 'ended':
@@ -412,6 +427,54 @@ class SessionStore:
                     'WHERE session_id=? AND active=1',
                     (int(moment * 1_000_000_000), session_id))
         return self.session(session_id)
+
+    def ensure_drain_deadline(self, session_id, *, now, duration_s):
+        """Assign a deadline only once (also for pre-v8 draining rows)."""
+        with self.unit_of_work() as tx:
+            tx.connection.execute(
+                "UPDATE sessions SET drain_deadline_at=? WHERE session_id=? "
+                "AND phase='draining' AND drain_deadline_at IS NULL",
+                (now + duration_s, session_id))
+            row = tx.sessions.require(session_id)
+        return row['drain_deadline_at']
+
+    def force_end(self, session_id, *, now, reason='drain_deadline'):
+        """S6: bounded, atomic terminalization with explicit diagnostic counts."""
+        with self.unit_of_work() as tx:
+            session = tx.sessions.require(session_id)
+            if session['phase'] == 'ended':
+                return decode_mapping(session['drain_diagnostics']) if session['drain_diagnostics'] else {}
+            if session['phase'] != 'draining':
+                raise StateError('invalid_state')
+            count = lambda table, predicate: tx.connection.execute(
+                f'SELECT count(*) FROM {table} WHERE session_id=? AND {predicate}',
+                (session_id,)).fetchone()[0]
+            diagnostic = {'reason': reason, 'forced_at': now,
+                          'lost_sources': count('sources', "state='live'"),
+                          'abandoned_jobs': count('jobs', "state IN ('pending','running')"),
+                          'cancelled_im': count('outbox', "state='pending' AND channel='im'"),
+                          'uncertain_im': count('outbox', "state='sending' AND channel='im'")}
+            tx.connection.execute("UPDATE sources SET state='lost' WHERE session_id=? "
+                                  "AND state='live'", (session_id,))
+            tx.connection.execute("UPDATE jobs SET state='abandoned' WHERE session_id=? "
+                                  "AND state IN ('pending','running')", (session_id,))
+            tx.connection.execute(
+                "UPDATE outbox SET state='cancelled',error='drain_deadline' "
+                "WHERE session_id=? AND state='pending'", (session_id,))
+            tx.connection.execute(
+                "UPDATE outbox SET state='uncertain',error='drain_deadline_inflight' "
+                "WHERE session_id=? AND state='sending'", (session_id,))
+            ns = int(now * 1_000_000_000)
+            tx.connection.execute(
+                "UPDATE subscriptions SET state='expired',closed_by='system',decided_ns=? "
+                "WHERE session_id=? AND state='requested'", (ns, session_id))
+            tx.connection.execute(
+                'UPDATE session_claims SET active=0,released_ns=? '
+                'WHERE session_id=? AND active=1', (ns, session_id))
+            tx.connection.execute(
+                "UPDATE sessions SET phase='ended',ended_ns=?,drain_diagnostics=? "
+                'WHERE session_id=?', (ns, encode(diagnostic), session_id))
+        return diagnostic
 
     # -- session observation input (STATE_MACHINES v2 §4; stub until SM-08) --
 
@@ -961,9 +1024,16 @@ class SessionStore:
                 tx.sessions.schedule_reply_recheck(session_id)
 
     def discard_expired_replies(self, session_id, settings, *, now):
+        """Evidence expiry + reply validity (delivery_deadline_at) cancellations."""
         session = self.require_session(session_id)
         cancelled = 0
         with self.unit_of_work() as tx:
+            expired = tx.connection.execute(
+                "UPDATE outbox SET state='cancelled',error='reply_validity_expired' "
+                "WHERE session_id=? AND kind='reply' AND channel='im' AND state='pending' "
+                'AND delivery_deadline_at IS NOT NULL AND delivery_deadline_at<=?',
+                (session_id, now)).rowcount
+            cancelled += expired
             for row in tx.connection.execute(
                     "SELECT uuid,evidence FROM outbox WHERE session_id=? AND kind='reply' "
                     "AND state='pending' AND channel='im'", (session_id,)).fetchall():
@@ -995,9 +1065,18 @@ class SessionStore:
                 'uncertain_replies': counts.get('uncertain', 0) + counts.get('sending', 0),
                 'rejected_replies': counts.get('rejected', 0)}
 
+    def expire_stuck_sending(self, session_id, *, now):
+        """Sending rows past their delivery budget become uncertain (not sent)."""
+        with self.unit_of_work() as tx:
+            return tx.connection.execute(
+                "UPDATE outbox SET state='uncertain',error='delivery_budget_exhausted' "
+                "WHERE session_id=? AND channel='im' AND state='sending' "
+                'AND delivery_deadline_at IS NOT NULL AND delivery_deadline_at<=?',
+                (session_id, now)).rowcount
+
     @_locked
     def drain_ready(self, session_id):
-        """STATE_MACHINES S3 排空条件。"""
+        """STATE_MACHINES v2 §2 排空条件；sending 视同未落定。"""
         session = self.require_session(session_id)
         if session['phase'] not in ('running', 'draining'):
             return False
@@ -1006,8 +1085,8 @@ class SessionStore:
         if self.inflight_jobs(session_id):
             return False
         pending = self.db.execute(
-            "SELECT 1 FROM outbox WHERE session_id=? AND state='pending' LIMIT 1",
-            (session_id,)).fetchone()
+            "SELECT 1 FROM outbox WHERE session_id=? AND state IN ('pending','sending') "
+            'LIMIT 1', (session_id,)).fetchone()
         return pending is None
 
     # -- subscriptions ------------------------------------------------------

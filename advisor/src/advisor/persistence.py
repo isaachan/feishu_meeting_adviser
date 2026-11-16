@@ -19,7 +19,7 @@ from .models import (Caption, JobState, MaterialState, ReplyState, SourceState,
                      caption_to_dict, digest)
 from .sqlite import SQLiteDatabase
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 SCHEMA = (
     '''CREATE TABLE sessions (
@@ -35,6 +35,7 @@ SCHEMA = (
         created_ns INTEGER NOT NULL, started_at REAL NOT NULL, ended_ns INTEGER,
         last_audio_at REAL, drain_deadline_at REAL,
         owner_presence TEXT, observed_at REAL, vc_meeting_id TEXT,
+        drain_diagnostics TEXT,
         idle_timeout_s INTEGER NOT NULL DEFAULT 900,
         nsdp_hold INTEGER NOT NULL DEFAULT 0,
         lease_owner TEXT, lease_expires_at REAL)''',
@@ -61,7 +62,8 @@ SCHEMA = (
         content TEXT NOT NULL, evidence TEXT NOT NULL, generation INTEGER NOT NULL,
         state TEXT NOT NULL DEFAULT 'pending', error TEXT, created_ns INTEGER NOT NULL,
         sent_at REAL, context_version TEXT, answer_uuid TEXT NOT NULL,
-        channel TEXT NOT NULL, recipient_id TEXT)''',
+        channel TEXT NOT NULL, recipient_id TEXT,
+        delivery_deadline_at REAL)''',
     'CREATE INDEX outbox_answer ON outbox(answer_uuid)',
     'CREATE INDEX outbox_session ON outbox(session_id,state)',
     '''CREATE TABLE session_materials (
@@ -235,9 +237,9 @@ class ReplyOutboxRepository:
         self.checkpoint('after_old_replies_cancelled')
 
     def save_reply(self, *, message_uuid: str, session_id: str, content: str,
-                   evidence: str, generation: int, created_ns: int,
-                   context_version: str | None, recipients: tuple[str, ...],
-                   now: float) -> None:
+                    evidence: str, generation: int, created_ns: int,
+                    context_version: str | None, recipients: tuple[str, ...],
+                    now: float, reply_validity_s: float = 3600) -> None:
         """One local fact row (sent) + one pending IM row per recipient."""
         targets = [('local', None, message_uuid, ReplyState.SENT, now)] + [
             ('im', recipient, str(uuid5(NAMESPACE_URL, f'{message_uuid}:im:{recipient}')),
@@ -245,17 +247,14 @@ class ReplyOutboxRepository:
             for recipient in recipients]
         for channel, recipient, delivery_uuid, state, sent_at in targets:
             self.connection.execute(
-                '''INSERT INTO outbox(
+                '''INSERT OR IGNORE INTO outbox(
                        uuid,session_id,kind,content,evidence,generation,created_ns,
-                       context_version,answer_uuid,channel,recipient_id,state,sent_at)
-                   VALUES (?,?,'reply',?,?,?,?,?,?,?,?,?,?)
-                   ON CONFLICT(uuid) DO UPDATE SET
-                       generation=excluded.generation,
-                       context_version=excluded.context_version,
-                       state=CASE WHEN outbox.state=? THEN ? ELSE outbox.state END''',
-                (delivery_uuid, session_id, content, evidence, generation, created_ns,
-                 context_version, message_uuid, channel, recipient, state, sent_at,
-                 ReplyState.CANCELLED, ReplyState.PENDING))
+                       context_version,answer_uuid,channel,recipient_id,state,sent_at,
+                       delivery_deadline_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                 (delivery_uuid, session_id, 'reply', content, evidence, generation,
+                  created_ns, context_version, message_uuid, channel, recipient,
+                  state, sent_at, now + reply_validity_s if channel == 'im' else None))
         self.checkpoint('after_reply_saved')
 
     def recover_sending(self) -> None:

@@ -137,6 +137,8 @@
 
 7. v6→v7：建立 `subscriptions(state,approval_deadline_at)` 索引；旧 requested 行回填 `created_ns/1e9 + approval_ttl_s`（升级时工程默认 1800 秒），同用户历史多条未决只保留最新可占位一条，其余冲突项 `expired`；按非 ended 会话补 subscriber claim，确保启动后唯一约束生效。旧数据库按 v4→v5→v6→v7 顺序升级，回滚依赖升级前备份。
 
+8. v7→v8：`sessions.drain_diagnostics TEXT`（S6 诊断记录）、`outbox.delivery_deadline_at REAL`（回答有效期，存量 pending/sending 行回填 `created_ns/1e9+3600`）。两段式发送：bot 先 `POST /outbox/{uuid}/result {status:"sending"}` 认领再投递（CONTRACT_ADVISOR_API §7.2），发送中进程崩溃由 advisor 重启 `recover()` 或预算到期转 `uncertain`，绝不盲发重试。
+
 ## 7. 与 v1 的差异与兼容窗口
 
 - `recording→running` 更名 + `paused` 新增：advisor/bot/admin-site/macos-gui 同仓同步切换，无长期双轨；部署顺序 = 单机 `local-up` 整栈一次拉起（CONTRACT_ADVISOR_API §10 v2.0）。

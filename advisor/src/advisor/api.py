@@ -108,7 +108,8 @@ class AdvisorApi:
     def __init__(self, store: SessionStore, supervisor, *,
                  auth_client, calendar_validator, ingest_url, host='127.0.0.1',
                  clock=time.time, nsdp=None, nsdp_join_budget_s=12.0,
-                 legacy_nsdp=False, email_domain='nio.com', approval_ttl_s=1800):
+                 legacy_nsdp=False, email_domain='nio.com', approval_ttl_s=1800,
+                 drain_deadline_s=600):
         self.store = store
         self.supervisor = supervisor
         self.auth = auth_client
@@ -121,6 +122,7 @@ class AdvisorApi:
         self.nsdp_join_budget_s = nsdp_join_budget_s
         self.email_domain = email_domain
         self.approval_ttl_s = approval_ttl_s
+        self.drain_deadline_s = drain_deadline_s
         self._gui_logins: dict = {}
         self._gui_lock = threading.Lock()
 
@@ -317,7 +319,8 @@ class AdvisorApi:
             raise ApiError(409, 'not_owner', 'only the organizer may end this session')
         if session['phase'] in ('ended', 'draining'):
             return {'session_id': session_id, 'phase': session['phase']}
-        updated = self.store.set_phase(session_id, 'draining', now=self.clock())
+        updated = self.store.set_phase(session_id, 'draining', now=self.clock(),
+                                       drain_deadline_at=self.clock() + self.drain_deadline_s)
         assert updated is not None
         LOG.info('session ending: session=%s -> draining (owner=%s)', session_id, owner)
         return {'session_id': session_id, 'phase': updated['phase']}
@@ -446,7 +449,8 @@ class AdvisorApi:
             raise ApiError(404, 'not_found', 'unknown session') from None
         if session['phase'] in ('draining', 'ended'):
             return {'session_id': session_id, 'phase': session['phase']}
-        updated = self.store.set_phase(session_id, 'draining', now=self.clock())
+        updated = self.store.set_phase(session_id, 'draining', now=self.clock(),
+                                       drain_deadline_at=self.clock() + self.drain_deadline_s)
         assert updated is not None
         LOG.info('admin ending: session=%s -> draining', session_id)
         return {'session_id': session_id, 'phase': updated['phase']}
@@ -526,15 +530,22 @@ class AdvisorApi:
 
     def outbox_result(self, uuid, body):
         status = body.get('status')
-        if status not in ('sent', 'uncertain'):
-            raise ApiError(400, 'bad_message', 'status must be sent|uncertain')
+        if status not in ('sending', 'sent', 'uncertain'):
+            raise ApiError(400, 'bad_message', 'status must be sending|sent|uncertain')
         row = self.store.db.execute(
             'SELECT uuid,state,session_id FROM outbox WHERE uuid=?', (uuid,)).fetchone()
         if row is None:
             raise ApiError(404, 'not_found', 'unknown outbox row')
         assert row is not None
+        if status == 'sending':
+            # Two-phase send (v2 §1.3): claim before touching Feishu so a
+            # crashed sender lands in recoverable `sending`, never a blind resend.
+            if row['state'] == 'pending':
+                self.store.mark_sending(uuid)
+            return {'uuid': uuid, 'state': 'acknowledged'}
         if row['state'] == 'pending':
             self.store.mark_sending(uuid)
+        if row['state'] in ('pending', 'sending'):
             if status == 'sent':
                 self.store.mark_sent(uuid, now=self.clock(), interval=0)
             else:
