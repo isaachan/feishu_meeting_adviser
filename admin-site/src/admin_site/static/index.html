@@ -44,12 +44,19 @@
   td.title { white-space: normal; min-width: 140px; }
   td.mono, .mono { font-family: var(--mono); font-size: 12px; }
   .badge { padding: 1px 9px; border-radius: 10px; font-size: 12px; }
-  .badge.recording { background: #16351f; color: var(--green); }
+  .badge.running { background: #16351f; color: var(--green); }
+  .badge.paused { background: #2c2a3f; color: #b3a6e8; }
   .badge.draining { background: #3a2d14; color: var(--orange); }
   .badge.ended { background: #262c33; color: var(--dim); }
-  .badge.approved { background: #16351f; color: var(--green); }
+  .badge.approved, .badge.on { background: #16351f; color: var(--green); }
   .badge.requested { background: #3a2d14; color: var(--orange); }
-  .badge.denied, .badge.revoked { background: #33202a; color: #c98fa4; }
+  .badge.denied, .badge.revoked, .badge.owner_revoked,
+  .badge.subscriber_cancelled { background: #33202a; color: #c98fa4; }
+  .badge.expired, .badge.off, .badge.unresolved { background: #262c33; color: var(--dim); }
+  #grant-form { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
+  #grant-form input { background: var(--bg); border: 1px solid var(--border);
+    color: var(--fg); border-radius: 6px; padding: 5px 10px; font-size: 13px;
+    font-family: var(--mono); width: 240px; }
   td.subs { white-space: normal; min-width: 180px; }
   td.subs .sub { display: flex; align-items: center; gap: 6px; margin: 2px 0; }
   #log-tabs { display: flex; gap: 4px; margin-bottom: 10px; flex-wrap: wrap; }
@@ -72,6 +79,7 @@
   <span id="advisor-state"><span class="dot" id="advisor-dot"></span><span id="advisor-text">advisor 检查中…</span></span>
   <nav>
     <button id="tab-sessions" class="active">会话</button>
+    <button id="tab-grants">小C 名单</button>
     <button id="tab-logs">日志</button>
   </nav>
 </header>
@@ -92,6 +100,22 @@
       <tbody id="session-rows"></tbody>
     </table>
     <div id="empty" class="hidden">暂无会话</div>
+  </section>
+
+  <section id="view-grants" class="hidden">
+    <div class="toolbar">
+      <span>名单内的用户可以「受邀请参与者」身份启动会参谋（准入还要求命中该场日历邀请名单）。
+      名单是 owner 权限面：仅受信网络内使用。</span>
+    </div>
+    <div id="grant-form">
+      <input id="grant-login" placeholder="账号标识，如 kai.han（或完整邮箱 / ou_ 开头 open_id）">
+      <button class="btn" id="grant-add">启用</button>
+    </div>
+    <table>
+      <thead><tr><th>账号</th><th>open_id</th><th>状态</th><th>更新时间</th><th>操作</th></tr></thead>
+      <tbody id="grant-rows"></tbody>
+    </table>
+    <div id="grant-empty" class="hidden">名单为空</div>
   </section>
 
   <section id="view-logs" class="hidden">
@@ -142,7 +166,7 @@ async function loadSessions(manual) {
   tbody.innerHTML = '';
   for (const s of rows) {
     const tr = document.createElement('tr');
-    const endable = s.phase === 'recording' || s.phase === 'draining';
+    const endable = s.phase === 'running' || s.phase === 'paused' || s.phase === 'draining';
     tr.innerHTML =
       `<td class="mono">${s.session_id}</td>` +
       `<td class="mono">${s.meeting_no || '—'}</td>` +
@@ -206,6 +230,56 @@ function subsCell(s) {
            `<span>${escapeHtml(label)}</span></div>`;
   });
   return `<td class="subs">${items.join('')}</td>`;
+}
+
+/* ---------------- supervisor grants ---------------- */
+async function loadGrants() {
+  let data = null;
+  try {
+    const resp = await fetch('api/supervisors');
+    data = await resp.json();
+    if (!resp.ok) throw new Error((data.error && data.error.message) || resp.status);
+  } catch (err) {
+    banner('err', '获取名单失败：' + err.message);
+    return;
+  }
+  const rows = data.supervisors || [];
+  const tbody = $('grant-rows');
+  tbody.innerHTML = '';
+  for (const g of rows) {
+    const tr = document.createElement('tr');
+    const stateBadge = g.enabled
+      ? '<span class="badge on">启用</span>'
+      : (g.open_id ? '<span class="badge off">停用</span>'
+                   : '<span class="badge unresolved">未解析</span>');
+    tr.innerHTML =
+      `<td class="mono">${escapeHtml(g.login_name)}</td>` +
+      `<td class="mono" title="${escapeHtml(g.open_id || '')}">${g.open_id ? escapeHtml(g.open_id) : '—'}</td>` +
+      `<td>${stateBadge}</td>` +
+      `<td>${fmtTs(g.updated_at)}</td>` +
+      `<td>${g.enabled
+        ? `<button class="btn" data-login="${escapeHtml(g.login_name)}" data-on="false">停用</button>`
+        : `<button class="btn" data-login="${escapeHtml(g.login_name)}" data-on="true">启用</button>`}</td>`;
+    tbody.appendChild(tr);
+  }
+  $('grant-empty').classList.toggle('hidden', rows.length > 0);
+  for (const btn of tbody.querySelectorAll('button[data-login]')) {
+    btn.onclick = () => putGrant(btn.dataset.login, btn.dataset.on === 'true');
+  }
+}
+
+async function putGrant(login, enabled) {
+  try {
+    const resp = await fetch('api/supervisors', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ login_name: login, enabled }) });
+    const body = await resp.json();
+    if (!resp.ok) throw new Error((body.error && body.error.message) || resp.status);
+    banner('ok', `${login} 已${body.enabled ? '启用' : '停用'}（${body.open_id || '未解析'}）`);
+  } catch (err) {
+    banner('err', `${login} 配置失败：` + err.message);
+  }
+  loadGrants();
 }
 
 /* ---------------- logs ---------------- */
@@ -276,10 +350,13 @@ function selectLog(key) {
 /* ---------------- tabs & wiring ---------------- */
 function showView(name) {
   const sessions = name === 'sessions';
+  const grants = name === 'grants';
   $('view-sessions').classList.toggle('hidden', !sessions);
-  $('view-logs').classList.toggle('hidden', sessions);
+  $('view-grants').classList.toggle('hidden', !grants);
+  $('view-logs').classList.toggle('hidden', sessions || grants);
   $('tab-sessions').classList.toggle('active', sessions);
-  $('tab-logs').classList.toggle('active', !sessions);
+  $('tab-grants').classList.toggle('active', grants);
+  $('tab-logs').classList.toggle('active', sessions || grants ? false : true);
   $('banner').className = '';
   if (sessions) {
     loadSessions(false);
@@ -288,13 +365,23 @@ function showView(name) {
     }, 5000);
   } else {
     clearInterval(sessionsTimer);
+  }
+  if (grants) loadGrants();
+  if (name === 'logs') {
     if (!currentKey) selectLog('advisor');
     markServices();
   }
 }
 
 $('tab-sessions').onclick = () => showView('sessions');
+$('tab-grants').onclick = () => showView('grants');
 $('tab-logs').onclick = () => showView('logs');
+$('grant-add').onclick = () => {
+  const login = $('grant-login').value.trim();
+  if (!login) { banner('err', '请输入账号标识'); return; }
+  putGrant(login, true);
+  $('grant-login').value = '';
+};
 $('refresh').onclick = () => loadSessions(true);
 $('pause').onclick = () => {
   paused = !paused;

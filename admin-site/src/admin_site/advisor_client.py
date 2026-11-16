@@ -21,9 +21,14 @@ class AdvisorAdminClient:
         self.timeout = timeout
         self.opener = opener or request.build_opener(request.ProxyHandler({})).open
 
-    def _call(self, method, path):
-        req = request.Request(self.base_url + path, data=b'' if method == 'POST' else None,
-                              method=method)
+    def _call(self, method, path, payload=None):
+        data = None
+        headers = {}
+        if payload is not None:
+            data = json.dumps(payload, ensure_ascii=False).encode()
+            headers['Content-Type'] = 'application/json'
+        req = request.Request(self.base_url + path, data=data, method=method,
+                              headers=headers)
         try:
             with self.opener(req, timeout=self.timeout) as response:
                 raw = response.read()
@@ -45,3 +50,10 @@ class AdvisorAdminClient:
 
     def admin_end_session(self, session_id):
         return self._call('POST', f'/admin/sessions/{session_id}/end')
+
+    def admin_supervisors(self):
+        return self._call('GET', '/admin/supervisors')
+
+    def admin_put_supervisor(self, login_name, enabled):
+        return self._call('POST', '/admin/supervisors',
+                          {'login_name': login_name, 'enabled': enabled})

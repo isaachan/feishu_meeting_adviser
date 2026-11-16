@@ -26,19 +26,27 @@ class StubAdvisorHandler(BaseHTTPRequestHandler):
         if self.path == '/admin/sessions':
             body = {'sessions': [{'session_id': 's-1', 'owner_open_id': 'ou_A',
                                   'meeting_no': '123', 'title': '周会',
-                                  'phase': 'recording', 'started_at': 1762800000.0,
+                                  'phase': 'running', 'started_at': 1762800000.0,
                                   'ended_at': None, 'nsdp_hold': False}]}
             self._reply(body)
+        elif self.path == '/admin/supervisors':
+            self._reply({'supervisors': [{'login_name': 'kai.han', 'open_id': 'ou_C',
+                                          'enabled': True, 'updated_at': 1762800000.0,
+                                          'updated_by': 'admin'}]})
         else:
             self._reply({'error': {'code': 'not_found', 'message': 'nope'}}, 404)
 
     def do_POST(self):
         length = int(self.headers.get('Content-Length') or 0)
-        if length:
-            self.rfile.read(length)
-        type(self).calls.append(('POST', self.path))
+        raw = self.rfile.read(length) if length else b''
+        type(self).calls.append(('POST', self.path, raw.decode()))
         if self.path == '/admin/sessions/s-1/end':
             self._reply({'session_id': 's-1', 'phase': 'draining'})
+        elif self.path == '/admin/supervisors':
+            body = json.loads(raw)
+            self._reply({'login_name': body['login_name'], 'open_id': 'ou_C',
+                         'enabled': body['enabled'], 'updated_at': 1762800000.0,
+                         'updated_by': 'admin'})
         else:
             self._reply({'error': {'code': 'not_found', 'message': 'nope'}}, 404)
 
@@ -132,7 +140,7 @@ class SessionProxyTests(AdminSiteBase):
     def test_end_posts_to_admin_face_without_body(self):
         status, body = self.post('/api/sessions/s-1/end')
         self.assertEqual((status, body['phase']), (200, 'draining'))
-        self.assertIn(('POST', '/admin/sessions/s-1/end'), self.stub_calls)
+        self.assertIn(('POST', '/admin/sessions/s-1/end', ''), self.stub_calls)
 
     def test_advisor_error_status_passthrough(self):
         status, body = self.post_error('/api/sessions/s-unknown/end')
@@ -207,3 +215,24 @@ class LogStreamTests(AdminSiteBase):
             self.assertTrue(any('不存在' in text for text in events))
         finally:
             conn.close()
+
+
+class SupervisorProxyTests(AdminSiteBase):
+    def test_supervisors_listing_proxied(self):
+        with OPENER.open(request.Request(
+                f'http://127.0.0.1:{self.port}/api/supervisors', method='GET'),
+                timeout=5) as response:
+            body = json.loads(response.read())
+        self.assertEqual(body['supervisors'][0]['login_name'], 'kai.han')
+
+    def test_put_supervisor_forwards_json_body(self):
+        req = request.Request(
+            f'http://127.0.0.1:{self.port}/api/supervisors', method='POST',
+            data=json.dumps({'login_name': 'kai.han', 'enabled': False}).encode(),
+            headers={'Content-Type': 'application/json'})
+        with OPENER.open(req, timeout=5) as response:
+            body = json.loads(response.read())
+        self.assertFalse(body['enabled'])
+        forwarded = [c for c in self.stub_calls if c[1] == '/admin/supervisors']
+        self.assertEqual(json.loads(forwarded[-1][2]),
+                         {'login_name': 'kai.han', 'enabled': False})

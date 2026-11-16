@@ -106,7 +106,7 @@ class AdvisorApi:
     def __init__(self, store: SessionStore, supervisor, *,
                  auth_client, calendar_validator, ingest_url, host='127.0.0.1',
                  clock=time.time, nsdp=None, nsdp_join_budget_s=12.0,
-                 legacy_nsdp=False):
+                 legacy_nsdp=False, email_domain='nio.com'):
         self.store = store
         self.supervisor = supervisor
         self.auth = auth_client
@@ -117,6 +117,7 @@ class AdvisorApi:
         self.nsdp = nsdp
         self.legacy_nsdp = legacy_nsdp
         self.nsdp_join_budget_s = nsdp_join_budget_s
+        self.email_domain = email_domain
         self._gui_logins: dict = {}
         self._gui_lock = threading.Lock()
 
@@ -305,6 +306,58 @@ class AdvisorApi:
         assert updated is not None
         LOG.info('session ending: session=%s -> draining (owner=%s)', session_id, owner)
         return {'session_id': session_id, 'phase': updated['phase']}
+
+    # -- supervisor grants (CONTRACT_ADVISOR_API §9.3/§9.4) --------------------
+
+    def _resolve_grant_identity(self, login_name):
+        """login_name -> unique open_id via the identity directory.
+
+        Accepts an ``ou_`` open_id directly, a full email, or a bare login
+        that is completed with the configured default email domain. Returns
+        None when the directory cannot resolve it uniquely (the grant row is
+        then stored disabled with open_id NULL, per §9.4).
+        """
+        if not isinstance(login_name, str) or not login_name.strip():
+            return None
+        candidate = login_name.strip()
+        if candidate.startswith('ou_'):
+            return candidate
+        email = candidate if '@' in candidate else f'{candidate}@{self.email_domain}'
+        rows = self.store.db.execute(
+            'SELECT open_id FROM users WHERE lower(email)=lower(?)', (email,)).fetchall()
+        if len(rows) == 1:
+            return rows[0]['open_id']
+        return None
+
+    def admin_supervisors(self):
+        rows = self.store.supervisor_grants()
+        return {'supervisors': [
+            {'login_name': row['login_name'], 'open_id': row['open_id'],
+             'enabled': bool(row['enabled']),
+             'updated_at': row['updated_ns'] / 1e9,
+             'updated_by': row['updated_by']} for row in rows]}
+
+    def admin_put_supervisor(self, body):
+        login_name = body.get('login_name')
+        enabled = body.get('enabled')
+        if not isinstance(login_name, str) or not login_name.strip() \
+                or not isinstance(enabled, bool):
+            raise ApiError(400, 'bad_message', 'login_name and enabled required')
+        open_id = self._resolve_grant_identity(login_name)
+        if enabled and open_id is None:
+            # keep an audit trail but never enable an unresolved identity
+            self.store.put_supervisor_grant(login_name.strip(), open_id=None,
+                                            enabled=False, now=self.clock())
+            raise ApiError(409, 'identity_unresolved',
+                           'login does not resolve to a unique known open_id; '
+                           'the user must authorize/login once first')
+        row = self.store.put_supervisor_grant(login_name.strip(), open_id=open_id,
+                                              enabled=enabled, now=self.clock())
+        LOG.info('supervisor grant: login=%s open_id=%s enabled=%s',
+                 row['login_name'], row['open_id'], row['enabled'])
+        return {'login_name': row['login_name'], 'open_id': row['open_id'],
+                'enabled': bool(row['enabled']),
+                'updated_at': row['updated_ns'] / 1e9, 'updated_by': row['updated_by']}
 
     # -- admin face (CONTRACT_ADVISOR_API §9) --------------------------------
 
@@ -654,6 +707,8 @@ def build_api_server(api: AdvisorApi, host='127.0.0.1', port=8380):
                 self._run(lambda: (api.list_sessions(query.get('owner_open_id', [None])[0]), False))
             elif parsed.path == '/admin/sessions':
                 self._run(lambda: (api.admin_sessions(), False))
+            elif parsed.path == '/admin/supervisors':
+                self._run(lambda: (api.admin_supervisors(), False))
             elif parsed.path.startswith('/sessions/') and parsed.path.endswith('/status'):
                 session_id = parsed.path[len('/sessions/'):-len('/status')]
                 self._run(lambda: (api.session_status(session_id), False))
@@ -679,6 +734,11 @@ def build_api_server(api: AdvisorApi, host='127.0.0.1', port=8380):
             if parsed.path.startswith('/admin/sessions/') and parsed.path.endswith('/end'):
                 session_id = parsed.path[len('/admin/sessions/'):-len('/end')]
                 self._run(lambda: (api.admin_end_session(session_id), False))
+                return
+            if parsed.path == '/admin/supervisors':
+                body = self._read_json()
+                self._run(lambda: api.with_idempotency(
+                    key, lambda: api.admin_put_supervisor(body)))
                 return
 
             def run(body):

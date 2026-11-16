@@ -67,6 +67,19 @@ def build_server(advisor: AdvisorAdminClient, logs_dir, *, host='127.0.0.1', por
                     break
                 remaining -= len(chunk)
 
+        def _read_json(self):
+            try:
+                length = int(self.headers.get('Content-Length') or 0)
+            except ValueError:
+                length = 0
+            if not 0 <= length <= 65536:
+                return {}
+            try:
+                value = json.loads(self.rfile.read(length) or b'{}')
+            except ValueError:
+                return {}
+            return value if isinstance(value, dict) else {}
+
         def _proxy(self, action):
             try:
                 self._reply_json(200, action())
@@ -83,6 +96,8 @@ def build_server(advisor: AdvisorAdminClient, logs_dir, *, host='127.0.0.1', por
                 self._reply_json(200, {'status': 'ok'})
             elif parsed.path == '/api/sessions':
                 self._proxy(advisor.admin_sessions)
+            elif parsed.path == '/api/supervisors':
+                self._proxy(advisor.admin_supervisors)
             elif parsed.path == '/api/services':
                 self._reply_json(200, {'services': [
                     {'key': key, 'file': name, 'exists': (logs_root / name).exists(),
@@ -105,6 +120,8 @@ def build_server(advisor: AdvisorAdminClient, logs_dir, *, host='127.0.0.1', por
                 session_id = parsed.path[len('/api/sessions/'):-len('/end')]
                 self._discard_body()
                 self._proxy(lambda: advisor.admin_end_session(session_id))
+            elif parsed.path == '/api/supervisors':
+                self._proxy(lambda: advisor.admin_put_supervisor(**self._read_json()))
             else:
                 self._discard_body()
                 self._reply_json(404, {'error': {'code': 'not_found', 'message': 'unknown path'}})
