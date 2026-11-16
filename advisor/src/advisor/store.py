@@ -869,11 +869,20 @@ class SessionStore:
     # -- subscriptions ------------------------------------------------------
 
     def create_subscription_request(self, session_id, subscriber_open_id, *, now=None):
+        """STATE_MACHINES v2 T1: requesting occupies the caller's single claim."""
         moment = time.time() if now is None else now
+        ns = int(moment * 1_000_000_000)
         with self.unit_of_work() as tx:
             session = tx.sessions.require(session_id)
             if session['phase'] not in ('running', 'paused'):
                 raise StateError('not_found')
+            if session['owner_open_id'] == subscriber_open_id:
+                raise StateError('claim_conflict')  # controller cannot subscribe
+            claim = tx.connection.execute(
+                'SELECT session_id,kind FROM session_claims WHERE user_open_id=? AND active=1',
+                (subscriber_open_id,)).fetchone()
+            if claim is not None and claim['session_id'] != session_id:
+                raise StateError('claim_conflict')
             latest = tx.subscriptions.latest_for(session_id, subscriber_open_id)
             if latest is not None:
                 if latest['state'] == 'approved':
@@ -883,6 +892,12 @@ class SessionStore:
                 if latest['state'] == 'revoked':
                     raise StateError('invalid_state')
             row = tx.subscriptions.insert(session_id, subscriber_open_id, now=moment)
+            tx.connection.execute(
+                '''INSERT INTO session_claims(user_open_id,session_id,kind,active,created_ns)
+                   VALUES (?,?,'subscriber',1,?)
+                   ON CONFLICT(user_open_id,session_id) DO UPDATE SET
+                     active=1, released_ns=NULL''',
+                (subscriber_open_id, session_id, ns))
             previous = ({'request_no': latest['request_no'], 'state': latest['state']}
                         if latest is not None else None)
         return {'request_no': row['request_no'], 'state': 'requested', 'existing': False,
@@ -904,6 +919,12 @@ class SessionStore:
                 return {'request_no': request_no, 'state': row['state']}  # 幂等回显
             settled = tx.subscriptions.settle(
                 request_no, 'approved' if decision == 'approve' else 'denied', now=moment)
+            if settled['state'] == 'denied':
+                tx.connection.execute(
+                    'UPDATE session_claims SET active=0,released_ns=? '
+                    'WHERE user_open_id=? AND session_id=? AND active=1',
+                    (int(moment * 1_000_000_000), row['subscriber_open_id'],
+                     row['session_id']))
         return {'request_no': request_no, 'state': settled['state']}
 
     def revoke_subscription(self, request_no, caller_open_id, *, now=None):
@@ -920,6 +941,11 @@ class SessionStore:
                 raise StateError('invalid_state')
             settled = tx.subscriptions.settle(request_no, 'revoked', now=moment,
                                               expected='approved')
+            tx.connection.execute(
+                'UPDATE session_claims SET active=0,released_ns=? '
+                'WHERE user_open_id=? AND session_id=? AND active=1',
+                (int(moment * 1_000_000_000), row['subscriber_open_id'],
+                 row['session_id']))
             keep = set(tx.subscriptions.approved_recipients(row['session_id'],
                                                             session['owner_open_id']))
             keep.discard(row['subscriber_open_id'])
