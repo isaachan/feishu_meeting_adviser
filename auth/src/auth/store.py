@@ -9,7 +9,7 @@ import re
 from contextlib import contextmanager
 from pathlib import Path
 
-from .constants import MAX_FILE_BYTES, SCOPES
+from .constants import BASE_SCOPES, MAX_FILE_BYTES, SCOPES
 from .errors import AuthError
 from .storage import FileLock, ensure_private_directory, read_private_json, write_private_json
 
@@ -68,7 +68,7 @@ class CredentialStore:
         if result.get('token_type') != 'Bearer' or not isinstance(result.get('scope'), str):
             raise AuthError('oauth_invalid_response')
         scopes = set(result['scope'].split())
-        if not set(SCOPES) <= scopes:
+        if not set(BASE_SCOPES) <= scopes:
             raise AuthError('oauth_missing_scopes')
         if scopes - set(SCOPES) - {'user_profile'}:
             raise AuthError('oauth_excess_scopes')
@@ -88,7 +88,7 @@ class CredentialStore:
         try:
             valid_time = (type(value['expires_at']) in (int, float) and math.isfinite(value['expires_at'])
                 and type(value['refresh_margin']) in (int, float) and math.isfinite(value['refresh_margin']))
-            if not valid_time or not set(SCOPES) <= set(value['scopes']) or not _SECRET_TEXT.fullmatch(value['access_token']):
+            if not valid_time or not set(BASE_SCOPES) <= set(value['scopes']) or not _SECRET_TEXT.fullmatch(value['access_token']):
                 raise ValueError()
             if (not _SECRET_TEXT.fullmatch(value['refresh_token'])
                     or type(value['refresh_expires_at']) not in (int, float)

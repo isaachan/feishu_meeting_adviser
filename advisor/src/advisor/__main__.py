@@ -39,6 +39,9 @@ def main() -> None:
     serve.add_argument('--stt-url', default='ws://127.0.0.1:8392')
     serve.add_argument('--gateway-url', default='http://127.0.0.1:8377')
     serve.add_argument('--auth-url', default='http://127.0.0.1:8381')
+    serve.add_argument('--observe-poll-s', type=float, default=15)
+    serve.add_argument('--observe-timeout-s', type=float, default=10)
+    serve.add_argument('--max-observation-age-s', type=float, default=60)
     serve.add_argument('--model', choices=['remote', 'rule'], default='remote')
     serve.add_argument('--remote-backend', choices=['fake', 'opencode'], default='opencode',
                        help='gateway backend tag sent with inference jobs')
@@ -75,8 +78,13 @@ def main() -> None:
     database = args.data_dir / 'adviser.sqlite3'
     if not database.exists():
         SessionStore.initialize(database)
+    if min(args.observe_poll_s, args.observe_timeout_s, args.max_observation_age_s) <= 0:
+        parser.error('meeting observation budgets must be positive')
     settings = AdviserSettings(remote_url=args.gateway_url,
-                               remote_backend=args.remote_backend,
+                                remote_backend=args.remote_backend,
+                                observe_poll_s=args.observe_poll_s,
+                                observe_timeout_s=args.observe_timeout_s,
+                                max_observation_age_s=args.max_observation_age_s,
                                nsdp_refresh_seconds=args.nsdp_refresh_s,
                                nsdp_retry_seconds=args.nsdp_retry_s,
                                nsdp_nag_seconds=args.nsdp_nag_s)
@@ -102,17 +110,25 @@ def main() -> None:
                           port=args.ingest_port)
     from .nsdp import NsdpService, StubNsdpClient
     jira_notifier = nsdp_service or NsdpService(HttpAuthClient(args.auth_url), StubNsdpClient(), store)
+    auth_client = HttpAuthClient(args.auth_url)
+    meeting_observer = None
+    if args.calendar == 'feishu' and not args.calendar_stub:
+        from .meeting_observer import FeishuMeetingObserver
+        meeting_observer = FeishuMeetingObserver(
+            store, auth_client, timeout_s=args.observe_timeout_s,
+            max_age_s=args.max_observation_age_s)
     supervisor = SessionSupervisor(store, settings, backend_factory=backend_factory,
                                    ingest_activity=ingest.activity_snapshot,
                                    close_ingest=ingest.close_session,
                                    source_connected=ingest.source_connected,
-                                    nsdp=nsdp_service, jira_notifier=jira_notifier)
+                                   nsdp=nsdp_service, jira_notifier=jira_notifier,
+                                   meeting_observer=meeting_observer)
     if args.calendar == 'stub' or args.calendar_stub:
         calendar_validator = StubCalendarValidator(args.calendar_stub_description)
     else:
         from .calendar import FeishuCalendarValidator
         calendar_validator = FeishuCalendarValidator(HttpAuthClient(args.auth_url))
-    api = AdvisorApi(store, supervisor, auth_client=HttpAuthClient(args.auth_url),
+    api = AdvisorApi(store, supervisor, auth_client=auth_client,
                      calendar_validator=calendar_validator,
                      ingest_url=args.ingest_url, nsdp=nsdp_service,
                      nsdp_join_budget_s=args.nsdp_join_budget_s)

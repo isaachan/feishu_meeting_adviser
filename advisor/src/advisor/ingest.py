@@ -354,6 +354,12 @@ class _Connection:
         if sequence <= self.acked or sequence <= self.last_seq:
             self.server.dropped_frames += 1  # idempotent drop of overlap
             return
+        try:
+            self.store.record_audio_at(self.session_id, now=self.server.clock())
+        except StorageError:
+            phase = self.store.require_session(self.session_id)['phase']
+            raise IngestError('session_paused' if phase == 'paused' else 'session_ended',
+                              f'session is {phase}') from None
         self.last_seq = sequence
         await self._sink().feed(pcm)
         self.acked = sequence
@@ -376,7 +382,7 @@ class _Connection:
 
     async def _stream_end(self, message: dict):
         last = message.get('last_sequence')
-        if not isinstance(last, int) or last < self.acked:
+        if type(last) is not int or last != self.last_seq or last < self.acked:
             raise IngestError('bad_message', 'invalid last_sequence')
         self.store.source_ack(self.session_id, self.source, last)
         self.store.mark_source_drained(self.session_id, self.source, last)

@@ -115,7 +115,7 @@
 
 与 SERVICE_STATE_MACHINES_V2 §5.2 逐条对应；具体秒数除 900 外均未业务定值。
 
-## 6. 数据模型与迁移（schema v4 → v5）
+## 6. 数据模型与迁移（schema v4 → v5 → v6）
 
 ### 6.1 变更
 
@@ -123,6 +123,7 @@
 - 新表 `session_claims(user_open_id, session_id, kind controller|subscriber, active INTEGER, created_ns, released_ns)`；**partial unique index** `ON session_claims(user_open_id) WHERE active=1` 实现单人单占位的事务级约束。
 - `subscriptions`：state 扩充（§3）；新增 `approval_deadline_at REAL`、`closed_by TEXT`（subscriber|owner|system）。
 - 新表 `supervisor_grants(login_name TEXT, open_id TEXT, enabled INTEGER, updated_ns INTEGER, updated_by TEXT)`，`open_id` 为空表示未解析/禁用。
+- v6：`sessions.vc_meeting_id TEXT`（唯一非 NULL；仅确认与会 owner 当前所在会议及该 occurrence 绑定后赋值）。同版补齐早期 v5 数据库可能缺失的 `owner_presence` / `observed_at`。
 
 ### 6.2 迁移矩阵（幂等，`upgrade_schema` v4→v5）
 
@@ -131,6 +132,8 @@
 3. `meeting_instance_key` 回填 `'legacy|' || meeting_no || '|' || event_calendar_id || '|' || event_id`，冲突时追加 `'#'||rowid` 保证唯一。
 4. 为历史会话补写 controller claim 行（`active = phase NOT IN ('ended')`）与历史 approved 订阅的 claim 行（同前），ended 会话不补。
 5. `PRAGMA user_version=5`。**回滚**：v5→v4 不支持（枚举扩列不可逆），以升级前备份恢复。
+
+6. v5→v6：检查 `sessions` 列表并补缺失的 `owner_presence` / `observed_at` / `vc_meeting_id`，建立 VC ID 唯一索引，写 `user_version=6`；v4→v6 先完成上述 v4→v5 再继续此步。回滚仍使用升级前备份。
 
 ## 7. 与 v1 的差异与兼容窗口
 

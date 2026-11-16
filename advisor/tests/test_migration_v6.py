@@ -1,4 +1,4 @@
-"""Schema v4 -> v5 migration tests (STATE_MACHINES v2 §6.2)."""
+"""Schema v4 -> v6 migration tests (STATE_MACHINES v2 §6.2)."""
 import unittest
 from pathlib import Path
 import sqlite3
@@ -96,7 +96,7 @@ class MigrationTests(unittest.TestCase):
     def test_v4_upgrades_to_v5_in_place(self):
         store = self.open()
         version = store.db.execute('PRAGMA user_version').fetchone()[0]
-        self.assertEqual(version, 5)
+        self.assertEqual(version, 6)
         phases = {row['session_id']: row['phase']
                   for row in store.db.execute('SELECT session_id,phase FROM sessions')}
         self.assertEqual(phases, {'s-live': 'running', 's-old': 'ended'})
@@ -134,7 +134,21 @@ class MigrationTests(unittest.TestCase):
         SessionStore.initialize(fresh)
         store = SessionStore(fresh)
         self.addCleanup(store.close)
-        self.assertEqual(store.db.execute('PRAGMA user_version').fetchone()[0], 5)
+        self.assertEqual(store.db.execute('PRAGMA user_version').fetchone()[0], 6)
+
+    def test_early_v5_without_observation_columns_is_upgraded(self):
+        early = Path(self.tmp.name) / 'early.sqlite3'
+        SessionStore.initialize(early)
+        with sqlite3.connect(early) as db:
+            db.execute('DROP INDEX sessions_vc_meeting')
+            for col in ('owner_presence', 'observed_at', 'vc_meeting_id'):
+                db.execute(f'ALTER TABLE sessions DROP COLUMN {col}')
+            db.execute('PRAGMA user_version=5')
+        store = SessionStore(early)
+        self.addCleanup(store.close)
+        cols = {row['name'] for row in store.db.execute('PRAGMA table_info(sessions)')}
+        self.assertTrue({'owner_presence', 'observed_at', 'vc_meeting_id'} <= cols)
+        self.assertEqual(store.db.execute('PRAGMA user_version').fetchone()[0], 6)
 
 
 if __name__ == '__main__':

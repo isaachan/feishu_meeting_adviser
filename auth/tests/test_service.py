@@ -114,8 +114,20 @@ class AuthorizeFlowTests(unittest.TestCase):
             self.assertEqual(query['client_id'], ['cli_test'])
             self.assertEqual(query['code_challenge_method'], ['S256'])
             self.assertEqual(query['prompt'], ['consent'])
+            self.assertIn('vc:meeting.meetingevent:read', query['scope'][0].split())
             self.assertEqual(query['redirect_uri'], ['https://auth.internal/oauth/callback'])
             self.assertTrue((Path(tmp) / 'pending_states.json').exists())
+
+    def test_pre_scope_expansion_credentials_remain_usable(self):
+        with TemporaryDirectory() as tmp:
+            service = make_service(tmp, FakeTransport())
+            record = service.store.token_record(
+                make_token('u-legacy', 'r-legacy'), started=1_000_000,
+                open_id='ou_A', subject_hash=None)
+            service.store.write('ou_A', record)
+            token = service.get_valid_token('ou_A')
+            self.assertEqual(token['access_token'], 'u-legacy')
+            self.assertNotIn('vc:meeting.meetingevent:read', token['scopes'])
 
     def test_callback_success_writes_ready_record(self):
         with TemporaryDirectory() as tmp:

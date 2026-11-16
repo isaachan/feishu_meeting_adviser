@@ -8,6 +8,7 @@ import functools
 import hashlib
 from pathlib import Path
 import secrets
+import sqlite3
 import threading
 import time
 from uuid import NAMESPACE_URL, uuid4, uuid5
@@ -119,6 +120,19 @@ def upgrade_schema(database: SQLiteDatabase) -> None:
                 FROM subscriptions s JOIN sessions e ON e.session_id=s.session_id
                 WHERE s.state='approved' AND e.phase!='ended' ''')
             db.execute('PRAGMA user_version=5')
+        version = 5
+    if version == 5:
+        with database.transaction():
+            db = database.connection
+            # Early v5 databases may predate SM-06's observation columns.
+            columns = {row['name'] for row in db.execute('PRAGMA table_info(sessions)')}
+            for name, kind in (('owner_presence', 'TEXT'), ('observed_at', 'REAL'),
+                               ('vc_meeting_id', 'TEXT')):
+                if name not in columns:
+                    db.execute(f'ALTER TABLE sessions ADD COLUMN {name} {kind}')
+            db.execute('CREATE UNIQUE INDEX IF NOT EXISTS sessions_vc_meeting '
+                       'ON sessions(vc_meeting_id) WHERE vc_meeting_id IS NOT NULL')
+            db.execute('PRAGMA user_version=6')
         return
     # fresh (0/empty) and unknown versions are judged by require_schema
 
@@ -420,6 +434,28 @@ class SessionStore:
                     'WHERE session_id=? AND active=1', (ns, session_id))
         return {'session_id': session_id, 'phase': target, 'applied': True}
 
+    def bind_vc_meeting(self, session_id, meeting_id):
+        """Bind a VC ID only when exactly one active occurrence owns the number."""
+        with self.unit_of_work() as tx:
+            session = tx.sessions.require(session_id)
+            if session['phase'] not in ('running', 'paused'):
+                return False
+            if session['vc_meeting_id'] is not None:
+                return session['vc_meeting_id'] == meeting_id
+            others = tx.connection.execute(
+                "SELECT 1 FROM sessions WHERE meeting_no=? AND session_id!=? "
+                "AND phase IN ('running','paused') LIMIT 1",
+                (session['meeting_no'], session_id)).fetchone()
+            if others:
+                return False
+            try:
+                tx.connection.execute(
+                    'UPDATE sessions SET vc_meeting_id=? WHERE session_id=? '
+                    'AND vc_meeting_id IS NULL', (meeting_id, session_id))
+            except sqlite3.IntegrityError:
+                return False
+        return True
+
     @_locked
     def active_sessions_by_meeting_no(self, meeting_no):
         """S3 目标解析：同号全部 running/paused 会话（>1 个时上层报 meeting_ambiguous）。"""
@@ -572,7 +608,7 @@ class SessionStore:
         return dict(row) if row else None
 
     def source_ack(self, session_id, source, sequence, *, now=None):
-        """推进持久化游标（ack 语义）；返回是否推进。真实音频时钟同步持久化。"""
+        """Advance the durable cursor; control messages do not refresh audio idle."""
         moment = time.time() if now is None else now
         with self.unit_of_work() as tx:
             row = tx.connection.execute(
@@ -585,11 +621,18 @@ class SessionStore:
             tx.connection.execute(
                 'UPDATE sources SET acked_sequence=?,last_seen_ns=? WHERE session_id=? AND source=?',
                 (sequence, int(moment * 1_000_000_000), session_id, source))
-            tx.connection.execute(
-                'UPDATE sessions SET last_audio_at=? WHERE session_id=? '
-                'AND (last_audio_at IS NULL OR last_audio_at<?)',
-                (moment, session_id, moment))
         return True
+
+    def record_audio_at(self, session_id, *, now=None):
+        """Only an accepted binary audio frame may advance session idle time."""
+        moment = time.time() if now is None else now
+        with self.unit_of_work() as tx:
+            session = tx.sessions.require(session_id)
+            if session['phase'] != 'running':
+                raise StateError('session_not_recording')
+            tx.connection.execute(
+                'UPDATE sessions SET last_audio_at=MAX(COALESCE(last_audio_at,0),?) '
+                'WHERE session_id=?', (moment, session_id))
 
     def mark_source_drained(self, session_id, source, last_sequence):
         with self.unit_of_work() as tx:

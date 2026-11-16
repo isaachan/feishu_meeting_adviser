@@ -19,7 +19,7 @@ from .models import (Caption, JobState, MaterialState, ReplyState, SourceState,
                      caption_to_dict, digest)
 from .sqlite import SQLiteDatabase
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 SCHEMA = (
     '''CREATE TABLE sessions (
@@ -34,11 +34,12 @@ SCHEMA = (
         material_version TEXT, material_state TEXT NOT NULL DEFAULT 'disabled',
         created_ns INTEGER NOT NULL, started_at REAL NOT NULL, ended_ns INTEGER,
         last_audio_at REAL, drain_deadline_at REAL,
-        owner_presence TEXT, observed_at REAL,
+        owner_presence TEXT, observed_at REAL, vc_meeting_id TEXT,
         idle_timeout_s INTEGER NOT NULL DEFAULT 900,
         nsdp_hold INTEGER NOT NULL DEFAULT 0,
         lease_owner TEXT, lease_expires_at REAL)''',
     'CREATE UNIQUE INDEX sessions_instance ON sessions(meeting_instance_key)',
+    'CREATE UNIQUE INDEX sessions_vc_meeting ON sessions(vc_meeting_id) WHERE vc_meeting_id IS NOT NULL',
     'CREATE INDEX sessions_owner ON sessions(owner_open_id, phase)',
     'CREATE INDEX sessions_meeting ON sessions(meeting_no, phase)',
     '''CREATE TABLE inputs (

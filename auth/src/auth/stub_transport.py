@@ -7,6 +7,8 @@ unchanged. Never enable against real credentials.
 """
 import time
 
+from .constants import SCOPES
+
 
 class StubTransport:
     exchange_calls = 0
@@ -17,7 +19,7 @@ class StubTransport:
         return {'access_token': f'stub-{code}', 'refresh_token': f'stub-r-{code}',
                 'token_type': 'Bearer', 'expires_in': 7200,
                 'refresh_token_expires_in': 2592000,
-                'scope': 'calendar:calendar:read calendar:calendar.event:read offline_access'}
+                 'scope': ' '.join(SCOPES)}
 
     def refresh(self, refresh_token, *, timeout=None):
         StubTransport.refresh_calls += 1
@@ -25,7 +27,7 @@ class StubTransport:
                 'refresh_token': f'stub-rr-{StubTransport.refresh_calls}',
                 'token_type': 'Bearer', 'expires_in': 7200,
                 'refresh_token_expires_in': 2592000,
-                'scope': 'calendar:calendar:read calendar:calendar.event:read offline_access'}
+                 'scope': ' '.join(SCOPES)}
 
     def subject(self, token):
         if isinstance(token, str) and token.startswith('stub-'):

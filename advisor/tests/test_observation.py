@@ -154,12 +154,12 @@ class IdleClockTests(ObservationBase):
     def test_real_audio_extends_control_messages_do_not(self):
         session = self.create()
         self.store.ensure_source(session['session_id'], 'loopback', now=NOW + 100)
+        self.store.record_audio_at(session['session_id'], now=NOW + 500)
         self.store.source_ack(session['session_id'], 'loopback', 10, now=NOW + 500)
         row = self.store.require_session(session['session_id'])
         self.assertEqual(row['last_audio_at'], NOW + 500)
-        # gap/stop 等控制路径不经过 source_ack → 不续期（ingest 层保证）
-        self.store.source_ack(session['session_id'], 'loopback', 11, now=NOW + 100)
-        # 游标回退不推进、不回拨时钟
+        # stream_end/gap can advance a cursor, not the real-audio clock.
+        self.store.source_ack(session['session_id'], 'loopback', 11, now=NOW + 600)
         row = self.store.require_session(session['session_id'])
         self.assertEqual(row['last_audio_at'], NOW + 500)
 

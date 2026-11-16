@@ -27,12 +27,13 @@ class SessionSupervisor:
     def __init__(self, store: SessionStore, settings: AdviserSettings, *,
                  backend_factory, ingest_activity=None, close_ingest=None,
                  source_connected=None, clock=time.time, monotonic=time.monotonic,
-                 nsdp=None, legacy_nsdp=False, jira_notifier=None):
+                 nsdp=None, legacy_nsdp=False, jira_notifier=None, meeting_observer=None):
         self.store = store
         self.settings = settings
         self.backend_factory = backend_factory
         self.ingest_activity = ingest_activity or (lambda: {})
         self._close_ingest = close_ingest
+        self.meeting_observer = meeting_observer
         self.source_connected = source_connected
         self.clock = clock
         self.monotonic = monotonic
@@ -102,6 +103,7 @@ class SessionSupervisor:
             prepare()
         executor = ModelJobExecutor(backend, role)
         backoff_until = 0.0
+        next_observation_at = 0.0
         try:
             while not self._stop.is_set():
                 if not self.store.acquire_lease(session_id, self._lease_owner,
@@ -119,6 +121,17 @@ class SessionSupervisor:
                 if phase == 'ended':
                     return
                 now = self.clock()
+                if (self.meeting_observer is not None
+                        and phase in ('running', 'paused')
+                        and now >= next_observation_at):
+                    next_observation_at = now + self.settings.observe_poll_s
+                    try:
+                        self.meeting_observer.observe(session)
+                    except Exception:
+                        LOG.exception('meeting observation failed: session=%s', session_id)
+                    session = self.store.require_session(session_id)
+                    phase = session['phase']
+                    now = self.clock()
                 if self.legacy_nsdp:
                     self._nsdp_maintenance(session_id, session, now)
                 result = executor.take_finished()
