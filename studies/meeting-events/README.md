@@ -35,6 +35,7 @@
 
 3. 首次运行会在终端打印授权链接：浏览器打开并用**参加会议的那个飞书账号**同意授权；回调后自动开始轮询。token 仅存于进程内存，约 2 小时过期，过期后重新运行重新授权（程序会提示）。也可用 `FEISHU_USER_ACCESS_TOKEN` 环境变量直接提供同应用、同 scope 的用户 token 跳过授权。
 4. 授权时若提示缺少 scope，或轮询报 `99991672`/`121005` 等，说明该 scope 对应接口不足或数据不属于该用户——错误行会带具体 code 和 msg，以此判断 `vc:meeting.meetingevent:read` 在用户身份下能否完成按会议号查询与详情获取。
+5. `list_by_no` 不接受 `vc:meeting.meetingevent:read`（无论应用还是用户身份，需 `vc:meeting.meetingid:read` 或 `vc:meeting:readonly`）。`poll_user.py` 在被拒（code 99991672/99991679）时自动改用 `GET /vc/v1/bots/user_active_meeting`（"用户正在参加的会议"，该 scope 可用）：要求**授权用户本人正在会中**才能解析出会议 ID；解析成功后会继续轮询详情直至会议结束，用户提前离会则观察不到后续事件。
 
 ## 仅针对 API 预约会议的推送探针
 
