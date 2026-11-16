@@ -12,23 +12,32 @@ from urllib import error, parse, request
 API = 'https://open.feishu.cn/open-apis'
 
 
-def fetch(url, *, token=None, body=None):
+def diagnostic(operation, http_status, result):
+    code = result.get('code') if isinstance(result, dict) else None
+    msg = result.get('msg') if isinstance(result, dict) else None
+    detail = f'飞书 {operation}：HTTP {http_status}，API code={code}'
+    if isinstance(msg, str) and msg:
+        detail += f'，msg={msg[:200]!r}'
+    return RuntimeError(detail)
+
+
+def fetch(url, *, operation, token):
     headers = {'Accept': 'application/json'}
-    if token:
-        headers['Authorization'] = 'Bearer ' + token
-    if body is not None:
-        headers['Content-Type'] = 'application/json; charset=utf-8'
-    req = request.Request(url, headers=headers, data=json.dumps(body).encode() if body is not None else None)
+    headers['Authorization'] = 'Bearer ' + token
+    req = request.Request(url, headers=headers)
     try:
         with request.urlopen(req, timeout=15) as response:
             result = json.load(response)
     except error.HTTPError as exc:
-        raise RuntimeError(f'飞书 HTTP {exc.code}（检查权限和应用的数据范围）') from None
+        try:
+            result = json.load(exc)
+        except (ValueError, OSError):
+            result = None
+        raise diagnostic(operation, exc.code, result) from None
     except (error.URLError, OSError, ValueError) as exc:
-        raise RuntimeError(f'飞书请求失败：{type(exc).__name__}') from None
+        raise RuntimeError(f'飞书 {operation} 请求失败：{type(exc).__name__}') from None
     if not isinstance(result, dict) or result.get('code') != 0:
-        code = result.get('code') if isinstance(result, dict) else None
-        raise RuntimeError(f'飞书 API 返回 code={code}（检查权限和应用的数据范围）')
+        raise diagnostic(operation, 200, result)
     return result.get('data') or {}
 
 
@@ -55,7 +64,8 @@ def lookup(meeting_no, token):
              'end_time': now, 'page_size': 50}
     briefs = []
     while True:
-        data = fetch(API + '/vc/v1/meetings/list_by_no?' + parse.urlencode(query), token=token)
+        data = fetch(API + '/vc/v1/meetings/list_by_no?' + parse.urlencode(query),
+                     operation='按会议号查询', token=token)
         briefs.extend(data.get('meeting_briefs') or [])
         if not data.get('has_more'):
             break
@@ -70,7 +80,7 @@ def lookup(meeting_no, token):
 def details(meeting_id, token):
     query = parse.urlencode({'with_participants': 'true'})
     data = fetch(API + '/vc/v1/meetings/' + parse.quote(meeting_id, safe='') + '?' + query,
-                 token=token)
+                 operation='获取会议详情', token=token)
     meeting = data.get('meeting')
     if not isinstance(meeting, dict):
         raise RuntimeError('会议详情缺少 meeting')
