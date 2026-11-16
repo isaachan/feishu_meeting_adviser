@@ -21,6 +21,21 @@
 
 官方接口：[按会议号查询](https://open.feishu.cn/document/server-docs/vc-v1/meeting/list_by_no)、[获取会议详情](https://open.feishu.cn/document/server-docs/vc-v1/meeting/get)。
 
+## 用用户身份轮询（poll_user.py）
+
+`poll_user.py` 走**用户授权**（PKCE）取得 `vc:meeting.meetingevent:read` 的 user access token，再轮询同样的“会议号 → 会议详情”链路，用于验证该用户身份权限能走多远。沿用上文的电脑/手机测试流程；输出仍是轮询状态，不是推送。
+
+1. 前置：应用开通**用户身份**权限 `vc:meeting.meetingevent:read` 并发布；在应用安全设置中把 `http://127.0.0.1:8767/callback` 加入重定向 URL 白名单。
+2. 运行（无需安装 SDK）：
+
+   ```bash
+   source studies/meeting-events/local.env
+   python3 studies/meeting-events/poll_user.py 123456789
+   ```
+
+3. 首次运行会在终端打印授权链接：浏览器打开并用**参加会议的那个飞书账号**同意授权；回调后自动开始轮询。token 仅存于进程内存，约 2 小时过期，过期后重新运行重新授权（程序会提示）。也可用 `FEISHU_USER_ACCESS_TOKEN` 环境变量直接提供同应用、同 scope 的用户 token 跳过授权。
+4. 授权时若提示缺少 scope，或轮询报 `99991672`/`121005` 等，说明该 scope 对应接口不足或数据不属于该用户——错误行会带具体 code 和 msg，以此判断 `vc:meeting.meetingevent:read` 在用户身份下能否完成按会议号查询与详情获取。
+
 ## 仅针对 API 预约会议的推送探针
 
 若另行验证通过 Open API 预约会议的四种推送，需在同一应用订阅对应事件并发布，然后安装 `lark-oapi>=1.4,<2` 和 `python-socks[asyncio]>=2.4.4,<3`，运行：
