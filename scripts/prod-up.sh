@@ -57,6 +57,12 @@ server {
     location = /nsdp/submit { proxy_pass http://127.0.0.1:8381; }
     location = /jira/submit { proxy_pass http://127.0.0.1:8381; }
     location /gui/ { proxy_pass http://127.0.0.1:8380; }
+    location = /admin { return 301 /admin/; }
+    location /admin/ {
+        proxy_pass http://127.0.0.1:8390/;
+        proxy_buffering off;
+        proxy_read_timeout 1h;
+    }
     location / { return 404; }
 }
 EOF

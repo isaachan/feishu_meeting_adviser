@@ -127,7 +127,7 @@ let sessionsTimer = null;
 async function loadSessions(manual) {
   let data = null;
   try {
-    const resp = await fetch('/api/sessions');
+    const resp = await fetch('api/sessions');
     data = await resp.json();
     if (!resp.ok) throw new Error((data.error && data.error.message) || resp.status);
   } catch (err) {
@@ -165,7 +165,7 @@ async function loadSessions(manual) {
 async function endSession(id, title) {
   if (!confirm(`确定结束会话 ${id}「${title}」？\n会话将进入 draining 排空后自动 ended。`)) return;
   try {
-    const resp = await fetch(`/api/sessions/${encodeURIComponent(id)}/end`, { method: 'POST' });
+    const resp = await fetch(`api/sessions/${encodeURIComponent(id)}/end`, { method: 'POST' });
     const body = await resp.json();
     if (!resp.ok) throw new Error((body.error && body.error.message) || resp.status);
     banner('ok', `已停止 ${id}（phase=${body.phase}）`);
@@ -227,7 +227,7 @@ function buildLogTabs() {
 
 async function markServices() {
   try {
-    const resp = await fetch('/api/services');
+    const resp = await fetch('api/services');
     const data = await resp.json();
     for (const svc of (data.services || [])) {
       const btn = document.querySelector(`#log-tabs button[data-key="${svc.key}"]`);
@@ -264,7 +264,7 @@ function selectLog(key) {
   for (const btn of document.querySelectorAll('#log-tabs button'))
     btn.classList.toggle('active', btn.dataset.key === key);
   setLogState('connecting…');
-  source = new EventSource(`/api/logs/${encodeURIComponent(key)}/stream`);
+  source = new EventSource(`api/logs/${encodeURIComponent(key)}/stream`);
   source.onopen = () => setLogState(`tail -f ${logLabel(key)} · 已连接`);
   source.onmessage = (event) => {
     try { appendLog(JSON.parse(event.data)); }

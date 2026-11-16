@@ -106,6 +106,13 @@ class BasicTests(AdminSiteBase):
             self.assertIn('text/html', response.headers['Content-Type'])
             self.assertIn('运维台', response.read().decode('utf-8'))
 
+    def test_index_api_and_log_requests_work_under_admin_prefix(self):
+        with OPENER.open(self.url('/'), timeout=5) as response:
+            html = response.read().decode('utf-8')
+        for path in ('api/sessions', 'api/services', 'api/logs/'):
+            self.assertIn(path, html)
+            self.assertNotIn('/' + path, html)
+
     def test_services_lists_five_with_existence(self):
         status, body, _ = self.get('/api/services')
         keys = [s['key'] for s in body['services']]
