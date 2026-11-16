@@ -19,21 +19,25 @@ from .models import (Caption, JobState, MaterialState, ReplyState, SourceState,
                      caption_to_dict, digest)
 from .sqlite import SQLiteDatabase
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 SCHEMA = (
     '''CREATE TABLE sessions (
         session_id TEXT PRIMARY KEY, owner_open_id TEXT NOT NULL,
         meeting_no TEXT NOT NULL, title TEXT NOT NULL DEFAULT '',
         event_calendar_id TEXT NOT NULL, event_id TEXT NOT NULL,
-        phase TEXT NOT NULL DEFAULT 'recording', stream_token TEXT NOT NULL,
+        meeting_instance_key TEXT NOT NULL,
+        phase TEXT NOT NULL DEFAULT 'running', stream_token TEXT NOT NULL,
+        organizer_open_id TEXT NOT NULL DEFAULT '',
         generation INTEGER NOT NULL DEFAULT 0, decided_generation INTEGER NOT NULL DEFAULT 0,
         error TEXT, retry_at REAL NOT NULL DEFAULT 0, cooldown_until REAL NOT NULL DEFAULT 0,
         material_version TEXT, material_state TEXT NOT NULL DEFAULT 'disabled',
         created_ns INTEGER NOT NULL, started_at REAL NOT NULL, ended_ns INTEGER,
+        last_audio_at REAL, drain_deadline_at REAL,
         idle_timeout_s INTEGER NOT NULL DEFAULT 900,
         nsdp_hold INTEGER NOT NULL DEFAULT 0,
         lease_owner TEXT, lease_expires_at REAL)''',
+    'CREATE UNIQUE INDEX sessions_instance ON sessions(meeting_instance_key)',
     'CREATE INDEX sessions_owner ON sessions(owner_open_id, phase)',
     'CREATE INDEX sessions_meeting ON sessions(meeting_no, phase)',
     '''CREATE TABLE inputs (
@@ -69,8 +73,18 @@ SCHEMA = (
     '''CREATE TABLE subscriptions (
         request_no INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,
         subscriber_open_id TEXT NOT NULL, state TEXT NOT NULL,
-        created_ns INTEGER NOT NULL, decided_ns INTEGER)''',
+        created_ns INTEGER NOT NULL, decided_ns INTEGER,
+        approval_deadline_at REAL, closed_by TEXT)''',
     'CREATE INDEX subscriptions_session ON subscriptions(session_id,state)',
+    '''CREATE TABLE session_claims (
+        user_open_id TEXT NOT NULL, session_id TEXT NOT NULL,
+        kind TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1,
+        created_ns INTEGER NOT NULL, released_ns INTEGER,
+        PRIMARY KEY (user_open_id, session_id))''',
+    'CREATE UNIQUE INDEX session_claims_active ON session_claims(user_open_id) WHERE active=1',
+    '''CREATE TABLE supervisor_grants (
+        login_name TEXT PRIMARY KEY, open_id TEXT, enabled INTEGER NOT NULL DEFAULT 0,
+        updated_ns INTEGER NOT NULL, updated_by TEXT NOT NULL DEFAULT 'admin')''',
     '''CREATE TABLE idempotency (
         key TEXT PRIMARY KEY, response TEXT NOT NULL, created_ns INTEGER NOT NULL)''',
     '''CREATE TABLE gui_devices (
@@ -83,9 +97,20 @@ SCHEMA = (
         checked_ns INTEGER NOT NULL DEFAULT 0)''',
 )
 
-SESSION_PHASES = ('recording', 'draining', 'ended')
-SESSION_TRANSITIONS = {('recording', 'draining'), ('recording', 'ended'), ('draining', 'ended')}
-SUBSCRIPTION_STATES = ('requested', 'approved', 'denied', 'revoked')
+SESSION_PHASES = ('running', 'paused', 'draining', 'ended')
+SESSION_TRANSITIONS = {('running', 'paused'), ('paused', 'running'),
+                       ('running', 'draining'), ('paused', 'draining'),
+                       ('draining', 'ended')}
+SUBSCRIPTION_STATES = ('requested', 'approved', 'denied', 'expired',
+                       'subscriber_cancelled', 'owner_revoked', 'revoked')
+DEFAULT_DRAIN_DEADLINE_S = 600  # engineering default (STATE_MACHINES v2 §5)
+
+
+def meeting_instance_key(meeting_no: str, event_calendar_id: str, event_id: str,
+                         occurrence_start: int) -> str:
+    """STATE_MACHINES v2 §0: meeting_no + authoritative occurrence identity."""
+    normalized = event_id if '/' in event_id else f'{event_calendar_id}/{event_id}'
+    return f'{meeting_no}|{normalized}|{int(occurrence_start)}'
 
 
 def encode(value) -> str:

@@ -306,7 +306,7 @@ class SupervisorHoldTests(unittest.TestCase):
             nsdp=self.nsdp, legacy_nsdp=True)
 
     def _create_session(self):
-        session = self.store.create_session(
+        session, _existing = self.store.create_session(
             owner_open_id='ou_A', meeting_no='123456789', title='t',
             event_calendar_id='cal', event_id='evt', description='NT3 BL2.0.0',
             now=self.now[0], nsdp_text='初始版本计划')
@@ -335,7 +335,7 @@ class SupervisorHoldTests(unittest.TestCase):
         session_id = self.store.create_session(
             owner_open_id='ou_A', meeting_no='123456789', title='t',
             event_calendar_id='cal', event_id='evt', description='NT3 BL2.0.0',
-            now=self.now[0], nsdp_text='')['session_id']
+            now=self.now[0], nsdp_text='')[0]['session_id']
         material = self.store.materials(session_id)
         self.assertEqual(material.get('documents'), [])  # degraded: no nsdp doc
         supervisor = self._make_supervisor()

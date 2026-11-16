@@ -16,6 +16,7 @@ from urllib import parse
 from .auth_client import AuthorizationRequired, AuthUnavailable
 from .errors import StateError, StorageError
 from .nsdp import NsdpUnavailable
+from .persistence import meeting_instance_key
 from .store import SessionStore
 
 LOG = logging.getLogger(__name__)
@@ -36,14 +37,44 @@ class CalendarValidator:
 
 
 class StubCalendarValidator(CalendarValidator):
-    """Approves everything with a fixed binding (stub-first stages only)."""
+    """Deterministic occurrence model for tests and the integration bed.
 
-    def __init__(self, description=''):
+    ``occurrences`` maps meeting_no -> list of occurrence dicts
+    ({start_ts, organizer_open_id?, attendees?, title?, description?, event_id?}).
+    Default (no registry): one implicit occurrence per meeting_no that anyone
+    can organize (stub-first stages; preserves the pre-v2 stub behavior).
+    """
+
+    DEFAULT_START_TS = 1762800000
+
+    def __init__(self, description='', occurrences=None):
         self.description = description
+        self.occurrences = occurrences
+
+    def _occurrences_for(self, meeting_no):
+        if self.occurrences is not None:
+            return self.occurrences.get(meeting_no, [])
+        return [{'start_ts': self.DEFAULT_START_TS, 'organizer_open_id': None}]
 
     def validate(self, owner_open_id, meeting_ref):
-        return {'event_calendar_id': 'cal_stub', 'event_id': f'evt_{meeting_ref.get("no")}',
-                'title': f'会议 {meeting_ref.get("no")}', 'description': self.description}
+        meeting_no = (meeting_ref or {}).get('no')
+        occurrences = self._occurrences_for(meeting_no)
+        if not occurrences:
+            raise CalendarError('meeting_not_found')
+        if len(occurrences) > 1:
+            raise CalendarError('meeting_ambiguous')
+        occurrence = occurrences[0]
+        organizer = occurrence.get('organizer_open_id')
+        if organizer is not None and organizer != owner_open_id:
+            raise CalendarError('not_organizer')
+        return {'event_calendar_id': 'cal_stub',
+                'event_id': occurrence.get('event_id') or f'evt_{meeting_no}',
+                'title': occurrence.get('title') or f'会议 {meeting_no}',
+                'description': occurrence.get('description', self.description),
+                'organizer': organizer if organizer is not None else owner_open_id,
+                'attendees': set(occurrence.get('attendees') or ()),
+                'start': occurrence.get('start_ts', self.DEFAULT_START_TS),
+                'end': occurrence.get('start_ts', self.DEFAULT_START_TS) + 3600}
 
     def list_meetings(self, owner_open_id, *, days=7, limit=10):
         now = int(time.time())
@@ -61,7 +92,10 @@ class ApiError(Exception):
 
 def _state_error(exc: StateError):
     mapping = {'not_found': (404, 'not_found'), 'invalid_state': (409, 'invalid_state'),
-               'not_owner': (409, 'not_owner'), 'session_not_recording': (409, 'session_ended')}
+               'not_owner': (409, 'not_owner'), 'session_not_recording': (409, 'session_ended'),
+               'session_claimed': (409, 'session_claimed'),
+               'instance_ended': (409, 'instance_ended'),
+               'claim_conflict': (409, 'claim_conflict')}
     status, code = mapping.get(exc.args[0] if exc.args else '', (409, 'invalid_state'))
     return ApiError(status, code, 'state machine rejected the operation')
 
@@ -151,9 +185,12 @@ class AdvisorApi:
         if self.legacy_nsdp:
             self._gate_nsdp(owner)
         self._gate_join_credentials(owner, meeting_no)
+        # Cheap retry shortcut (same owner, same meeting_no, non-ended): the
+        # single-claim rule means this must be the caller's session for that
+        # meeting; avoids the calendar round-trip on command retries.
         active = self.store.db.execute(
             "SELECT * FROM sessions WHERE owner_open_id=? AND meeting_no=? "
-            "AND phase IN ('recording','draining')", (owner, meeting_no)).fetchone()
+            "AND phase IN ('running','paused','draining')", (owner, meeting_no)).fetchone()
         if active is not None:
             LOG.info('session reuse: session=%s meeting=%s owner=%s',
                      active['session_id'], meeting_no, owner)
@@ -182,16 +219,25 @@ class AdvisorApi:
                 LOG.warning('nsdp fetch degraded, joining without material: %s', exc)
                 nsdp_text = ''
 
-        session = self.store.create_session(
-            owner_open_id=owner, meeting_no=meeting_no,
-            title=binding['title'], event_calendar_id=binding['event_calendar_id'],
-            event_id=binding['event_id'], description=binding.get('description') or '',
-            now=self.clock(), nsdp_text=nsdp_text)
+        try:
+            session, existing = self.store.create_session(
+                owner_open_id=owner, meeting_no=meeting_no,
+                title=binding['title'], event_calendar_id=binding['event_calendar_id'],
+                event_id=binding['event_id'], description=binding.get('description') or '',
+                now=self.clock(), nsdp_text=nsdp_text,
+                instance_key=meeting_instance_key(
+                    meeting_no, binding['event_calendar_id'], binding['event_id'],
+                    binding.get('start') or 0),
+                organizer_open_id=binding.get('organizer') or owner)
+        except StateError as exc:
+            raise _state_error(exc) from None
         assert session is not None
-        self.supervisor.start_session(session['session_id'])
-        LOG.info('session created: session=%s meeting=%s owner=%s title="%s"',
-                 session['session_id'], meeting_no, owner, session['title'])
-        return self._session_response(session)
+        if not existing:
+            self.supervisor.start_session(session['session_id'])
+        LOG.info('session created: session=%s meeting=%s owner=%s instance=%s existing=%s',
+                 session['session_id'], meeting_no, owner,
+                 session['meeting_instance_key'], existing)
+        return self._session_response(session, existing=existing)
 
     def _session_response(self, session, existing=False):
         token_row = self.store.session_token(session['session_id'])
@@ -199,6 +245,7 @@ class AdvisorApi:
         return {
             'session_id': session['session_id'], 'meeting_no': session['meeting_no'],
             'title': session['title'], 'phase': session['phase'],
+            'meeting_instance_key': session['meeting_instance_key'],
             'started_at': session['started_at'], 'existing': existing,
             'recorder_command_args': {
                 'session': session['session_id'],
@@ -252,8 +299,8 @@ class AdvisorApi:
             raise ApiError(404, 'not_found', 'unknown session') from None
         if owner != session['owner_open_id']:
             raise ApiError(409, 'not_owner', 'only the organizer may end this session')
-        if session['phase'] == 'ended':
-            return {'session_id': session_id, 'phase': 'ended'}
+        if session['phase'] in ('ended', 'draining'):
+            return {'session_id': session_id, 'phase': session['phase']}
         updated = self.store.set_phase(session_id, 'draining', now=self.clock())
         assert updated is not None
         LOG.info('session ending: session=%s -> draining (owner=%s)', session_id, owner)
@@ -344,9 +391,13 @@ class AdvisorApi:
         if not isinstance(subscriber, str) or not subscriber \
                 or not isinstance(meeting_no, str):
             raise ApiError(400, 'bad_message', 'subscriber_open_id and meeting_no required')
-        target = self.store.active_by_meeting_no(meeting_no)
-        if target is None:
+        targets = self.store.active_sessions_by_meeting_no(meeting_no)
+        if not targets:
             raise ApiError(404, 'not_found', 'meeting not currently served')
+        if len(targets) > 1:
+            raise ApiError(409, 'meeting_ambiguous',
+                           'multiple active sessions share this meeting number')
+        target = targets[0]
         try:
             return self.store.create_subscription_request(
                 target['session_id'], subscriber, now=self.clock())
@@ -501,7 +552,7 @@ class AdvisorApi:
         items = []
         for s in sessions:
             args = None
-            if s['phase'] == 'recording':
+            if s['phase'] == 'running':
                 token_row = self.store.session_token(s['session_id'])
                 assert token_row is not None
                 args = {'session': s['session_id'],

@@ -64,7 +64,7 @@ class IngestBase(unittest.TestCase):
         session = self.store.create_session(
             owner_open_id='ou_A', meeting_no='123456789', title='周会',
             event_calendar_id='cal_x', event_id='evt_y', description='材料',
-            now=1_000_000.0)
+            now=1_000_000.0)[0]
         self.session_id = session['session_id']
         self.token = self.store.session_token(self.session_id)['stream_token']
         self.factory = FakeFactory()
@@ -207,6 +207,7 @@ class RejectionTests(IngestBase):
         self.expect_error(ws, 'bad_token')
 
     def test_session_ended(self):
+        self.store.set_phase(self.session_id, 'draining', now=1_000_001)
         self.store.set_phase(self.session_id, 'ended', now=1_000_001)
         ws = self.client()
         self.send(ws, self.start_payload())
@@ -285,7 +286,7 @@ class IsolationTests(IngestBase):
         super().setUp()
         self.other = self.store.create_session(
             owner_open_id='ou_Z', meeting_no='987654321', title='另一场',
-            event_calendar_id='cal_z', event_id='evt_z', now=1_000_000.0)
+            event_calendar_id='cal_z', event_id='evt_z', now=1_000_000.0)[0]
         self.other_token = self.store.session_token(self.other['session_id'])['stream_token']
 
     def test_slow_consumer_does_not_block_other_session(self):

@@ -25,27 +25,36 @@ class StateMachineSpecTests(unittest.TestCase):
         self.now = NOW
         self.session = self.store.create_session(
             owner_open_id='ou_A', meeting_no='123456789', title='周会',
-            event_calendar_id='cal_x', event_id='evt_y', now=self.now)
+            event_calendar_id='cal_x', event_id='evt_y', now=self.now)[0]
         self.sid = self.session['session_id']
 
     def subscribe(self, subscriber='ou_B'):
         return self.store.create_subscription_request(self.sid, subscriber, now=self.now)
 
     # T1
-    def test_T1_request_created_in_recording_session(self):
+    def test_T1_request_created_in_running_session(self):
         row = self.subscribe()
         self.assertEqual((row['state'], row['existing']), ('requested', False))
         self.assertIsInstance(row['request_no'], int)
 
-    def test_T1_rejected_when_session_not_recording(self):
+    def test_T1_rejected_when_session_not_active(self):
         for phase in ('draining', 'ended'):
-            self.store.set_phase(self.sid, phase, now=self.now)
+            self.store.set_phase(self.sid, 'draining', now=self.now)
+            if phase == 'ended':
+                self.store.set_phase(self.sid, 'ended', now=self.now)
             with self.assertRaises(StateError):
                 self.subscribe(subscriber=f'ou_{phase}')
-            if phase == 'draining':  # reset for the next loop via fresh session
+            if phase == 'draining':  # v2: claims survive draining -> end first
+                self.store.set_phase(self.sid, 'ended', now=self.now)
                 self.sid = self.store.create_session(
                     owner_open_id='ou_A', meeting_no='999000111', title='x',
-                    event_calendar_id='c', event_id='e', now=self.now)['session_id']
+                    event_calendar_id='c', event_id='e', now=self.now)[0]['session_id']
+
+    def test_T1_accepted_when_session_paused(self):
+        self.store.set_phase(self.sid, 'paused', now=self.now)
+        self.store.set_phase(self.sid, 'running', now=self.now)
+        row = self.subscribe()
+        self.assertEqual(row['state'], 'requested')
 
     # T2 / T3
     def test_T2_approve_and_T3_deny(self):
@@ -142,7 +151,7 @@ class StateMachineSpecTests(unittest.TestCase):
     def test_request_numbers_global_and_monotonic_across_sessions(self):
         other = self.store.create_session(
             owner_open_id='ou_Z', meeting_no='555000555', title='y',
-            event_calendar_id='c2', event_id='e2', now=self.now)
+            event_calendar_id='c2', event_id='e2', now=self.now)[0]
         first = self.subscribe()
         second = self.store.create_subscription_request(
             other['session_id'], 'ou_Q', now=self.now)
@@ -159,11 +168,11 @@ class StateMachineSpecTests(unittest.TestCase):
             recipients = tx.subscriptions.approved_recipients(self.sid, 'ou_A')
         self.assertEqual(set(recipients), {'ou_A', 'ou_B'})
 
-    def test_registry_resolves_only_recording_sessions(self):
-        found = self.store.active_by_meeting_no('123456789')
-        self.assertEqual(found['session_id'], self.sid)
+    def test_registry_resolves_only_active_sessions(self):
+        found = self.store.active_sessions_by_meeting_no('123456789')
+        self.assertEqual([s['session_id'] for s in found], [self.sid])
         self.store.set_phase(self.sid, 'draining', now=self.now)
-        self.assertIsNone(self.store.active_by_meeting_no('123456789'))
+        self.assertEqual(self.store.active_sessions_by_meeting_no('123456789'), [])
 
 
 if __name__ == '__main__':

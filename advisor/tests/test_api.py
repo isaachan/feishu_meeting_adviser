@@ -151,7 +151,7 @@ class CreateSessionTests(ApiBase):
     def test_happy_path_returns_command_args_and_starts_supervisor(self):
         status, body = self.join()
         self.assertEqual(status, 200)
-        self.assertEqual(body['phase'], 'recording')
+        self.assertEqual(body['phase'], 'running')
         self.assertFalse(body['existing'])
         args = body['recorder_command_args']
         self.assertEqual(args['session'], body['session_id'])
@@ -204,7 +204,7 @@ class SessionOpsTests(ApiBase):
         status, listing = self.get(f"/sessions?owner_open_id=ou_A")
         self.assertEqual([s['session_id'] for s in listing['sessions']], [body['session_id']])
         status, state = self.get(f"/sessions/{body['session_id']}/status")
-        self.assertEqual(state['phase'], 'recording')
+        self.assertEqual(state['phase'], 'running')
         self.assertEqual(state['material_present'], True)
 
     def test_end_owner_only_and_idempotent(self):
@@ -239,6 +239,7 @@ class AdminFaceTests(ApiBase):
     def test_admin_sessions_list_all_owners_and_ended(self):
         first = self.created(owner='ou_A', no='111111111')
         second = self.created(owner='ou_B', no='222222222')
+        self.store.set_phase(first['session_id'], 'draining')
         self.store.set_phase(first['session_id'], 'ended')
         status, listing = self.get('/admin/sessions')
         self.assertEqual(status, 200)

@@ -23,10 +23,10 @@ class ReliabilityTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.bed.stop()
 
-    def open_session(self, meeting_no='123456789'):
+    def open_session(self, meeting_no='123456789', owner='ou_A'):
         bed, bus = self.bed, self.bed.bus
-        bed.authorize('ou_A')
-        _, reply = bus.join_says(bed.service, 'ou_A', f'入会 {meeting_no}')
+        bed.authorize(owner)
+        _, reply = bus.join_says(bed.service, owner, f'入会 {meeting_no}')
         self.assertIn('已入会', reply)
         session_id = re.search(r"--session '([^']+)'", reply).group(1)
         token = re.search(r"--token '([^']+)'", reply).group(1)
@@ -68,7 +68,7 @@ class ReliabilityTests(unittest.TestCase):
 
     def test_advisor_restart_recovers_supervision(self):
         bed, bus = self.bed, self.bed.bus
-        session_id, token, event = self.open_session('222000222')
+        session_id, token, event = self.open_session('222000222', owner='ou_R')
 
         ws = bed.ingest_connect(session_id, token)
         bed.ingest_start(ws, session_id, token, event=event)
@@ -92,18 +92,18 @@ class ReliabilityTests(unittest.TestCase):
         deadline = time.monotonic() + 30
         delivered = False
         while time.monotonic() < deadline:
-            delivered = any('网关合成回答' in text for text in bus.dms_to('ou_A'))
+            delivered = any('网关合成回答' in text for text in bus.dms_to('ou_R'))
             if delivered:
                 break
             time.sleep(0.3)
         self.assertTrue(delivered, 'no reply after advisor restart')
-        bus.user_says(bed.service, 'ou_A', '结束会议')
+        bus.user_says(bed.service, 'ou_R', '结束会议')
 
     def test_bot_restart_resumes_outbox_delivery(self):
         bed, bus = self.bed, self.bed.bus
         # stop the poller: replies accumulate as pending IM rows
         bed.service.stop_polling()
-        session_id, token, event = self.open_session('333000333')
+        session_id, token, event = self.open_session('333000333', owner='ou_S')
         ws = bed.ingest_connect(session_id, token)
         bed.ingest_start(ws, session_id, token, event=event)
         for seq in range(1, 13):
@@ -133,12 +133,12 @@ class ReliabilityTests(unittest.TestCase):
         bed.service.start_polling()
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
-            if any('网关合成回答' in text for text in bus.dms_to('ou_A')):
+            if any('网关合成回答' in text for text in bus.dms_to('ou_S')):
                 break
             time.sleep(0.2)
-        self.assertTrue(any('网关合成回答' in text for text in bus.dms_to('ou_A')),
+        self.assertTrue(any('网关合成回答' in text for text in bus.dms_to('ou_S')),
                         'backlog not delivered after bot restart')
-        bus.user_says(bed.service, 'ou_A', '结束会议')
+        bus.user_says(bed.service, 'ou_S', '结束会议')
 
     def test_duplicate_events_deduped(self):
         bed, bus = self.bed, self.bed.bus

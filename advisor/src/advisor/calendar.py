@@ -56,6 +56,26 @@ def _timestamp(event: dict, key: str) -> int | None:
     return None
 
 
+def _attendee_ids(event: dict) -> set[str]:
+    """All user identifiers found in attendees[] (open_id/user_id/union_id mix).
+
+    Used for the 小C invite-list admission path (STATE_MACHINES v2 §0); the
+    real API shape is verified in SM-04 against live data.
+    """
+    ids: set[str] = set()
+    attendees = event.get('attendees')
+    if not isinstance(attendees, list):
+        return ids
+    for attendee in attendees:
+        if not isinstance(attendee, dict):
+            continue
+        for key in ('open_id', 'user_id', 'union_id'):
+            candidate = attendee.get(key)
+            if isinstance(candidate, str) and ID_TEXT.fullmatch(candidate):
+                ids.add(candidate)
+    return ids
+
+
 class FeishuCalendarValidator:
     """CalendarValidator implementation backed by the user's OAuth token."""
 
@@ -140,22 +160,27 @@ class FeishuCalendarValidator:
     # -- validation -----------------------------------------------------------
 
     def validate(self, owner_open_id, meeting_ref):
+        """Resolve the authoritative occurrence for meeting_ref (STATE_MACHINES v2 §0).
+
+        Returns binding + occurrence data (organizer id, attendee ids, start/end).
+        Raises CalendarError(meeting_not_found | meeting_ambiguous | not_organizer |
+        outside_window | auth_unavailable).
+        """
         now = int(self._clock())
         identities = self._identities(owner_open_id)
         events = self._window_events(now, owner_open_id)
-        match, organizer_ok, in_window = None, False, False
-        for event in events:
-            if _meeting_no(event) != (meeting_ref or {}).get('no'):
-                continue
-            match = event
-            organizer_ok = _organizer_id(event) in identities
-            start = _timestamp(event, 'start_time')
-            end = _timestamp(event, 'end_time')
-            in_window = start is not None and end is not None and (
-                start - WINDOW_SECONDS <= now <= end + WINDOW_SECONDS)
-            break
-        if match is None:
+        matches = [event for event in events
+                   if _meeting_no(event) == (meeting_ref or {}).get('no')]
+        if not matches:
             raise CalendarError('meeting_not_found')
+        if len(matches) > 1:
+            raise CalendarError('meeting_ambiguous')
+        match = matches[0]
+        organizer_ok = _organizer_id(match) in identities
+        start = _timestamp(match, 'start_time')
+        end = _timestamp(match, 'end_time')
+        in_window = start is not None and end is not None and (
+            start - WINDOW_SECONDS <= now <= end + WINDOW_SECONDS)
         if not organizer_ok:
             raise CalendarError('not_organizer')
         if not in_window:
@@ -166,7 +191,11 @@ class FeishuCalendarValidator:
         return {'event_calendar_id': calendar_id,
                 'event_id': event_id,
                 'title': (match.get('summary') or '')[:120],
-                'description': (match.get('description') or '')[:20000]}
+                'description': (match.get('description') or '')[:20000],
+                'organizer': _organizer_id(match),
+                'attendees': _attendee_ids(match),
+                'start': start,
+                'end': end}
 
     def _identities(self, owner_open_id):
         data = self._get(USER_INFO_PATH, None, owner_open_id).get('data')

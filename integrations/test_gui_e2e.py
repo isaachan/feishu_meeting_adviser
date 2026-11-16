@@ -105,7 +105,7 @@ class GuiE2eTests(unittest.TestCase):
         # 3) GUI 发现会话：args 与建会响应一致、指向床 ingest
         snapshot = self.api.sessions(device_token)
         item = next(s for s in snapshot['sessions'] if s['session_id'] == session_id)
-        self.assertEqual(item['phase'], 'recording')
+        self.assertEqual(item['phase'], 'running')
         args = item['recorder_command_args']
         self.assertEqual(args['session'], session_id)
         self.assertEqual(args['token'], created['recorder_command_args']['token'])

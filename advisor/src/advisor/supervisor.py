@@ -52,7 +52,7 @@ class SessionSupervisor:
         self.store.recover()
         self.store.clear_leases()  # single-host v1: prior holders are gone
         for session in self.store.db.execute(
-                "SELECT session_id,phase FROM sessions WHERE phase IN ('recording','draining')"):
+                "SELECT session_id,phase FROM sessions WHERE phase IN ('running','paused','draining')"):
             self.start_session(session['session_id'])
 
     def start_session(self, session_id):

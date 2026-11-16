@@ -197,7 +197,7 @@ class SessionsFaceTests(GuiFaceBase):
         self.assertEqual(len(body['sessions']), 1)
         item = body['sessions'][0]
         self.assertEqual(item['session_id'], created['session_id'])
-        self.assertEqual(item['phase'], 'recording')
+        self.assertEqual(item['phase'], 'running')
         args = item['recorder_command_args']
         self.assertEqual(args['session'], created['session_id'])
         self.assertEqual(args['event'], created['recorder_command_args']['event'])

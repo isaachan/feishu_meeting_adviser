@@ -10,6 +10,7 @@ from advisor.model_backend import Decision, load_role
 from advisor.models import Caption
 from advisor.settings import AdviserSettings
 from advisor.store import SessionStore
+from advisor.persistence import meeting_instance_key
 
 NOW = 2_000_000_000.0
 SETTINGS = AdviserSettings()
@@ -34,11 +35,14 @@ class Base(unittest.TestCase):
         self.addCleanup(self.store.close)
         self.now = NOW
 
-    def create(self, *, description='讨论预算', meeting_no='123456789', owner='ou_A'):
-        return self.store.create_session(
+    def create(self, *, description='讨论预算', meeting_no='123456789', owner='ou_A',
+               start=1762800000, event_id='evt_y'):
+        session, _existing = self.store.create_session(
             owner_open_id=owner, meeting_no=meeting_no, title='周会',
-            event_calendar_id='cal_x', event_id='evt_y',
-            description=description, now=self.now)
+            event_calendar_id='cal_x', event_id=event_id,
+            description=description, now=self.now,
+            instance_key=meeting_instance_key(meeting_no, 'cal_x', event_id, start))
+        return session
 
     def ingest(self, session_id, key, text, *, end_offset_ms=0):
         caption = make_caption(session_id, key, text, end_offset_ms=end_offset_ms)
@@ -69,7 +73,7 @@ class Base(unittest.TestCase):
 class SessionLifecycleTests(Base):
     def test_create_session_material_and_token(self):
         session = self.create()
-        self.assertEqual(session['phase'], 'recording')
+        self.assertEqual(session['phase'], 'running')
         self.assertTrue(session['session_id'].startswith('s-'))
         token_row = self.store.session_token(session['session_id'])
         self.assertTrue(token_row['stream_token'].startswith('st-'))
@@ -85,14 +89,55 @@ class SessionLifecycleTests(Base):
         self.assertNotIn('meeting_context', self.store.snapshot(
             session['session_id'], SETTINGS, now=self.now))
 
-    def test_duplicate_active_session_rejected_then_allowed_after_ended(self):
+    def test_duplicate_same_owner_returns_existing(self):
+        first = self.create()
+        _session, existing = self.store.create_session(
+            owner_open_id='ou_A', meeting_no='123456789', title='周会',
+            event_calendar_id='cal_x', event_id='evt_y', now=self.now,
+            instance_key=meeting_instance_key('123456789', 'cal_x', 'evt_y', 1762800000))
+        self.assertTrue(existing)
+
+    def test_other_owner_same_instance_rejected(self):
         self.create()
-        with self.assertRaises(StateError):
-            self.create()
-        self.store.set_phase(self.store.list_sessions('ou_A')[0]['session_id'],
-                             'ended', now=self.now)
-        second = self.create()
-        self.assertNotEqual(second['session_id'], self.store.list_sessions()[0])
+        with self.assertRaises(StateError) as caught:
+            self.store.create_session(
+                owner_open_id='ou_C', meeting_no='123456789', title='周会',
+                event_calendar_id='cal_x', event_id='evt_y', now=self.now,
+                instance_key=meeting_instance_key('123456789', 'cal_x', 'evt_y', 1762800000))
+        self.assertEqual(caught.exception.args[0], 'session_claimed')
+
+    def test_ended_instance_cannot_be_recreated(self):
+        session = self.create()
+        self.store.set_phase(session['session_id'], 'draining', now=self.now)
+        self.store.set_phase(session['session_id'], 'ended', now=self.now)
+        with self.assertRaises(StateError) as caught:
+            self.store.create_session(
+                owner_open_id='ou_A', meeting_no='123456789', title='周会',
+                event_calendar_id='cal_x', event_id='evt_y', now=self.now,
+                instance_key=meeting_instance_key('123456789', 'cal_x', 'evt_y', 1762800000))
+        self.assertEqual(caught.exception.args[0], 'instance_ended')
+
+    def test_new_occurrence_same_meeting_no_creates_distinct_instance(self):
+        first = self.create(start=1762800000)
+        second = self.create(owner='ou_C', start=1762886400, event_id='evt_y_2')
+        self.assertNotEqual(first['meeting_instance_key'], second['meeting_instance_key'])
+
+    def test_reschedule_keeps_single_instance(self):
+        first = self.create(start=1762800000)
+        _session, existing = self.store.create_session(
+            owner_open_id='ou_A', meeting_no='123456789', title='周会',
+            event_calendar_id='cal_x', event_id='evt_y', now=self.now,
+            instance_key=meeting_instance_key('123456789', 'cal_x', 'evt_y', 1762886400))
+        self.assertTrue(existing)  # 改期：同事件绑定的非 ended 会话幂等返回
+
+    def test_single_claim_blocks_second_session(self):
+        self.create()
+        with self.assertRaises(StateError) as caught:
+            self.store.create_session(
+                owner_open_id='ou_A', meeting_no='999999999', title='另一场',
+                event_calendar_id='cal_x', event_id='evt_other', now=self.now,
+                instance_key=meeting_instance_key('999999999', 'cal_x', 'evt_other', 1762800000))
+        self.assertEqual(caught.exception.args[0], 'claim_conflict')
 
     def test_phase_transitions(self):
         session = self.create()
@@ -100,14 +145,14 @@ class SessionLifecycleTests(Base):
         self.assertEqual(self.store.set_phase(sid, 'draining', now=self.now)['phase'], 'draining')
         self.assertEqual(self.store.set_phase(sid, 'ended', now=self.now)['phase'], 'ended')
         with self.assertRaises(StateError):
-            self.store.set_phase(sid, 'recording', now=self.now)
+            self.store.set_phase(sid, 'running', now=self.now)
         with self.assertRaises(StateError):
             self.store.set_phase(sid, 'draining', now=self.now)
 
-    def test_active_by_meeting_no(self):
+    def test_active_sessions_by_meeting_no(self):
         self.create(meeting_no='111111111')
-        self.assertIsNotNone(self.store.active_by_meeting_no('111111111'))
-        self.assertIsNone(self.store.active_by_meeting_no('222222222'))
+        self.assertEqual(len(self.store.active_sessions_by_meeting_no('111111111')), 1)
+        self.assertEqual(self.store.active_sessions_by_meeting_no('222222222'), [])
 
     def test_unknown_session_rejected(self):
         with self.assertRaises(StorageError):
@@ -178,6 +223,7 @@ class DecisionFlowTests(Base):
         sid = self.create()['session_id']
         self.ingest(sid, 'k1', '我们聊聊预算')
         job = self.prepare(sid)
+        self.store.set_phase(sid, 'draining', now=self.now)
         self.store.set_phase(sid, 'ended', now=self.now)
         self.assertFalse(self.decide(job, '迟到回答', ['k1']))
         self.assertEqual(self.rows(sid), [])

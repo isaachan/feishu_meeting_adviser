@@ -24,11 +24,11 @@ class S3SubscriptionTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.bed.stop()
 
-    def open_and_stream(self, meeting_no, frames=12):
+    def open_and_stream(self, meeting_no, frames=12, owner='ou_A'):
         """Returns (session_id, token, event) after streaming frames."""
         bed, bus = self.bed, self.bed.bus
-        bed.authorize('ou_A')
-        _, reply = bus.join_says(bed.service, 'ou_A', f'入会 {meeting_no}')
+        bed.authorize(owner)
+        _, reply = bus.join_says(bed.service, owner, f'入会 {meeting_no}')
         self.assertIn('已入会', reply)
         session_id = re.search(r"--session '([^']+)'", reply).group(1)
         token = re.search(r"--token '([^']+)'", reply).group(1)
@@ -123,21 +123,21 @@ class S3SubscriptionTests(unittest.TestCase):
 
     def test_denied_reapply_walks_fresh_approval(self):
         bed, bus = self.bed, self.bed.bus
-        self.open_and_stream('555000555', frames=0)
+        self.open_and_stream('555000555', frames=0, owner='ou_C')
         reply_b = bus.user_says(bed.service, 'ou_B', '我想收到会议 555000555 的信息')
         first_no = int(re.search(r'#(\d+)', reply_b).group(1))
-        bus.user_says(bed.service, 'ou_A', f'拒绝 #{first_no}')
+        bus.user_says(bed.service, 'ou_C', f'拒绝 #{first_no}')
         reply_b = bus.user_says(bed.service, 'ou_B', '我想收到会议 555000555 的信息')
         second_no = int(re.search(r'#(\d+)', reply_b).group(1))
         self.assertGreater(second_no, first_no)
-        result = bus.user_says(bed.service, 'ou_A', f'同意 #{second_no}')
+        result = bus.user_says(bed.service, 'ou_C', f'同意 #{second_no}')
         self.assertIn('已批准', result)
-        bus.user_says(bed.service, 'ou_A', '结束会议')
+        bus.user_says(bed.service, 'ou_C', '结束会议')
 
     def test_ended_session_refuses_subscription(self):
         bed, bus = self.bed, self.bed.bus
-        self.open_and_stream('666000666', frames=0)
-        bus.user_says(bed.service, 'ou_A', '结束会议')
+        self.open_and_stream('666000666', frames=0, owner='ou_D')
+        bus.user_says(bed.service, 'ou_D', '结束会议')
         time.sleep(1.5)
         reply = bus.user_says(bed.service, 'ou_B', '我想收到会议 666000666 的信息')
         self.assertIn('未找到该会议或会议已结束', reply)

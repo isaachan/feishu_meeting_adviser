@@ -54,10 +54,10 @@ class SupervisorBase(unittest.TestCase):
             ingest_activity=lambda: self.activity)
         self.addCleanup(self.supervisor.stop)
 
-    def create(self, meeting_no='123456789', idle=900):
+    def create(self, meeting_no='123456789', idle=900, owner='ou_A', event_id='evt_y'):
         return self.store.create_session(
-            owner_open_id='ou_A', meeting_no=meeting_no, title='会',
-            event_calendar_id='cal_x', event_id='evt_y', idle_timeout_s=idle)
+            owner_open_id=owner, meeting_no=meeting_no, title='会',
+            event_calendar_id='cal_x', event_id=event_id, idle_timeout_s=idle)[0]
 
     def say(self, session_id, key, text):
         now = time.time()
@@ -151,7 +151,7 @@ class RecoveryTests(SupervisorBase):
         self.supervisor.start_session(session['session_id'])
         self.supervisor.stop()
         self.assertEqual(self.store.require_session(session['session_id'])['phase'],
-                         'recording')
+                         'running')
         reborn = SessionSupervisor(self.store, self.settings,
                                    backend_factory=lambda: self.backend,
                                    ingest_activity=lambda: self.activity)
@@ -163,6 +163,7 @@ class RecoveryTests(SupervisorBase):
 
     def test_ended_sessions_are_not_resumed(self):
         session = self.create()
+        self.store.set_phase(session['session_id'], 'draining')
         self.store.set_phase(session['session_id'], 'ended')
         self.supervisor.start()
         self.addCleanup(self.supervisor.stop)
@@ -172,7 +173,8 @@ class RecoveryTests(SupervisorBase):
 class ConcurrencyTests(SupervisorBase):
     def test_two_sessions_run_independently(self):
         first = self.create(meeting_no='111111111', idle=900)
-        second = self.create(meeting_no='222222222', idle=900)
+        second = self.create(meeting_no='222222222', idle=900, owner='ou_B',
+                             event_id='evt_b')
         for session in (first, second):
             self.supervisor.start_session(session['session_id'])
         self.say(first['session_id'], 'k1', '第一个会话')

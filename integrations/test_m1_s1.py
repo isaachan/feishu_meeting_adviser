@@ -71,7 +71,7 @@ class S1MainChainTests(unittest.TestCase):
             if status.get('pending_model_inputs', 0) or status.get('model_state') != 'idle':
                 break
             time.sleep(0.2)
-        self.assertEqual(status.get('phase'), 'recording')
+        self.assertEqual(status.get('phase'), 'running')
         self.assertTrue(status.get('material_present'), status)
         self.assertGreaterEqual(status.get('pending_model_inputs', 0), 1,
                                 f'no captions landed: {status}')
@@ -82,11 +82,12 @@ class S1MainChainTests(unittest.TestCase):
 
     def test_s1_rejections_live(self):
         bed, bus = self.bed, self.bed.bus
-        # meeting link with password parses and reaches the (stub) calendar path
-        _, reply = bus.join_says(bed.service, 'ou_A',
+        # v2 single-claim: another user takes the second meeting
+        bed.authorize('ou_B')
+        _, reply = bus.join_says(bed.service, 'ou_B',
                                 '入会 https://vc.feishu.cn/j/987654321?pwd=abc')
         self.assertIn('已入会', reply)
-        _, reply = bus.join_says(bed.service, 'ou_A', '入会 987654321')
+        _, reply = bus.join_says(bed.service, 'ou_B', '入会 987654321')
         self.assertIn('已在服务中', reply)  # duplicate join idempotence
 
 

@@ -192,7 +192,9 @@ class _Connection:
             session = self.store.require_session(self.session_id)
         except StorageError:
             raise IngestError('bad_token', 'unknown session') from None
-        if session['phase'] != 'recording':
+        if session['phase'] == 'paused':
+            raise IngestError('session_paused', f"session is {session['phase']}")
+        if session['phase'] != 'running':
             raise IngestError('session_ended', f"session is {session['phase']}")
         token_row = self.store.session_token(self.session_id)
         if token_row is None or token_row['stream_token'] != token:

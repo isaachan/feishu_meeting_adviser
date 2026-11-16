@@ -15,11 +15,17 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 from .errors import StateError, StorageError
 from .models import (Caption, JobState, MaterialState, ReplyState, SourceState,
                      caption_from_json, caption_to_dict, digest)
-from .persistence import (SCHEMA, SCHEMA_VERSION, SESSION_PHASES, SESSION_TRANSITIONS,
-                          UnitOfWork, decode_mapping, encode)
+from .persistence import (DEFAULT_DRAIN_DEADLINE_S, SCHEMA, SCHEMA_VERSION,
+                          SESSION_PHASES, SESSION_TRANSITIONS,
+                          UnitOfWork, decode_mapping, encode, meeting_instance_key)
 from .snapshot import SnapshotBuilder, is_reply_evidence_caption
 from .decision import DecisionApplier
 from .sqlite import SQLiteDatabase
+
+SESSION_TABLES = {
+    'sessions', 'inputs', 'context', 'jobs', 'outbox', 'session_materials',
+    'sources', 'subscriptions', 'idempotency', 'gui_devices', 'users',
+    'session_claims', 'supervisor_grants'}
 
 
 def _tables(db) -> set[str]:
@@ -30,9 +36,7 @@ def _tables(db) -> set[str]:
 def require_schema(connection) -> None:
     version = connection.execute('PRAGMA user_version').fetchone()[0]
     tables = _tables(connection) - {'sqlite_sequence'}  # appears lazily with AUTOINCREMENT
-    if version != SCHEMA_VERSION or tables != {
-            'sessions', 'inputs', 'context', 'jobs', 'outbox', 'session_materials',
-            'sources', 'subscriptions', 'idempotency', 'gui_devices', 'users'}:
+    if version != SCHEMA_VERSION or tables != SESSION_TABLES:
         raise StorageError('adviser database schema is unsupported; reinitialize')
 
 
@@ -40,6 +44,9 @@ def upgrade_schema(database: SQLiteDatabase) -> None:
     """In-place upgrades between SCHEMA_VERSIONs (idempotent per version).
 
     v3→v4: identity directory table ``users`` (CONTRACT_ADVISOR_API §9.1).
+    v4→v5: state machine v2 (STATE_MACHINES §6) — phase rename + paused,
+    meeting-instance uniqueness, session claims, supervisor grants,
+    subscription approval deadline/closed_by.
     """
     version = database.connection.execute('PRAGMA user_version').fetchone()[0]
     if version == SCHEMA_VERSION:
@@ -55,7 +62,61 @@ def upgrade_schema(database: SQLiteDatabase) -> None:
                 '''INSERT OR IGNORE INTO users(open_id,name,email,checked_ns)
                    SELECT open_id, MAX(user_name), MAX(user_email), 0
                    FROM gui_devices GROUP BY open_id''')
-            database.connection.execute(f'PRAGMA user_version={SCHEMA_VERSION}')
+            database.connection.execute('PRAGMA user_version=4')
+        version = 4
+    if version == 4:
+        with database.transaction():
+            db = database.connection
+            db.execute('''CREATE TABLE IF NOT EXISTS session_claims (
+                user_open_id TEXT NOT NULL, session_id TEXT NOT NULL,
+                kind TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1,
+                created_ns INTEGER NOT NULL, released_ns INTEGER,
+                PRIMARY KEY (user_open_id, session_id))''')
+            db.execute('CREATE UNIQUE INDEX IF NOT EXISTS session_claims_active '
+                       'ON session_claims(user_open_id) WHERE active=1')
+            db.execute('''CREATE TABLE IF NOT EXISTS supervisor_grants (
+                login_name TEXT PRIMARY KEY, open_id TEXT, enabled INTEGER NOT NULL DEFAULT 0,
+                updated_ns INTEGER NOT NULL, updated_by TEXT NOT NULL DEFAULT 'admin')''')
+            db.execute('ALTER TABLE subscriptions ADD COLUMN approval_deadline_at REAL')
+            db.execute('ALTER TABLE subscriptions ADD COLUMN closed_by TEXT')
+            db.execute('ALTER TABLE sessions ADD COLUMN meeting_instance_key TEXT')
+            db.execute("ALTER TABLE sessions ADD COLUMN organizer_open_id "
+                       "TEXT NOT NULL DEFAULT ''")
+            db.execute('ALTER TABLE sessions ADD COLUMN last_audio_at REAL')
+            db.execute('ALTER TABLE sessions ADD COLUMN drain_deadline_at REAL')
+            db.execute("UPDATE sessions SET phase='running' WHERE phase='recording'")
+            db.execute("UPDATE sessions SET organizer_open_id=owner_open_id "
+                       "WHERE organizer_open_id=''")
+            db.execute('UPDATE sessions SET last_audio_at=started_at '
+                       'WHERE last_audio_at IS NULL')
+            db.execute("UPDATE sessions SET meeting_instance_key="
+                       "'legacy|'||meeting_no||'|'||event_calendar_id||'|'||event_id")
+            # guarantee uniqueness of backfilled keys (duplicate historical
+            # bindings get a rowid suffix; documented in STATE_MACHINES §6.2)
+            duplicates = db.execute(
+                'SELECT rowid, meeting_instance_key FROM sessions WHERE '
+                'meeting_instance_key IN (SELECT meeting_instance_key FROM sessions '
+                'GROUP BY meeting_instance_key HAVING count(*)>1)').fetchall()
+            for row in duplicates:
+                db.execute('UPDATE sessions SET meeting_instance_key=? '
+                           "WHERE meeting_instance_key=? AND rowid!=?",
+                           (f"{row['meeting_instance_key']}#{row['rowid']}",
+                            row['meeting_instance_key'], row['rowid']))
+            db.execute('CREATE UNIQUE INDEX IF NOT EXISTS sessions_instance '
+                       'ON sessions(meeting_instance_key)')
+            # controller claims: active only for non-ended legacy sessions
+            db.execute('''INSERT OR IGNORE INTO session_claims(
+                    user_open_id,session_id,kind,active,created_ns)
+                SELECT owner_open_id, session_id, 'controller',
+                       CASE WHEN phase='ended' THEN 0 ELSE 1 END, created_ns
+                FROM sessions''')
+            # subscriber claims: approved subscriptions on non-ended sessions
+            db.execute('''INSERT OR IGNORE INTO session_claims(
+                    user_open_id,session_id,kind,active,created_ns)
+                SELECT s.subscriber_open_id, s.session_id, 'subscriber', 1, s.created_ns
+                FROM subscriptions s JOIN sessions e ON e.session_id=s.session_id
+                WHERE s.state='approved' AND e.phase!='ended' ''')
+            db.execute('PRAGMA user_version=5')
         return
     # fresh (0/empty) and unknown versions are judged by require_schema
 
@@ -128,8 +189,19 @@ class SessionStore:
 
     def create_session(self, *, owner_open_id, meeting_no, title, event_calendar_id,
                        event_id, description='', idle_timeout_s=900, now=None,
-                       nsdp_text=''):
+                       nsdp_text='', instance_key=None,
+                       organizer_open_id=None):
+        """STATE_MACHINES v2 S1: instance-unique creation with claim checks.
+
+        Returns ``(session, existing)``. Raises StateError('session_claimed' |
+        'instance_ended' | 'claim_conflict') per the frozen precedence:
+        event-binding match among non-ended sessions first (reschedules keep
+        one instance), then the exact instance key, then the single-claim rule.
+        """
         moment = time.time() if now is None else now
+        organizer = organizer_open_id or owner_open_id
+        key = instance_key or meeting_instance_key(
+            meeting_no, event_calendar_id, event_id, 0)
         session_id = 's-' + uuid4().hex
         stream_token = 'st-' + secrets.token_urlsafe(32)
         description = description or ''
@@ -140,23 +212,53 @@ class SessionStore:
                     if has_content else None,
                     'description': description, 'documents': documents}
         with self.unit_of_work() as tx:
-            active = tx.connection.execute(
-                "SELECT session_id FROM sessions WHERE owner_open_id=? AND meeting_no=? "
-                "AND phase IN ('recording','draining')", (owner_open_id, meeting_no)).fetchone()
-            if active is not None:
-                raise StateError('session already active for this meeting')
+            binding_match = tx.connection.execute(
+                "SELECT * FROM sessions WHERE meeting_no=? AND event_calendar_id=? "
+                "AND event_id=? AND phase IN ('running','paused','draining') "
+                'ORDER BY started_at DESC LIMIT 1',
+                (meeting_no, event_calendar_id, event_id)).fetchone()
+            if binding_match is not None:
+                if binding_match['owner_open_id'] != owner_open_id:
+                    raise StateError('session_claimed')
+                value = dict(binding_match)
+                value.pop('stream_token', None)
+                return value, True
+            instance_match = tx.connection.execute(
+                'SELECT * FROM sessions WHERE meeting_instance_key=?',
+                (key,)).fetchone()
+            if instance_match is not None:
+                if instance_match['phase'] in ('draining', 'ended'):
+                    raise StateError('instance_ended')
+                if instance_match['owner_open_id'] != owner_open_id:
+                    raise StateError('session_claimed')
+                value = dict(instance_match)
+                value.pop('stream_token', None)
+                return value, True
+            active_claim = tx.connection.execute(
+                'SELECT session_id FROM session_claims WHERE user_open_id=? AND active=1',
+                (owner_open_id,)).fetchone()
+            if active_claim is not None:
+                raise StateError('claim_conflict')
             tx.connection.execute(
-                '''INSERT INTO sessions(session_id,owner_open_id,meeting_no,title,
-                     event_calendar_id,event_id,phase,stream_token,material_version,
-                     material_state,created_ns,started_at,idle_timeout_s)
-                   VALUES (?,?,?,?,?,?, 'recording', ?, ?, ?, ?, ?, ?)''',
+                '''INSERT INTO sessions(
+                       session_id,owner_open_id,meeting_no,title,
+                       event_calendar_id,event_id,meeting_instance_key,phase,
+                       stream_token,organizer_open_id,material_version,
+                       material_state,created_ns,started_at,last_audio_at,
+                       idle_timeout_s)
+                   VALUES (?,?,?,?,?,?,?,'running',?,?,?,?,?,?,?,?)''',
                 (session_id, owner_open_id, meeting_no, title[:200], event_calendar_id,
-                 event_id, stream_token, material['context_version'], material['state'],
-                 int(moment * 1_000_000_000), moment, idle_timeout_s))
+                 event_id, key, stream_token, organizer,
+                 material['context_version'], material['state'],
+                 int(moment * 1_000_000_000), moment, moment, idle_timeout_s))
+            tx.connection.execute(
+                "INSERT INTO session_claims(user_open_id,session_id,kind,active,created_ns) "
+                "VALUES (?,?,'controller',1,?)",
+                (owner_open_id, session_id, int(moment * 1_000_000_000)))
             tx.connection.execute(
                 'INSERT INTO session_materials(session_id,body,loaded_ns) VALUES (?,?,?)',
                 (session_id, encode(material), int(moment * 1_000_000_000)))
-        return self.session(session_id)
+        return self.session(session_id), False
 
     @_locked
     def session(self, session_id):
@@ -181,7 +283,7 @@ class SessionStore:
 
     @_locked
     def list_sessions(self, owner_open_id=None):
-        query = ("SELECT * FROM sessions WHERE phase IN ('recording','draining')"
+        query = ("SELECT * FROM sessions WHERE phase IN ('running','paused','draining')"
                  " ORDER BY started_at DESC")
         params = ()
         if owner_open_id is not None:
@@ -228,7 +330,7 @@ class SessionStore:
             'ORDER BY request_no DESC LIMIT ?', (limit,))
         return [dict(row) for row in rows]
 
-    def set_phase(self, session_id, phase, *, now=None):
+    def set_phase(self, session_id, phase, *, now=None, drain_deadline_at=...):
         if phase not in SESSION_PHASES:
             raise StorageError('invalid session phase')
         moment = time.time() if now is None else now
@@ -239,18 +341,84 @@ class SessionStore:
                 raise StorageError('unknown adviser session')
             if (row['phase'], phase) not in SESSION_TRANSITIONS:
                 raise StateError(f'illegal session phase transition {row["phase"]} -> {phase}')
+            deadline = None
+            if phase == 'draining':
+                if drain_deadline_at is ...:
+                    deadline = moment + DEFAULT_DRAIN_DEADLINE_S
+                else:
+                    deadline = drain_deadline_at
             tx.connection.execute(
-                'UPDATE sessions SET phase=?,ended_ns=? WHERE session_id=?',
-                (phase, int(moment * 1_000_000_000) if phase == 'ended' else None, session_id))
+                'UPDATE sessions SET phase=?,ended_ns=?,drain_deadline_at=? WHERE session_id=?',
+                (phase, int(moment * 1_000_000_000) if phase == 'ended' else None,
+                 deadline, session_id))
+            if phase == 'ended':
+                tx.connection.execute(
+                    'UPDATE session_claims SET active=0,released_ns=? '
+                    'WHERE session_id=? AND active=1',
+                    (int(moment * 1_000_000_000), session_id))
         return self.session(session_id)
 
     @_locked
-    def active_by_meeting_no(self, meeting_no):
-        """S3 注册表：正被服务中（recording）的会话。"""
+    def active_sessions_by_meeting_no(self, meeting_no):
+        """S3 目标解析：同号全部 running/paused 会话（>1 个时上层报 meeting_ambiguous）。"""
+        rows = self.db.execute(
+            "SELECT * FROM sessions WHERE meeting_no=? AND phase IN ('running','paused') "
+            'ORDER BY started_at DESC', (meeting_no,)).fetchall()
+        return [dict(row) for row in rows]
+
+    # -- session claims (STATE_MACHINES v2 §0) ------------------------------
+
+    @_locked
+    def active_claim(self, user_open_id):
         row = self.db.execute(
-            "SELECT * FROM sessions WHERE meeting_no=? AND phase='recording' "
-            'ORDER BY started_at DESC LIMIT 1', (meeting_no,)).fetchone()
+            'SELECT * FROM session_claims WHERE user_open_id=? AND active=1',
+            (user_open_id,)).fetchone()
         return dict(row) if row else None
+
+    @_locked
+    def claims_for_session(self, session_id):
+        return [dict(row) for row in self.db.execute(
+            'SELECT * FROM session_claims WHERE session_id=? ORDER BY created_ns',
+            (session_id,))]
+
+    def release_claim(self, user_open_id, session_id, *, now=None):
+        """Free one claim row (subscription closure path); idempotent."""
+        moment = time.time() if now is None else now
+        with self.unit_of_work() as tx:
+            tx.connection.execute(
+                'UPDATE session_claims SET active=0,released_ns=? '
+                'WHERE user_open_id=? AND session_id=? AND active=1',
+                (int(moment * 1_000_000_000), user_open_id, session_id))
+
+    # -- supervisor grants (CONTRACT_ADVISOR_API §9.3/§9.4) ------------------
+
+    @_locked
+    def supervisor_grants(self):
+        return [dict(row) for row in self.db.execute(
+            'SELECT * FROM supervisor_grants ORDER BY login_name')]
+
+    @_locked
+    def enabled_supervisor_open_ids(self):
+        return {row['open_id'] for row in self.db.execute(
+            'SELECT open_id FROM supervisor_grants WHERE enabled=1 AND open_id IS NOT NULL')}
+
+    def put_supervisor_grant(self, login_name, *, open_id, enabled, updated_by='admin',
+                             now=None):
+        if not isinstance(login_name, str) or not login_name:
+            raise StorageError('invalid login_name')
+        moment = time.time() if now is None else now
+        with self.unit_of_work() as tx:
+            tx.connection.execute(
+                '''INSERT INTO supervisor_grants(login_name,open_id,enabled,updated_ns,updated_by)
+                   VALUES (?,?,?,?,?)
+                   ON CONFLICT(login_name) DO UPDATE SET
+                     open_id=excluded.open_id, enabled=excluded.enabled,
+                     updated_ns=excluded.updated_ns, updated_by=excluded.updated_by''',
+                (login_name, open_id, 1 if enabled else 0,
+                 int(moment * 1_000_000_000), updated_by))
+        row = self.db.execute('SELECT * FROM supervisor_grants WHERE login_name=?',
+                              (login_name,)).fetchone()
+        return dict(row)
 
     # -- gui devices (CONTRACT_ADVISOR_API §8) --------------------------------
 
@@ -342,7 +510,7 @@ class SessionStore:
         return dict(row) if row else None
 
     def source_ack(self, session_id, source, sequence, *, now=None):
-        """推进持久化游标（ack 语义）；返回是否推进。"""
+        """推进持久化游标（ack 语义）；返回是否推进。真实音频时钟同步持久化。"""
         moment = time.time() if now is None else now
         with self.unit_of_work() as tx:
             row = tx.connection.execute(
@@ -355,6 +523,10 @@ class SessionStore:
             tx.connection.execute(
                 'UPDATE sources SET acked_sequence=?,last_seen_ns=? WHERE session_id=? AND source=?',
                 (sequence, int(moment * 1_000_000_000), session_id, source))
+            tx.connection.execute(
+                'UPDATE sessions SET last_audio_at=? WHERE session_id=? '
+                'AND (last_audio_at IS NULL OR last_audio_at<?)',
+                (moment, session_id, moment))
         return True
 
     def mark_source_drained(self, session_id, source, last_sequence):
@@ -403,7 +575,7 @@ class SessionStore:
         moment = time.time() if now is None else now
         with self.unit_of_work() as tx:
             session = tx.sessions.require(session_id)
-            if session['phase'] != 'recording':
+            if session['phase'] != 'running':
                 raise StateError('session_not_recording')
             added = tx.connection.execute(
                 'INSERT OR IGNORE INTO inputs(delivery_id,session_id,sequence,body,created_ns) '
@@ -555,7 +727,7 @@ class SessionStore:
             job_id = digest([job_id, session['material_version']])
         with self.unit_of_work() as tx:
             current = tx.sessions.require(session_id)
-            if current['phase'] not in ('recording', 'draining'):
+            if current['phase'] not in ('running', 'draining'):
                 return None
             for old in tx.connection.execute(
                     "SELECT job_id,snapshot FROM jobs WHERE session_id=? AND state='pending' "
@@ -683,7 +855,7 @@ class SessionStore:
     def drain_ready(self, session_id):
         """STATE_MACHINES S3 排空条件。"""
         session = self.require_session(session_id)
-        if session['phase'] not in ('recording', 'draining'):
+        if session['phase'] not in ('running', 'draining'):
             return False
         if not self.sources_ready_for_drain(session_id):
             return False
@@ -700,7 +872,7 @@ class SessionStore:
         moment = time.time() if now is None else now
         with self.unit_of_work() as tx:
             session = tx.sessions.require(session_id)
-            if session['phase'] != 'recording':
+            if session['phase'] not in ('running', 'paused'):
                 raise StateError('not_found')
             latest = tx.subscriptions.latest_for(session_id, subscriber_open_id)
             if latest is not None:
