@@ -15,9 +15,12 @@
 
 ## 运行
 
-在仓库根目录，先在 shell 中设置与事件订阅应用一致的 `BOT_APP_ID`、`BOT_APP_SECRET`（或加载已有的 `scripts/local.env`），再运行：
+在仓库根目录，复制本探针专用的凭据模板，填写与事件订阅应用一致的 `BOT_APP_ID`、`BOT_APP_SECRET`（`local.env` 已被 Git 忽略），再运行：
 
 ```bash
+cp studies/meeting-events/local.env.example studies/meeting-events/local.env
+# 编辑 studies/meeting-events/local.env，填入实际应用 ID 和密钥
+source studies/meeting-events/local.env
 studies/meeting-events/.venv/bin/python studies/meeting-events/listen.py
 # 只看某个会议号：追加 --meeting-no 123456789
 ```
