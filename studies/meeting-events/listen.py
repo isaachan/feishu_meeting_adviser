@@ -17,11 +17,11 @@ EVENTS = {
 
 def main():
     parser = argparse.ArgumentParser(description='监听飞书会议开始/结束和参会人进出事件')
-    parser.add_argument('--meeting-no', help='仅显示指定 9 位会议号的事件')
+    parser.add_argument('meeting_no', help='要监听的 9 位会议号')
     args = parser.parse_args()
-    if args.meeting_no and (len(args.meeting_no) != 9 or not args.meeting_no.isascii()
-                            or not args.meeting_no.isdecimal()):
-        parser.error('--meeting-no 须为 9 位数字')
+    if (len(args.meeting_no) != 9 or not args.meeting_no.isascii()
+            or not args.meeting_no.isdecimal()):
+        parser.error('meeting_no 须为 9 位数字')
 
     app_id = os.environ.get('BOT_APP_ID')
     app_secret = os.environ.get('BOT_APP_SECRET')
@@ -39,7 +39,7 @@ def main():
         header = payload.get('header') or {}
         event = payload.get('event') or {}
         meeting = event.get('meeting') or {}
-        if args.meeting_no and str(meeting.get('meeting_no')) != args.meeting_no:
+        if str(meeting.get('meeting_no')) != args.meeting_no:
             return
         operator = event.get('operator') or {}
         identity = operator.get('id') or {}
@@ -61,8 +61,7 @@ def main():
                .register_p2_vc_meeting_join_meeting_v1(receive)
                .register_p2_vc_meeting_leave_meeting_v1(receive)
                .build())
-    print('正在建立飞书长连接；仅已订阅、已发布且由 Open API 预约的会议会推送这四类事件。',
-          file=sys.stderr, flush=True)
+    print(f'正在连接飞书，监听会议号 {args.meeting_no} 的事件。', file=sys.stderr, flush=True)
     lark.ws.Client(app_id, app_secret, event_handler=handler,
                    log_level=lark.LogLevel.INFO).start()
 
