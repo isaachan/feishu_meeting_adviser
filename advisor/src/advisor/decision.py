@@ -33,6 +33,12 @@ class DecisionApplier:
               fault=None) -> bool:
         now = time.time() if now is None else now
         session_for_freshness = self.data.session(job['session_id'])
+        if session_for_freshness and session_for_freshness['phase'] in ('paused', 'ended'):
+            with self.data.unit_of_work(fault=fault) as tx:
+                state = tx.jobs.decision_state(job['job_id'])
+                if state in (JobState.PENDING, JobState.RUNNING):
+                    tx.jobs.abandon(job['job_id'])
+            return False
         joined_at = session_for_freshness['started_at'] if session_for_freshness else 0.0
         snapshot = json.loads(job['snapshot'])
         fresh_keys = set(snapshot['fresh_input_keys'])
@@ -64,11 +70,11 @@ class DecisionApplier:
                          job['session_id'], job['job_id'][:12], state.value)
                 return False  # 决策幂等：重放不重复落库
             session = tx.sessions.require(job['session_id'])
-            if session['phase'] == 'ended':
+            if session['phase'] in ('paused', 'ended'):
                 tx.jobs.abandon(job['job_id'])
-                LOG.info('decision abandoned (session ended): session=%s job=%s',
-                         job['session_id'], job['job_id'][:12])
-                return False  # ended 拒绝迟到结果
+                LOG.info('decision abandoned (session %s): session=%s job=%s',
+                         session['phase'], job['session_id'], job['job_id'][:12])
+                return False  # paused/ended reject late results
             if (job.get('context_version') != session['material_version']):
                 tx.jobs.abandon(job['job_id'])
                 LOG.info('decision abandoned (material changed): session=%s job=%s',

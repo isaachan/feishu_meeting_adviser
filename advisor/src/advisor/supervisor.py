@@ -132,11 +132,18 @@ class SessionSupervisor:
                     session = self.store.require_session(session_id)
                     phase = session['phase']
                     now = self.clock()
+                if phase == 'paused' and executor.running:
+                    stop_event = getattr(backend, 'stop_event', None)
+                    if isinstance(stop_event, threading.Event):
+                        stop_event.set()  # gateway POST /cancel; local job already abandoned
                 if self.legacy_nsdp:
                     self._nsdp_maintenance(session_id, session, now)
                 result = executor.take_finished()
                 if result is not None:
                     self._apply_result(result, now, executor.diagnostic_metadata())
+                    stop_event = getattr(backend, 'stop_event', None)
+                    if isinstance(stop_event, threading.Event):
+                        stop_event.clear()  # reuse backend after owner returns
                     backoff_until = now + self.settings.poll_interval * 5
                 if phase == 'draining':
                     self.close_ingest(session_id)
@@ -184,6 +191,14 @@ class SessionSupervisor:
         executor.start(job)
 
     def _apply_result(self, result, now, metadata=None):
+        session = self.store.session(result.job['session_id'])
+        state = self.store.db.execute(
+            'SELECT state FROM jobs WHERE job_id=?',
+            (result.job['job_id'],)).fetchone()
+        if (session is None or session['phase'] in ('paused', 'ended')
+                or (state is not None and state['state'] == 'abandoned')):
+            LOG.info('late gateway result ignored: session=%s', result.job['session_id'])
+            return
         timings = (metadata or {}).get('remote_timings') or {}
         if (self.nsdp is not None and
                 'nsdp_authorization_required' in timings.get('tool_events', [])):

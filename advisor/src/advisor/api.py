@@ -472,6 +472,8 @@ class AdvisorApi:
             code = exc.args[0] if exc.args else 'invalid_state'
             if code == 'not_found':
                 raise ApiError(404, 'not_found', 'meeting not currently served') from None
+            if code in ('not_owner', 'claim_conflict'):
+                raise _state_error(exc) from None
             raise ApiError(409, 'invalid_state',
                            'subscription revoked by organizer; terminal state') from None
         except StorageError:

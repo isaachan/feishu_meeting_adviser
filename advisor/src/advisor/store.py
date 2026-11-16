@@ -983,6 +983,8 @@ class SessionStore:
                 raise StateError('not_found')
             if session['owner_open_id'] == subscriber_open_id:
                 raise StateError('claim_conflict')  # controller cannot subscribe
+            if session['organizer_open_id'] == subscriber_open_id:
+                raise StateError('not_owner')  # organizer cannot subscribe C-owned session
             claim = tx.connection.execute(
                 'SELECT session_id,kind FROM session_claims WHERE user_open_id=? AND active=1',
                 (subscriber_open_id,)).fetchone()
