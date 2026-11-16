@@ -1,6 +1,6 @@
 # 部署 · 节点与基线（v0.5 草案）
 
-> **生产实施更新（2026-11-14）**：首期服务器为 Ubuntu `10.132.67.11`，OAuth、提交页面和 GUI 暂用 HTTP/IP，admin-site 通过 `http://10.132.67.11:8390` 直接访问（登录功能后续增加）。systemd 管理六个服务，具体操作以本文末 §7 为准；下文原 HTTPS、五个服务和 admin-site localhost 的设计基线在首期以此更新为准。
+> **生产实施更新（2026-11-16）**：服务器为 Ubuntu `10.132.67.11`，对外域名 `meeting-advisor.nioint.com`；OAuth、提交页面和 GUI 暂用 HTTP/域名，admin-site 暂通过 `http://meeting-advisor.nioint.com:8390` 直接访问（登录功能后续增加）。systemd 管理六个服务，具体操作以本文末 §7 为准；下文原 HTTPS、五个服务和 admin-site localhost 的设计基线在首期以此更新为准。
 
 状态：设计基线。组件职责见 [ARCHITECTURE](ARCHITECTURE.md)。
 修订：v0.3 将 bot 与 OAuth 鉴权服务从 advisor 拆出，连同 advisor 共三个**独立部署节点**（v0.2 曾为 advisor 子系统）；v0.4 评审修订：v1 最简网络基线——后端不接公网，ingest 走受信网络明文 ws，auth 内部 API 仅 advisor 调用（bot 不直连）；**v0.5（2026-11-12）**：advisor 新增第三个对外入口 `/gui/*`（HTTPS 反代，macos-gui 客户端用，CONTRACT_ADVISOR_API §8），组织者 laptop 承载增加 macos-gui，凭据面新增 device_token。
@@ -87,7 +87,7 @@ bot 无业务持久状态（重启丢失的仅 IM 去重缓存，飞书事件重
 
 - 服务器 `10.132.67.11`，代码放在部署用户的 `$HOME/feishu_meeting_advisor`。以该用户执行下列命令；需有 sudo/systemd 权限。六个服务使用该 Linux 用户运行，因而可使用该用户已有的 noam、OpenCode 登录凭据和模型文件。
 - 安装 Python 3.11+、`python3-venv`、pip 所需构建环境、curl、git 和 nginx；服务器需能安装各模块 Python 依赖。确认模型目录、noam 和 OpenCode 在该用户下可用。OpenCode 默认读取该用户的 `~/.local/share/opencode/auth.json`，也可通过 `OPENCODE_AUTH` 指定。
-- 飞书后台 OAuth 回调设置为 **`http://10.132.67.11/oauth/callback`**，需与 `PUBLIC_BASE_URL` 拼出的地址完全一致。确保浏览器及手机可访问服务器端口 80，laptop 可访问 8400，运维浏览器可访问 8390。
+- 飞书后台 OAuth 回调设置为 **`http://meeting-advisor.nioint.com/oauth/callback`**，需与 `PUBLIC_BASE_URL` 拼出的地址完全一致。确保浏览器及手机可访问服务器端口 80，laptop 可访问 8400，运维浏览器可访问 8390。
 - 拷贝并编辑配置（填写真实的飞书凭据及三个绝对路径）：
 
 ```bash
@@ -95,7 +95,7 @@ cp scripts/prod.env.example scripts/prod.env
 chmod 600 scripts/prod.env
 ```
 
-`scripts/prod.env` 是 shell 格式，仅保存可信的配置内容，不提交 Git。按需设置 `JIRA_URL`、`OPENCODE_AUTH`、`SKILLS_DIR`。默认真实模型 `REMOTE_BACKEND=opencode`；如需先验收假模型，可暂设 `fake`。GUI 的服务器地址填写 `http://10.132.67.11`。
+`scripts/prod.env` 是 shell 格式，仅保存可信的配置内容，不提交 Git。按需设置 `JIRA_URL`、`OPENCODE_AUTH`、`SKILLS_DIR`。将已有 `prod.env` 的 `PUBLIC_BASE_URL` 和 `INGEST_URL` 改为域名值（参见 `prod.env.example`）。默认真实模型 `REMOTE_BACKEND=opencode`；如需先验收假模型，可暂设 `fake`。GUI 的服务器地址填写 `http://meeting-advisor.nioint.com`。
 
 ### 7.2 部署、停止与升级
 
@@ -117,12 +117,12 @@ scripts/prod-down.sh --drain --timeout 600
 | 入口/服务 | 监听与访问 |
 |---|---|
 | nginx | `80`；仅转发 `/oauth/callback`、`/nsdp/submit`、`/jira/submit` 和 `/gui/` |
-| advisor ingest | `0.0.0.0:8400`；默认下发 `ws://10.132.67.11:8400/ingest` |
-| admin-site | 默认 `0.0.0.0:8390`；浏览器 `http://10.132.67.11:8390`，当前无登录 |
+| advisor ingest | `0.0.0.0:8400`；默认下发 `ws://meeting-advisor.nioint.com:8400/ingest` |
+| admin-site | 默认 `0.0.0.0:8390`；浏览器 `http://meeting-advisor.nioint.com:8390`，当前无登录 |
 | auth、advisor API、STT、STT health、gateway | 分别为 localhost 的 `8381`、`8380`、`8392`、`8393`、`8377` |
 
 数据在 `data/prod/`，日志在 `data/prod/logs/`，admin-site 从该目录读取五个服务日志。服务状态也可用 `systemctl status meeting-advisor@advisor` 查看；启动器故障可用 `journalctl -u meeting-advisor@advisor` 排查。日志文件需要按服务器运维策略定期轮转；备份 advisor 数据库和 auth 凭据时先停服务，并保护备份文件。
 
 各服务初始版本均为 `0.1.0`，版本唯一来源为对应组件的 `pyproject.toml`。修改组件时递增其版本，提交后重新部署；`prod-up.sh` 会打印每个服务的已安装版本，也可执行例如 `.venv-prod/advisor/bin/advisor --version`。`deployed-commit` 与版本一起用于定位部署代码。
 
-将来切域名时，修改 `PUBLIC_BASE_URL` 和 `INGEST_URL`，同步更新飞书回调配置，停机后重新部署；需要 HTTPS 时还需配置 nginx TLS 和证书，并同步更新客户端地址。
+切换域名时，修改已有 `scripts/prod.env` 的 `PUBLIC_BASE_URL` 和 `INGEST_URL`，同步更新飞书回调配置及 GUI 服务器地址，停机后重新部署；需要 HTTPS 时还需配置 nginx TLS 和证书，并同步更新客户端地址。
