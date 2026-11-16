@@ -140,6 +140,19 @@ class BotService:
             return '未在日历中找到这场会议'
         if exc.code == 'not_organizer':
             return '你不是这场日历会议的组织者'
+        if exc.code == 'meeting_ambiguous':
+            return '该会议号当前对应多个场次，请稍后在目标场次的时间窗内重试'
+        if exc.code == 'session_claimed':
+            return '该会议已由其他人启动会参谋，本场由其负责（先到先得，不可转移）'
+        if exc.code == 'instance_ended':
+            return ('该场会议的辅助已结束，本场不可重新开始'
+                    '（每场会议只能有一个会话，请等待下一次会议）')
+        if exc.code == 'claim_conflict':
+            return '你已归属另一场未结束的会议（发起人或订阅均占名额），请先结束/退出后再试'
+        if exc.code == 'not_supervisor':
+            return '仅会议组织者或管理员授权的参会者可以启动会参谋'
+        if exc.code == 'not_invited':
+            return '你不在该场会议的日历邀请名单中，无法启动会参谋'
         if exc.code == 'outside_window':
             return '当前不在会议时间窗内'
         if exc.code == 'not_found':
@@ -178,7 +191,8 @@ class BotService:
         self._dm(sender,
                  f'已入会《{result["title"]}》{hint}\n在 laptop 终端粘贴执行：\n\n'
                  f'{command_text}\n\n启动后我会开始听会。（也可打开 GUI 客户端，'
-                 f'会话出现后点「开始采集」即可，无需粘贴命令。）')
+                 f'会话出现后点「开始采集」即可，无需粘贴命令。）\n'
+                 f'注意：请在建会后 15 分钟内开始采集，超时本场辅助将失效且不可重建。')
 
     def _cmd_end(self, sender, command, message_id):
         listing = self.advisor.list_sessions(sender).get('sessions', [])
@@ -301,10 +315,15 @@ class BotService:
         for session in listing:
             status = self.advisor.session_status(session['session_id'])
             state_text = {'requested': '待审批', 'approved': '已批准',
-                          'denied': '已拒绝', 'revoked': '已撤销'}
+                          'denied': '已拒绝', 'revoked': '已撤销',
+                          'expired': '已过期', 'subscriber_cancelled': '申请人已撤回',
+                          'owner_revoked': '已撤销'}
+            phase_text = {'running': '进行中', 'paused': '已暂停（owner 离会）',
+                          'draining': '排空中', 'ended': '已结束'}
             subs = [f'#{s["request_no"]} {state_text.get(s["state"], s["state"])}'
                     for s in status.get('subscriptions', [])]
-            lines.append(f'《{session["title"]}》 {session["phase"]} · '
+            lines.append(f'《{session["title"]}》 '
+                         f'{phase_text.get(session["phase"], session["phase"])} · '
                          f'模型 {status.get("model_state", "?")} · 订阅 {" ".join(subs) or "无"}')
         self._reply(message_id, '\n'.join(lines))
 

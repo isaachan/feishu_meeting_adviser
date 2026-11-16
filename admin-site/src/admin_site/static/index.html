@@ -94,8 +94,8 @@
     </div>
     <table>
       <thead><tr>
-        <th>会话</th><th>会议号</th><th>标题</th><th>状态</th><th>组织者</th>
-        <th>订阅者</th><th>开始时间</th><th>结束时间</th><th>操作</th>
+        <th>会话</th><th>会议号</th><th>标题</th><th>状态</th><th>会话 owner</th>
+        <th>日历组织者</th><th>订阅者</th><th>开始时间</th><th>结束/排空截止</th><th>操作</th>
       </tr></thead>
       <tbody id="session-rows"></tbody>
     </table>
@@ -167,15 +167,21 @@ async function loadSessions(manual) {
   for (const s of rows) {
     const tr = document.createElement('tr');
     const endable = s.phase === 'running' || s.phase === 'paused' || s.phase === 'draining';
+    const endText = s.ended_at ? fmtTs(s.ended_at)
+      : (s.phase === 'draining' && s.drain_deadline_at)
+          ? `截止 ${fmtTs(s.drain_deadline_at)}${s.drain_forced_reason
+              ? '（已强制收尾：' + escapeHtml(s.drain_forced_reason) + '）' : ''}`
+          : '—';
     tr.innerHTML =
       `<td class="mono">${s.session_id}</td>` +
       `<td class="mono">${s.meeting_no || '—'}</td>` +
       `<td class="title">${escapeHtml(s.title || '')}</td>` +
       `<td><span class="badge ${s.phase}">${s.phase}</span></td>` +
       ownerCell(s) +
+      organizerCell(s) +
       subsCell(s) +
       `<td>${fmtTs(s.started_at)}</td>` +
-      `<td>${fmtTs(s.ended_at)}</td>` +
+      `<td>${endText}</td>` +
       `<td>${endable ? `<button class="btn danger" data-end="${s.session_id}" ` +
         `data-title="${escapeHtml(s.title || s.session_id)}">结束</button>` : '—'}</td>`;
     tbody.appendChild(tr);
@@ -216,7 +222,14 @@ function personLabel(name, email, fallback) {
 
 function ownerCell(s) {
   const label = personLabel(s.owner_name, s.owner_email, s.owner_open_id || '');
-  return `<td title="${escapeHtml(s.owner_open_id || '')}">${escapeHtml(label)}</td>`;
+  const same = s.organizer_open_id && s.organizer_open_id === s.owner_open_id;
+  return `<td title="${escapeHtml(s.owner_open_id || '')}">${escapeHtml(label)}${same ? '（兼组织者）' : ''}</td>`;
+}
+
+function organizerCell(s) {
+  if (!s.organizer_open_id) return '<td>—</td>';
+  const label = personLabel(s.organizer_name, s.organizer_email, s.organizer_open_id);
+  return `<td title="${escapeHtml(s.organizer_open_id)}">${escapeHtml(label)}</td>`;
 }
 
 function subsCell(s) {

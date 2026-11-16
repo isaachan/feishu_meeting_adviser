@@ -220,6 +220,7 @@ class BotServiceTests(unittest.TestCase):
         ack, done = self.join_and_wait()
         self.assertIn('正在入会', ack)
         self.assertIn('已入会《周会》', done)
+        self.assertIn('15 分钟内开始采集', done)
         self.assertIn("recorder real --session 's-3f9c2a'", done)
         self.assertNotIn('--mic', done)
         self.assertEqual(self.advisor.calls[0][:3], ('create_session', 'ou_A', '123456789'))
@@ -343,6 +344,22 @@ class BotServiceTests(unittest.TestCase):
         reply = self.handle('取消订阅', sender='ou_B', message_id='om-withdraw')
         self.assertIn('已撤回待审批申请 #12', reply)
         self.assertIn(('revoke_by_subscriber', 12), self.advisor.calls)
+
+    def test_v2_error_codes_have_user_wording(self):
+        from bot.advisor_client import AdvisorApiError
+        cases = {
+            'meeting_ambiguous': '多个场次',
+            'session_claimed': '已由其他人启动',
+            'instance_ended': '不可重新开始',
+            'claim_conflict': '已归属另一场',
+            'not_supervisor': '管理员授权的参会者',
+            'not_invited': '日历邀请名单',
+        }
+        for code, keyword in cases.items():
+            self.advisor.error = AdvisorApiError(409, code, 'state machine rejected')
+            self.handle('入会 123456789', message_id=f'om-{code}')
+            reply = self.wait_dm()[-1]
+            self.assertIn(keyword, reply)
 
     def test_duplicate_requested_does_not_notify_owner_again(self):
         self.advisor.create_subscription = lambda *args, **kwargs: {

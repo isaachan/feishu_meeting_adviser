@@ -34,5 +34,5 @@
 
 ## 阶段 D · 对外可见性与联合验收
 
-- [ ] **SM-12 · bot、GUI、admin 状态面联动**（依赖：SM-06～SM-11；模块：advisor API ↔ bot/macos-gui/admin-site）。列表/状态面展示 running/paused/draining/ended、owner 与会议组织者的不同身份、已采集/失联/最后真实音频、超时和源/任务/IM 未完成原因；GUI 仅 running 给采集参数，paused 停传、恢复后按 SM-00 UX 规则重开，draining/ended 不发令牌；bot 给出归属冲突、C 准入、重订/超时与建会后 900 秒内开录提醒话术。**验收**：A/C/小B看到的状态、指令和权限一致；无用户 OAuth/NSDP/Jira 凭据泄漏；服务断线不把单个 WS 错误冒充整个 STT 进程故障。
+- [x] **SM-12 · bot、GUI、admin 状态面联动**（依赖：SM-06～SM-11；模块：advisor API ↔ bot/macos-gui/admin-site）。列表/状态面展示 running/paused/draining/ended、owner 与会议组织者的不同身份、已采集/失联/最后真实音频、超时和源/任务/IM 未完成原因；GUI 仅 running 给采集参数，paused 停传、恢复后按 SM-00 UX 规则重开，draining/ended 不发令牌；bot 给出归属冲突、C 准入、重订/超时与建会后 900 秒内开录提醒话术。**验收**：A/C/小B看到的状态、指令和权限一致；无用户 OAuth/NSDP/Jira 凭据泄漏；服务断线不把单个 WS 错误冒充整个 STT 进程故障。取证：bot 新错误码话术与 900 秒开录提醒（[test_service.py](bot/tests/test_service.py)）；GUI paused 展示/手动重开（[test_sessions.py](macos-gui/tests/test_sessions.py)、[test_app_smoke.py](macos-gui/tests/test_app_smoke.py)）；admin owner/组织者分列与排空截止/强制收尾展示（§9.1 扩展）；e2e S1/S3 通过。
 - [ ] **SM-13 · 集成矩阵、数据升级与部署验收**（依赖：SM-01～SM-12）。补 `integrations/` 端到端：A/C 同场并发、C 受邀建会/A 后入会、用户跨会占位/退订重订、同号同日两场/跨时区、owner 离会回会/轮询漏检、停录 899/900 秒、STT 单连接关闭、gateway 慢、bot 离线、draining 强制截止与进程重启；建立旧 schema/phase/订阅行的迁移与回滚、备份/部署顺序，更新模块 README、运维状态与告警说明。**验收**：新旧契约兼容窗口有证据，带日历日程的真实普通飞书会议（即时会议为非目标）按 S1–S6 走查，其他会议不受单 session 结束影响；各项测试和取证链接写回本清单后逐项勾选。

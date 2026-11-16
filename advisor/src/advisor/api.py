@@ -416,6 +416,7 @@ class AdvisorApi:
         sessions = self.store.list_sessions_all()
         subscriptions = self.store.all_subscriptions()
         ids = {s['owner_open_id'] for s in sessions}
+        ids |= {s.get('organizer_open_id') for s in sessions if s.get('organizer_open_id')}
         ids |= {r['subscriber_open_id'] for r in subscriptions}
         directory = self._identity_directory(ids)
         by_session = {}
@@ -424,6 +425,14 @@ class AdvisorApi:
         items = []
         for s in sessions:
             owner = directory.get(s['owner_open_id']) or {}
+            organizer = (directory.get(s.get('organizer_open_id')) or {}
+                         if s.get('organizer_open_id') else {})
+            diagnostics = None
+            if s.get('drain_diagnostics'):
+                try:
+                    diagnostics = json.loads(s['drain_diagnostics'])
+                except ValueError:
+                    diagnostics = None
             subs = [{'request_no': r['request_no'],
                      'subscriber_open_id': r['subscriber_open_id'],
                      'state': r['state'],
@@ -434,9 +443,15 @@ class AdvisorApi:
                           'owner_open_id': s['owner_open_id'],
                           'owner_name': owner.get('name'),
                           'owner_email': owner.get('email'),
+                          'organizer_open_id': s.get('organizer_open_id'),
+                          'organizer_name': organizer.get('name'),
+                          'organizer_email': organizer.get('email'),
                           'meeting_no': s['meeting_no'], 'title': s['title'],
                           'phase': s['phase'], 'started_at': s['started_at'],
                           'ended_at': s['ended_ns'] / 1e9 if s['ended_ns'] else None,
+                          'drain_deadline_at': s.get('drain_deadline_at'),
+                          'drain_forced': bool(diagnostics),
+                          'drain_forced_reason': (diagnostics or {}).get('reason'),
                           'nsdp_hold': bool(s['nsdp_hold']),
                           'subscriptions': subs})
         return {'sessions': items}
