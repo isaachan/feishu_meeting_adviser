@@ -4,6 +4,7 @@ Every legal transition (T1-T5), every rejection row, and the invariants —
 including global #rN monotonicity and the organizer-row equivalent.
 """
 import time
+import threading
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -36,6 +37,77 @@ class StateMachineSpecTests(unittest.TestCase):
         row = self.subscribe()
         self.assertEqual((row['state'], row['existing']), ('requested', False))
         self.assertIsInstance(row['request_no'], int)
+        self.assertEqual(row['approval_deadline_at'], self.now + 1800)
+
+    def test_duplicate_requested_returns_same_request_no(self):
+        first = self.subscribe()
+        second = self.subscribe()
+        self.assertTrue(second['existing'])
+        self.assertEqual(first['request_no'], second['request_no'])
+
+    def test_requested_withdraw_releases_claim_and_new_line_requires_approval(self):
+        first = self.subscribe()
+        result = self.store.revoke_subscription(first['request_no'], 'ou_B', now=self.now)
+        self.assertEqual(result['state'], 'subscriber_cancelled')
+        self.assertIsNone(self.store.active_claim('ou_B'))
+        second = self.subscribe()
+        self.assertGreater(second['request_no'], first['request_no'])
+        self.assertEqual(second['state'], 'requested')
+        self.assertEqual(second['previous']['state'], 'subscriber_cancelled')
+
+    def test_approval_ttl_expires_and_releases_slot_even_after_restart(self):
+        first = self.store.create_subscription_request(
+            self.sid, 'ou_B', now=self.now, approval_ttl_s=2)
+        path = self.path
+        self.store.close()
+        self.store = SessionStore(path)
+        self.addCleanup(self.store.close)
+        self.assertEqual(self.store.expire_subscription_requests(now=self.now + 2), 1)
+        self.assertIsNone(self.store.active_claim('ou_B'))
+        state = self.store.db.execute(
+            'SELECT state,closed_by FROM subscriptions WHERE request_no=?',
+            (first['request_no'],)).fetchone()
+        self.assertEqual(tuple(state), ('expired', 'system'))
+        with self.assertRaises(StateError):
+            self.store.decide_subscription(first['request_no'], 'ou_A', 'approve',
+                                           now=self.now + 3)
+        new = self.store.create_subscription_request(self.sid, 'ou_B', now=self.now + 3)
+        self.assertGreater(new['request_no'], first['request_no'])
+
+    def test_expiry_and_approval_boundary_are_atomic(self):
+        first = self.store.create_subscription_request(
+            self.sid, 'ou_B', now=self.now, approval_ttl_s=2)
+        result = self.store.decide_subscription(first['request_no'], 'ou_A', 'approve',
+                                                now=self.now + 2)
+        self.assertEqual(result['state'], 'expired')
+        self.assertTrue(result['expired'])
+        self.assertIsNone(self.store.active_claim('ou_B'))
+
+    def test_concurrent_approve_and_withdraw_leave_single_terminal_row(self):
+        first = self.subscribe()
+        errors = []
+
+        def approve():
+            try:
+                self.store.decide_subscription(first['request_no'], 'ou_A', 'approve',
+                                               now=self.now + 1)
+            except StateError as exc:
+                errors.append(exc)
+
+        def withdraw():
+            try:
+                self.store.revoke_subscription(first['request_no'], 'ou_B', now=self.now + 1)
+            except StateError as exc:
+                errors.append(exc)
+
+        a, b = threading.Thread(target=approve), threading.Thread(target=withdraw)
+        a.start(); b.start(); a.join(); b.join()
+        row = self.store.db.execute(
+            'SELECT state FROM subscriptions WHERE request_no=?',
+            (first['request_no'],)).fetchone()
+        self.assertEqual(row['state'], 'subscriber_cancelled')
+        self.assertIsNone(self.store.active_claim('ou_B'))
+        self.assertFalse(errors)
 
     def test_T1_rejected_when_session_not_active(self):
         for phase in ('draining', 'ended'):
@@ -52,7 +124,6 @@ class StateMachineSpecTests(unittest.TestCase):
 
     def test_T1_accepted_when_session_paused(self):
         self.store.set_phase(self.sid, 'paused', now=self.now)
-        self.store.set_phase(self.sid, 'running', now=self.now)
         row = self.subscribe()
         self.assertEqual(row['state'], 'requested')
 
@@ -75,7 +146,7 @@ class StateMachineSpecTests(unittest.TestCase):
                 evidence='{}', generation=1, created_ns=1, context_version=None,
                 recipients=('ou_A', 'ou_B'), now=self.now)
         result = self.store.revoke_subscription(request['request_no'], 'ou_A', now=self.now)
-        self.assertEqual(result['state'], 'revoked')
+        self.assertEqual(result['state'], 'owner_revoked')
         pending = [r for r in self.store.db.execute(
             "SELECT recipient_id,state FROM outbox WHERE channel='im'")]
         states = {r['recipient_id']: r['state'] for r in pending}
@@ -100,20 +171,18 @@ class StateMachineSpecTests(unittest.TestCase):
         self.assertEqual((again['state'], again['existing']), ('approved', True))
         self.assertEqual(again['request_no'], request['request_no'])
 
-    def test_revoked_is_terminal_everywhere(self):
+    def test_owner_revoked_row_terminal_but_new_request_allowed(self):
         request = self.subscribe()
         self.store.decide_subscription(request['request_no'], 'ou_A', 'approve', now=self.now)
         self.store.revoke_subscription(request['request_no'], 'ou_A', now=self.now)
-        with self.assertRaises(StateError):
-            self.subscribe()
-        with self.assertRaises(StateError):
-            self.store.decide_subscription(request['request_no'], 'ou_A', 'approve',
-                                           now=self.now)
-        with self.assertRaises(StateError):
-            self.store.decide_subscription(request['request_no'], 'ou_A', 'deny',
-                                           now=self.now)
-        with self.assertRaises(StateError):
-            self.store.revoke_subscription(request['request_no'], 'ou_A', now=self.now)
+        second = self.subscribe()
+        self.assertGreater(second['request_no'], request['request_no'])
+        self.assertEqual(second['previous']['state'], 'owner_revoked')
+        self.assertEqual(self.store.decide_subscription(
+            request['request_no'], 'ou_A', 'approve', now=self.now)['state'],
+            'owner_revoked')
+        self.assertEqual(self.store.revoke_subscription(
+            request['request_no'], 'ou_A', now=self.now)['state'], 'owner_revoked')
 
     def test_decide_idempotent_echo_on_settled_states(self):
         request = self.subscribe()
@@ -130,7 +199,7 @@ class StateMachineSpecTests(unittest.TestCase):
             self.store.revoke_subscription(request['request_no'], 'ou_X', now=self.now)
         # the subscriber themself can (opt-out)
         result = self.store.revoke_subscription(request['request_no'], 'ou_B', now=self.now)
-        self.assertEqual(result['state'], 'revoked')
+        self.assertEqual(result['state'], 'subscriber_cancelled')
 
     def test_subscriptions_for_subscriber_listing(self):
         request = self.subscribe()

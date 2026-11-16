@@ -249,23 +249,25 @@ class BotService:
         self._reply(message_id, f'已撤销订阅 #{result["request_no"]}，对方将不再收到回答。')
 
     def _cmd_unsubscribe(self, sender, command, message_id):
-        """Subscriber-side opt-out: cancel my own approved subscription."""
+        """Withdraw a pending request or cancel an approved subscription."""
         pending = self.advisor.my_subscriptions(sender).get('subscriptions', [])
         if command.meeting_no:
             pending = [row for row in pending if row['meeting_no'] == command.meeting_no]
-        approved = [row for row in pending if row['state'] == 'approved']
-        if not approved:
+        active = [row for row in pending if row['state'] in ('requested', 'approved')]
+        if not active:
             self._reply(message_id, '你没有可取消的订阅。')
             return
-        if len(approved) > 1:
+        if len(active) > 1:
             listing = '、'.join(f'#{row["request_no"]}（会议 {row["meeting_no"]}）'
-                               for row in approved)
+                               for row in active)
             self._reply(message_id, f'你有多条订阅，请指明会议号：{listing}')
             return
-        row = approved[0]
+        row = active[0]
         result = self.advisor.revoke_subscription_by_subscriber(row['request_no'], sender,
-                                                                message_id=message_id)
-        self._reply(message_id, f'已取消订阅 #{result["request_no"]}，不再接收该会议的回答。')
+                                                                 message_id=message_id)
+        self._reply(message_id, f'已撤回待审批申请 #{result["request_no"]}，名额已释放。'
+                    if result['state'] == 'subscriber_cancelled' and row['state'] == 'requested'
+                    else f'已取消订阅 #{result["request_no"]}，不再接收该会议的回答。')
 
     def _cmd_meetings(self, sender, command, message_id):
         result = self.advisor.list_meetings(sender)
@@ -310,7 +312,9 @@ class BotService:
         result = self.advisor.create_subscription(sender, command.meeting_no,
                                                   message_id=message_id)
         if result.get('existing'):
-            self._reply(message_id, '你已订阅该会议的回答。')
+            self._reply(message_id,
+                        f'申请 #{result["request_no"]} 已在等待审批。'
+                        if result['state'] == 'requested' else '你已订阅该会议的回答。')
             return
         request_no = result['request_no']
         owner = result['owner_open_id']

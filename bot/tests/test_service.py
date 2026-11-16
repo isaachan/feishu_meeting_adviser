@@ -124,7 +124,7 @@ class FakeAdvisor:
     def __init__(self):
         self.calls = []
         self.session = {'session_id': 's-abc123', 'meeting_no': '123456789',
-                        'title': '周会', 'phase': 'recording', 'existing': False,
+                         'title': '周会', 'phase': 'running', 'existing': False,
                         'recorder_command_args': dict(ARGS)}
         self.error = None
         self.subscriptions = []
@@ -144,11 +144,11 @@ class FakeAdvisor:
         self.calls.append(('list_sessions', owner))
         return {'sessions': [{'session_id': self.session['session_id'],
                               'meeting_no': '123456789', 'title': '周会',
-                              'phase': 'recording', 'started_at': 1}]}
+                               'phase': 'running', 'started_at': 1}]}
 
     def session_status(self, session_id):
         self.calls.append(('session_status', session_id))
-        return {'session_id': session_id, 'phase': 'recording',
+        return {'session_id': session_id, 'phase': 'running',
                 'model_state': 'idle', 'subscriptions': self.subscriptions}
 
     def end_session(self, session_id, owner, *, message_id=''):
@@ -168,7 +168,7 @@ class FakeAdvisor:
 
     def revoke_subscription(self, request_no, owner, *, message_id=''):
         self.calls.append(('revoke', request_no, owner))
-        return {'request_no': request_no, 'state': 'revoked'}
+        return {'request_no': request_no, 'state': 'owner_revoked'}
 
     def list_meetings(self, owner_open_id):
         self.calls.append(('list_meetings', owner_open_id))
@@ -179,9 +179,9 @@ class FakeAdvisor:
         return {'subscriptions': list(self.my_subs)}
 
     def revoke_subscription_by_subscriber(self, request_no, subscriber_open_id, *,
-                                          message_id=''):
+                                           message_id=''):
         self.calls.append(('revoke_by_subscriber', request_no))
-        return {'request_no': request_no, 'state': 'revoked'}
+        return {'request_no': request_no, 'state': 'subscriber_cancelled'}
 
     def pending_outbox(self, limit=10):
         self.calls.append(('pending', limit))
@@ -336,6 +336,21 @@ class BotServiceTests(unittest.TestCase):
         self.assertIn('请指明会议号', reply)
         reply = self.handle('取消订阅 999888777', sender='ou_B', message_id='om-6d')
         self.assertIn('已取消订阅 #9', reply)
+
+    def test_subscriber_withdraws_requested_subscription(self):
+        self.advisor.my_subs = [
+            {'request_no': 12, 'meeting_no': '123456789', 'state': 'requested'}]
+        reply = self.handle('取消订阅', sender='ou_B', message_id='om-withdraw')
+        self.assertIn('已撤回待审批申请 #12', reply)
+        self.assertIn(('revoke_by_subscriber', 12), self.advisor.calls)
+
+    def test_duplicate_requested_does_not_notify_owner_again(self):
+        self.advisor.create_subscription = lambda *args, **kwargs: {
+            'request_no': 12, 'state': 'requested', 'existing': True}
+        reply = self.handle('我想收到会议 123456789 的信息',
+                            sender='ou_B', message_id='om-repeat-request')
+        self.assertIn('申请 #12 已在等待审批', reply)
+        self.assertEqual(self.transport.dms, [])
 
     def test_meetings_listing(self):
         self.advisor.meetings = {'now': 0, 'meetings': [

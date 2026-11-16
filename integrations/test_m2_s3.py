@@ -116,9 +116,13 @@ class S3SubscriptionTests(unittest.TestCase):
         time.sleep(2)
         self.assertEqual(len([t for t in bus.dms_to('ou_B') if '网关合成回答' in t]),
                          b_before, '小B received after revoke')
-        # revoked terminal: reapply rejected
+        # owner-revoked is terminal for the old row; a new request is allowed
         reply_b = bus.user_says(bed.service, 'ou_B', '我想收到会议 444000444 的信息')
-        self.assertIn('已被组织者撤销', reply_b)
+        next_no = int(re.search(r'#(\d+)', reply_b).group(1))
+        self.assertGreater(next_no, request_no)
+        self.assertEqual(bed.advisor_db_read(
+            'SELECT state FROM subscriptions WHERE request_no=?', (next_no,))[0][0],
+            'requested')
         bus.user_says(bed.service, 'ou_A', '结束会议')
 
     def test_denied_reapply_walks_fresh_approval(self):
@@ -141,6 +145,21 @@ class S3SubscriptionTests(unittest.TestCase):
         time.sleep(1.5)
         reply = bus.user_says(bed.service, 'ou_B', '我想收到会议 666000666 的信息')
         self.assertIn('未找到该会议或会议已结束', reply)
+
+    def test_pending_request_can_be_withdrawn_then_reapplied(self):
+        bed, bus = self.bed, self.bed.bus
+        self.open_and_stream('777000777', frames=0, owner='ou_E')
+        first = bus.user_says(bed.service, 'ou_F', '我想收到会议 777000777 的信息')
+        first_no = int(re.search(r'#(\d+)', first).group(1))
+        withdrawn = bus.user_says(bed.service, 'ou_F', '取消订阅 777000777')
+        self.assertIn(f'已撤回待审批申请 #{first_no}', withdrawn)
+        second = bus.user_says(bed.service, 'ou_F', '我想收到会议 777000777 的信息')
+        second_no = int(re.search(r'#(\d+)', second).group(1))
+        self.assertGreater(second_no, first_no)
+        self.assertEqual(bed.advisor_db_read(
+            'SELECT state FROM subscriptions WHERE request_no=?', (first_no,))[0][0],
+            'subscriber_cancelled')
+        bus.user_says(bed.service, 'ou_E', '结束会议')
 
 
 if __name__ == '__main__':

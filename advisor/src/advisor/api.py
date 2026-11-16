@@ -108,7 +108,7 @@ class AdvisorApi:
     def __init__(self, store: SessionStore, supervisor, *,
                  auth_client, calendar_validator, ingest_url, host='127.0.0.1',
                  clock=time.time, nsdp=None, nsdp_join_budget_s=12.0,
-                 legacy_nsdp=False, email_domain='nio.com'):
+                 legacy_nsdp=False, email_domain='nio.com', approval_ttl_s=1800):
         self.store = store
         self.supervisor = supervisor
         self.auth = auth_client
@@ -120,6 +120,7 @@ class AdvisorApi:
         self.legacy_nsdp = legacy_nsdp
         self.nsdp_join_budget_s = nsdp_join_budget_s
         self.email_domain = email_domain
+        self.approval_ttl_s = approval_ttl_s
         self._gui_logins: dict = {}
         self._gui_lock = threading.Lock()
 
@@ -467,15 +468,10 @@ class AdvisorApi:
         target = targets[0]
         try:
             return self.store.create_subscription_request(
-                target['session_id'], subscriber, now=self.clock())
+                target['session_id'], subscriber, now=self.clock(),
+                approval_ttl_s=self.approval_ttl_s)
         except StateError as exc:
-            code = exc.args[0] if exc.args else 'invalid_state'
-            if code == 'not_found':
-                raise ApiError(404, 'not_found', 'meeting not currently served') from None
-            if code in ('not_owner', 'claim_conflict'):
-                raise _state_error(exc) from None
-            raise ApiError(409, 'invalid_state',
-                           'subscription revoked by organizer; terminal state') from None
+            raise _state_error(exc) from None
         except StorageError:
             raise ApiError(500, 'internal', 'storage') from None
 
@@ -484,9 +480,12 @@ class AdvisorApi:
         if isinstance(owner, str) and owner:
             self._gate_nsdp(owner)
         try:
-            return self.store.decide_subscription(
+            result = self.store.decide_subscription(
                 request_no, owner, body.get('decision'),
                 now=self.clock())
+            if result.get('expired'):
+                raise ApiError(409, 'invalid_state', 'approval deadline expired')
+            return result
         except StateError as exc:
             raise _state_error(exc) from None
         except StorageError:

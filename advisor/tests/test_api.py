@@ -392,11 +392,25 @@ class SubscriptionApiTests(ApiBase):
         status, revoked = self.post(
             f"/subscriptions/{request_row['request_no']}/revoke",
             {'owner_open_id': 'ou_A'}, key='revoke-1')
-        self.assertEqual(revoked['state'], 'revoked')
-        status, body = self.post_error('/subscription-requests',
-                                       {'subscriber_open_id': 'ou_B',
-                                        'meeting_no': session['meeting_no']}, key='sub-2')
+        self.assertEqual(revoked['state'], 'owner_revoked')
+        status, again = self.subscribe(session, key='sub-2')
+        self.assertEqual((status, again['state']), (200, 'requested'))
+        self.assertGreater(again['request_no'], request_row['request_no'])
+        self.assertEqual(again['previous']['state'], 'owner_revoked')
+
+    def test_late_approval_is_rejected_and_frees_claim(self):
+        session = self.created()
+        now = self.api.clock()
+        self.api.approval_ttl_s = 1
+        self.api.clock = lambda: now
+        _, pending = self.subscribe(session)
+        self.assertEqual(pending['approval_deadline_at'], now + 1)
+        self.api.clock = lambda: now + 1
+        status, body = self.post_error(
+            f"/subscription-requests/{pending['request_no']}/decide",
+            {'owner_open_id': 'ou_A', 'decision': 'approve'}, key='late-approval')
         self.assertEqual((status, body['error']['code']), (409, 'invalid_state'))
+        self.assertIsNone(self.store.active_claim('ou_B'))
 
     def test_unknown_meeting_404(self):
         status, body = self.post_error('/subscription-requests',

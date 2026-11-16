@@ -248,9 +248,9 @@ class NsdpGateTests(NsdpApiBase):
         self.assertIn('request_no', body)
         status, body = self.get('/subscriptions?subscriber_open_id=ou_B')
         self.assertEqual(status, 200)
-        status, body = self.post_error('/subscriptions/1/revoke',
-                                       {'subscriber_open_id': 'ou_B'}, key='rev-1')
-        self.assertNotEqual(body.get('error', {}).get('code'), 'authorization_required')
+        status, body = self.post('/subscriptions/1/revoke',
+                                 {'subscriber_open_id': 'ou_B'}, key='rev-1')
+        self.assertEqual((status, body['state']), (200, 'subscriber_cancelled'))
 
     def test_status_reports_nsdp_hold(self):
         status, body = self.join()
@@ -417,6 +417,7 @@ class SupervisorHoldTests(unittest.TestCase):
         self.auth.invalidated.append('ou_A')
         self.now[0] += self.settings.nsdp_refresh_seconds + 1
         self.assertTrue(self._wait(lambda: self.store.status(session_id)['nsdp_hold']))
+        self.assertTrue(self._wait(lambda: self.store.pending_im_rows(limit=50)))
         first = len(self.store.pending_im_rows(limit=50))
         self.assertGreaterEqual(first, 1)
         # two more retry ticks inside the nag window -> no extra DMs

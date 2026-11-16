@@ -17,6 +17,7 @@ class AdviserSettings:
     observe_poll_s: float = 15
     observe_timeout_s: float = 10
     max_observation_age_s: float = 60
+    approval_ttl_s: float = 1800
     nsdp_refresh_seconds: float = 900
     nsdp_retry_seconds: float = 60
     nsdp_nag_seconds: float = 300

@@ -1,4 +1,4 @@
-"""Schema v4 -> v6 migration tests (STATE_MACHINES v2 §6.2)."""
+"""Schema v4 -> v7 migration tests (STATE_MACHINES v2 §6.2)."""
 import unittest
 from pathlib import Path
 import sqlite3
@@ -96,7 +96,7 @@ class MigrationTests(unittest.TestCase):
     def test_v4_upgrades_to_v5_in_place(self):
         store = self.open()
         version = store.db.execute('PRAGMA user_version').fetchone()[0]
-        self.assertEqual(version, 6)
+        self.assertEqual(version, 7)
         phases = {row['session_id']: row['phase']
                   for row in store.db.execute('SELECT session_id,phase FROM sessions')}
         self.assertEqual(phases, {'s-live': 'running', 's-old': 'ended'})
@@ -134,7 +134,7 @@ class MigrationTests(unittest.TestCase):
         SessionStore.initialize(fresh)
         store = SessionStore(fresh)
         self.addCleanup(store.close)
-        self.assertEqual(store.db.execute('PRAGMA user_version').fetchone()[0], 6)
+        self.assertEqual(store.db.execute('PRAGMA user_version').fetchone()[0], 7)
 
     def test_early_v5_without_observation_columns_is_upgraded(self):
         early = Path(self.tmp.name) / 'early.sqlite3'
@@ -148,7 +148,22 @@ class MigrationTests(unittest.TestCase):
         self.addCleanup(store.close)
         cols = {row['name'] for row in store.db.execute('PRAGMA table_info(sessions)')}
         self.assertTrue({'owner_presence', 'observed_at', 'vc_meeting_id'} <= cols)
-        self.assertEqual(store.db.execute('PRAGMA user_version').fetchone()[0], 6)
+        self.assertEqual(store.db.execute('PRAGMA user_version').fetchone()[0], 7)
+
+    def test_legacy_requested_rows_get_deadlines_and_single_claim(self):
+        with sqlite3.connect(self.path) as db:
+            for ns in (1200, 1300):
+                db.execute(
+                    "INSERT INTO subscriptions(session_id,subscriber_open_id,state,created_ns) "
+                    "VALUES ('s-live','ou_C','requested',?)", (ns,))
+        store = self.open()
+        rows = store.db.execute(
+            "SELECT request_no,state,approval_deadline_at FROM subscriptions "
+            "WHERE subscriber_open_id='ou_C' ORDER BY request_no").fetchall()
+        self.assertEqual([row['state'] for row in rows],
+                         ['revoked', 'expired', 'requested'])
+        self.assertEqual(rows[-1]['approval_deadline_at'], 1300 / 1e9 + 1800)
+        self.assertEqual(store.active_claim('ou_C')['session_id'], 's-live')
 
 
 if __name__ == '__main__':

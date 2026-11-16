@@ -42,6 +42,7 @@ def main() -> None:
     serve.add_argument('--observe-poll-s', type=float, default=15)
     serve.add_argument('--observe-timeout-s', type=float, default=10)
     serve.add_argument('--max-observation-age-s', type=float, default=60)
+    serve.add_argument('--approval-ttl-s', type=float, default=1800)
     serve.add_argument('--model', choices=['remote', 'rule'], default='remote')
     serve.add_argument('--remote-backend', choices=['fake', 'opencode'], default='opencode',
                        help='gateway backend tag sent with inference jobs')
@@ -78,13 +79,15 @@ def main() -> None:
     database = args.data_dir / 'adviser.sqlite3'
     if not database.exists():
         SessionStore.initialize(database)
-    if min(args.observe_poll_s, args.observe_timeout_s, args.max_observation_age_s) <= 0:
+    if min(args.observe_poll_s, args.observe_timeout_s, args.max_observation_age_s,
+           args.approval_ttl_s) <= 0:
         parser.error('meeting observation budgets must be positive')
     settings = AdviserSettings(remote_url=args.gateway_url,
                                 remote_backend=args.remote_backend,
                                 observe_poll_s=args.observe_poll_s,
                                 observe_timeout_s=args.observe_timeout_s,
                                 max_observation_age_s=args.max_observation_age_s,
+                                approval_ttl_s=args.approval_ttl_s,
                                nsdp_refresh_seconds=args.nsdp_refresh_s,
                                nsdp_retry_seconds=args.nsdp_retry_s,
                                nsdp_nag_seconds=args.nsdp_nag_s)
@@ -129,8 +132,9 @@ def main() -> None:
         from .calendar import FeishuCalendarValidator
         calendar_validator = FeishuCalendarValidator(HttpAuthClient(args.auth_url))
     api = AdvisorApi(store, supervisor, auth_client=auth_client,
-                     calendar_validator=calendar_validator,
-                     ingest_url=args.ingest_url, nsdp=nsdp_service,
+                      calendar_validator=calendar_validator,
+                      ingest_url=args.ingest_url, nsdp=nsdp_service,
+                      approval_ttl_s=settings.approval_ttl_s,
                      nsdp_join_budget_s=args.nsdp_join_budget_s)
     stop_ingest = start_ingest_thread(ingest)
     supervisor.start()

@@ -76,7 +76,7 @@
 | 情形 | 响应 |
 |---|---|
 | `approved` 再申请 | `200 {state: approved, existing: true}`，不新建 |
-| 对非 `requested` 行重复 `decide` | `200 {当前状态}`（幂等回显，含 expired/各终态） |
+| 对已决 `approved`/`denied`/本人取消/owner 撤销行重复 `decide` | `200 {当前状态}`（幂等回显，不复活旧行） |
 | 对 `expired` 行 decide（逾期审批） | `409 invalid_state`（不得复活） |
 | 本人撤回/退订作用于 `requested`/`approved` 之外 | `409 invalid_state` |
 | owner 撤销作用于 `requested` | `409 invalid_state`（owner 对未审批行用 decide 表态） |
@@ -115,7 +115,7 @@
 
 与 SERVICE_STATE_MACHINES_V2 §5.2 逐条对应；具体秒数除 900 外均未业务定值。
 
-## 6. 数据模型与迁移（schema v4 → v5 → v6）
+## 6. 数据模型与迁移（schema v4 → v5 → v6 → v7）
 
 ### 6.1 变更
 
@@ -134,6 +134,8 @@
 5. `PRAGMA user_version=5`。**回滚**：v5→v4 不支持（枚举扩列不可逆），以升级前备份恢复。
 
 6. v5→v6：检查 `sessions` 列表并补缺失的 `owner_presence` / `observed_at` / `vc_meeting_id`，建立 VC ID 唯一索引，写 `user_version=6`；v4→v6 先完成上述 v4→v5 再继续此步。回滚仍使用升级前备份。
+
+7. v6→v7：建立 `subscriptions(state,approval_deadline_at)` 索引；旧 requested 行回填 `created_ns/1e9 + approval_ttl_s`（升级时工程默认 1800 秒），同用户历史多条未决只保留最新可占位一条，其余冲突项 `expired`；按非 ended 会话补 subscriber claim，确保启动后唯一约束生效。旧数据库按 v4→v5→v6→v7 顺序升级，回滚依赖升级前备份。
 
 ## 7. 与 v1 的差异与兼容窗口
 

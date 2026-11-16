@@ -121,6 +121,7 @@ class SessionSupervisor:
                 if phase == 'ended':
                     return
                 now = self.clock()
+                self.store.expire_subscription_requests(session_id, now=now)
                 if (self.meeting_observer is not None
                         and phase in ('running', 'paused')
                         and now >= next_observation_at):

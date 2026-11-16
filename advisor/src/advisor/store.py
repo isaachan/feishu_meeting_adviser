@@ -133,6 +133,41 @@ def upgrade_schema(database: SQLiteDatabase) -> None:
             db.execute('CREATE UNIQUE INDEX IF NOT EXISTS sessions_vc_meeting '
                        'ON sessions(vc_meeting_id) WHERE vc_meeting_id IS NOT NULL')
             db.execute('PRAGMA user_version=6')
+        version = 6
+    if version == 6:
+        with database.transaction():
+            db = database.connection
+            db.execute('CREATE INDEX IF NOT EXISTS subscriptions_deadline '
+                       'ON subscriptions(state,approval_deadline_at)')
+            db.execute("UPDATE subscriptions SET approval_deadline_at="
+                       "created_ns/1000000000.0+1800 WHERE state='requested' "
+                       'AND approval_deadline_at IS NULL')
+            # Old versions allowed duplicate requested rows and didn't claim
+            # the subscriber's slot. Retain only the latest viable request;
+            # close older/conflicting rows rather than silently double-owning.
+            pending = db.execute(
+                "SELECT s.request_no,s.session_id,s.subscriber_open_id,s.created_ns,"
+                "e.phase FROM subscriptions s JOIN sessions e ON e.session_id=s.session_id "
+                "WHERE s.state='requested' ORDER BY s.request_no DESC").fetchall()
+            claimed = set()
+            for row in pending:
+                user = row['subscriber_open_id']
+                existing = db.execute(
+                    'SELECT session_id,kind FROM session_claims '
+                    'WHERE user_open_id=? AND active=1', (user,)).fetchone()
+                if (row['phase'] == 'ended' or user in claimed or
+                        (existing and (existing['session_id'] != row['session_id']
+                                       or existing['kind'] != 'subscriber'))):
+                    db.execute("UPDATE subscriptions SET state='expired',closed_by='system',"
+                               "decided_ns=created_ns WHERE request_no=?", (row['request_no'],))
+                    continue
+                claimed.add(user)
+                db.execute(
+                    "INSERT INTO session_claims(user_open_id,session_id,kind,active,created_ns) "
+                    "VALUES (?,?,'subscriber',1,?) ON CONFLICT(user_open_id,session_id) "
+                    "DO UPDATE SET active=1,released_ns=NULL",
+                    (user, row['session_id'], row['created_ns']))
+            db.execute('PRAGMA user_version=7')
         return
     # fresh (0/empty) and unknown versions are judged by require_schema
 
@@ -368,6 +403,10 @@ class SessionStore:
                 (phase, int(moment * 1_000_000_000) if phase == 'ended' else None,
                  deadline, session_id))
             if phase == 'ended':
+                tx.connection.execute(
+                    "UPDATE subscriptions SET state='expired',closed_by='system',decided_ns=? "
+                    "WHERE session_id=? AND state='requested'",
+                    (int(moment * 1_000_000_000), session_id))
                 tx.connection.execute(
                     'UPDATE session_claims SET active=0,released_ns=? '
                     'WHERE session_id=? AND active=1',
@@ -973,11 +1012,43 @@ class SessionStore:
 
     # -- subscriptions ------------------------------------------------------
 
-    def create_subscription_request(self, session_id, subscriber_open_id, *, now=None):
+    @staticmethod
+    def _expire_due_requests(tx, moment, session_id=None):
+        """Atomic TTL transition + claim release; also used before new claims."""
+        query = ("SELECT * FROM subscriptions WHERE state='requested' "
+                 'AND approval_deadline_at IS NOT NULL AND approval_deadline_at<=?')
+        params = (moment,)
+        if session_id is not None:
+            query += ' AND session_id=?'
+            params = (moment, session_id)
+        rows = tx.connection.execute(query, params).fetchall()
+        for row in rows:
+            tx.subscriptions.settle(row['request_no'], 'expired', now=moment,
+                                    closed_by='system')
+            still_active = tx.connection.execute(
+                'SELECT 1 FROM subscriptions WHERE session_id=? '
+                "AND subscriber_open_id=? AND state IN ('requested','approved') LIMIT 1",
+                (row['session_id'], row['subscriber_open_id'])).fetchone()
+            if still_active is None:
+                tx.connection.execute(
+                    'UPDATE session_claims SET active=0,released_ns=? '
+                    'WHERE user_open_id=? AND session_id=? AND active=1',
+                    (int(moment * 1_000_000_000), row['subscriber_open_id'],
+                     row['session_id']))
+        return len(rows)
+
+    def expire_subscription_requests(self, session_id=None, *, now=None):
+        moment = time.time() if now is None else now
+        with self.unit_of_work() as tx:
+            return self._expire_due_requests(tx, moment, session_id=session_id)
+
+    def create_subscription_request(self, session_id, subscriber_open_id, *, now=None,
+                                    approval_ttl_s=1800):
         """STATE_MACHINES v2 T1: requesting occupies the caller's single claim."""
         moment = time.time() if now is None else now
         ns = int(moment * 1_000_000_000)
         with self.unit_of_work() as tx:
+            self._expire_due_requests(tx, moment)
             session = tx.sessions.require(session_id)
             if session['phase'] not in ('running', 'paused'):
                 raise StateError('not_found')
@@ -992,13 +1063,13 @@ class SessionStore:
                 raise StateError('claim_conflict')
             latest = tx.subscriptions.latest_for(session_id, subscriber_open_id)
             if latest is not None:
-                if latest['state'] == 'approved':
-                    return {'request_no': latest['request_no'], 'state': 'approved',
+                if latest['state'] in ('requested', 'approved'):
+                    return {'request_no': latest['request_no'], 'state': latest['state'],
                             'existing': True, 'session_id': session_id,
-                            'owner_open_id': session['owner_open_id'], 'title': session['title']}
-                if latest['state'] == 'revoked':
-                    raise StateError('invalid_state')
-            row = tx.subscriptions.insert(session_id, subscriber_open_id, now=moment)
+                            'owner_open_id': session['owner_open_id'], 'title': session['title'],
+                            'approval_deadline_at': latest['approval_deadline_at']}
+            row = tx.subscriptions.insert(session_id, subscriber_open_id, now=moment,
+                                          approval_deadline_at=moment + approval_ttl_s)
             tx.connection.execute(
                 '''INSERT INTO session_claims(user_open_id,session_id,kind,active,created_ns)
                    VALUES (?,?,'subscriber',1,?)
@@ -1009,7 +1080,8 @@ class SessionStore:
                         if latest is not None else None)
         return {'request_no': row['request_no'], 'state': 'requested', 'existing': False,
                 'session_id': session_id, 'owner_open_id': session['owner_open_id'],
-                'title': session['title'], 'previous': previous}
+                'title': session['title'], 'previous': previous,
+                'approval_deadline_at': row['approval_deadline_at']}
 
     def decide_subscription(self, request_no, owner_open_id, decision, *, now=None):
         if decision not in ('approve', 'deny'):
@@ -1020,12 +1092,18 @@ class SessionStore:
             session = tx.sessions.require(row['session_id'])
             if session['owner_open_id'] != owner_open_id:
                 raise StateError('not_owner')
-            if row['state'] == 'revoked':
+            if row['state'] == 'expired':
                 raise StateError('invalid_state')
             if row['state'] != 'requested':
                 return {'request_no': request_no, 'state': row['state']}  # 幂等回显
+            if row['approval_deadline_at'] is not None and moment >= row['approval_deadline_at']:
+                self._expire_due_requests(tx, moment)
+                return {'request_no': request_no, 'state': 'expired', 'expired': True}
+            if session['phase'] not in ('running', 'paused'):
+                raise StateError('invalid_state')
             settled = tx.subscriptions.settle(
-                request_no, 'approved' if decision == 'approve' else 'denied', now=moment)
+                request_no, 'approved' if decision == 'approve' else 'denied', now=moment,
+                closed_by='owner' if decision == 'deny' else None)
             if settled['state'] == 'denied':
                 tx.connection.execute(
                     'UPDATE session_claims SET active=0,released_ns=? '
@@ -1035,28 +1113,35 @@ class SessionStore:
         return {'request_no': request_no, 'state': settled['state']}
 
     def revoke_subscription(self, request_no, caller_open_id, *, now=None):
-        """Approved -> revoked by the session owner OR the subscriber themself."""
+        """Subscriber withdraws requested or cancels approved; owner revokes approved."""
         moment = time.time() if now is None else now
         with self.unit_of_work() as tx:
+            self._expire_due_requests(tx, moment)
             row = tx.subscriptions.require(request_no)
             session = tx.sessions.require(row['session_id'])
             caller_is_owner = session['owner_open_id'] == caller_open_id
             caller_is_subscriber = row['subscriber_open_id'] == caller_open_id
             if not (caller_is_owner or caller_is_subscriber):
                 raise StateError('not_owner')
-            if row['state'] != 'approved':
+            if row['state'] not in ('requested', 'approved'):
+                return {'request_no': request_no, 'state': row['state']}
+            if caller_is_owner and row['state'] == 'requested':
                 raise StateError('invalid_state')
-            settled = tx.subscriptions.settle(request_no, 'revoked', now=moment,
-                                              expected='approved')
+            target = 'owner_revoked' if caller_is_owner else 'subscriber_cancelled'
+            settled = tx.subscriptions.settle(request_no, target, now=moment,
+                                              expected=row['state'],
+                                              closed_by='owner' if caller_is_owner
+                                              else 'subscriber')
             tx.connection.execute(
                 'UPDATE session_claims SET active=0,released_ns=? '
                 'WHERE user_open_id=? AND session_id=? AND active=1',
                 (int(moment * 1_000_000_000), row['subscriber_open_id'],
                  row['session_id']))
-            keep = set(tx.subscriptions.approved_recipients(row['session_id'],
-                                                            session['owner_open_id']))
-            keep.discard(row['subscriber_open_id'])
-            tx.outbox.cancel_pending_recipients(row['session_id'], keep)
+            if row['state'] == 'approved':
+                keep = set(tx.subscriptions.approved_recipients(row['session_id'],
+                                                                session['owner_open_id']))
+                keep.discard(row['subscriber_open_id'])
+                tx.outbox.cancel_pending_recipients(row['session_id'], keep)
         return {'request_no': request_no, 'state': settled['state']}
 
     @_locked

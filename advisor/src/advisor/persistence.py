@@ -19,7 +19,7 @@ from .models import (Caption, JobState, MaterialState, ReplyState, SourceState,
                      caption_to_dict, digest)
 from .sqlite import SQLiteDatabase
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 SCHEMA = (
     '''CREATE TABLE sessions (
@@ -78,6 +78,7 @@ SCHEMA = (
         created_ns INTEGER NOT NULL, decided_ns INTEGER,
         approval_deadline_at REAL, closed_by TEXT)''',
     'CREATE INDEX subscriptions_session ON subscriptions(session_id,state)',
+    'CREATE INDEX subscriptions_deadline ON subscriptions(state,approval_deadline_at)',
     '''CREATE TABLE session_claims (
         user_open_id TEXT NOT NULL, session_id TEXT NOT NULL,
         kind TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1,
@@ -344,21 +345,25 @@ class SubscriptionRepository:
             raise StorageError('unknown subscription request')
         return row
 
-    def insert(self, session_id: str, subscriber_open_id: str, *, now: float) -> dict:
+    def insert(self, session_id: str, subscriber_open_id: str, *, now: float,
+               approval_deadline_at: float) -> dict:
         cursor = self.connection.execute(
-            'INSERT INTO subscriptions(session_id,subscriber_open_id,state,created_ns) '
-            "VALUES (?,?,'requested',?)",
-            (session_id, subscriber_open_id, int(now * 1_000_000_000)))
+            'INSERT INTO subscriptions(session_id,subscriber_open_id,state,created_ns,'
+            "approval_deadline_at) VALUES (?,?,'requested',?,?)",
+            (session_id, subscriber_open_id, int(now * 1_000_000_000),
+             approval_deadline_at))
         lastrowid = cursor.lastrowid
         if lastrowid is None:
             raise StorageError('subscription insert failed')
         return self.require(lastrowid)
 
     def settle(self, request_no: int, state: str, *, now: float,
-               expected: str = 'requested') -> dict:
+               expected: str = 'requested', closed_by: str | None = None) -> dict:
         changed = self.connection.execute(
-            'UPDATE subscriptions SET state=?,decided_ns=? WHERE request_no=? AND state=?',
-            (state, int(now * 1_000_000_000), request_no, expected)).rowcount
+            'UPDATE subscriptions SET state=?,decided_ns=?,closed_by=? '
+            'WHERE request_no=? AND state=?',
+            (state, int(now * 1_000_000_000), closed_by,
+             request_no, expected)).rowcount
         if changed != 1:
             raise StateError('invalid_state')
         self.checkpoint('after_subscription_decided')

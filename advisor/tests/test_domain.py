@@ -359,17 +359,17 @@ class SubscriptionTests(Base):
         self.assertTrue(again['existing'])
         self.assertEqual(again['state'], 'approved')
 
-    def test_revoke_terminal_and_reapply_rejected(self):
+    def test_owner_revoke_then_new_request_requires_approval(self):
         sid, request = self.full_flow()
         self.store.decide_subscription(request['request_no'], 'ou_A', 'approve', now=self.now)
         result = self.store.revoke_subscription(request['request_no'], 'ou_A', now=self.now)
-        self.assertEqual(result['state'], 'revoked')
-        with self.assertRaises(StateError):
-            self.store.create_subscription_request(sid, 'ou_B', now=self.now)
-        with self.assertRaises(StateError):
-            self.store.decide_subscription(request['request_no'], 'ou_A', 'approve', now=self.now)
-        with self.assertRaises(StateError):
-            self.store.revoke_subscription(request['request_no'], 'ou_A', now=self.now)
+        self.assertEqual(result['state'], 'owner_revoked')
+        again = self.store.create_subscription_request(sid, 'ou_B', now=self.now)
+        self.assertEqual(again['previous']['state'], 'owner_revoked')
+        self.assertGreater(again['request_no'], request['request_no'])
+        self.assertEqual(self.store.decide_subscription(
+            request['request_no'], 'ou_A', 'approve', now=self.now)['state'],
+            'owner_revoked')
 
     def test_owner_checks_and_wrong_states(self):
         sid, request = self.full_flow()
