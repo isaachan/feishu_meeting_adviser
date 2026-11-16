@@ -262,6 +262,11 @@ class SourceUplink:
             raise UplinkExit(2, f'{code}: {detail}')
         if code == 'session_ended':
             raise UplinkExit(3, 'session ended on server')
+        if code == 'session_paused':
+            # CONTRACT_RECORDER_STREAM v1.1: non-transient — reconnecting
+            # would be rejected again; the user restarts capture manually
+            # after the owner returns (GUI keeps the session visible).
+            raise UplinkExit(3, 'session paused (owner left); restart capture later')
         raise OSError(f'{code}: {detail}')  # transient: reconnect with backoff
 
     def stats(self):

@@ -136,12 +136,16 @@ class Controller(QObject):
         return snapshot
 
     def _auto_stop_ended_session(self, snapshot):
-        """会话结束联动：采集中的会话不再 recording 时自动干净停止。"""
+        """会话联动（STATE_MACHINES v2）：采集中的会话不再 running 时干净停止。
+
+        paused（owner 离会）同样停传；恢复 running 后由用户手动重新开始
+        （已定 2026-11-16：不自动重录）。
+        """
         job = self.job
         if job is None or job.finished:
             return
         live = {s['session_id'] for s in snapshot.get('sessions', [])
-                if s['phase'] == 'recording'}
+                if s['phase'] == 'running'}
         if job.session_id not in live:
             job.request_stop()
 
@@ -332,7 +336,9 @@ class MainWindow(QMainWindow):
     def _start_capture(self, session):
         args = session.get('recorder_command_args')
         if not args:
-            self.list_page.set_status('该会话已排空，无法采集')
+            self.list_page.set_status('owner 离会暂停中，请等恢复后手动重开采集'
+                                      if session.get('phase') == 'paused'
+                                      else '该会话已排空或结束，无法采集')
             return
         self.controller.run_async(
             lambda: self.controller.do_start_capture(session))

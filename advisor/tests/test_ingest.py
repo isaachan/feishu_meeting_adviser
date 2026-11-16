@@ -142,6 +142,26 @@ class IngestBase(unittest.TestCase):
 
 
 class HappyPathTests(IngestBase):
+    def test_clean_stop_then_restart_uses_new_epoch_without_ending_session(self):
+        for count in (0, 2, 3):
+            ws = self.client()
+            self.send(ws, self.start_payload())
+            started = json.loads(self.recv(ws))
+            self.assertEqual(started['acked_sequence'], 0)
+            for seq in range(1, count + 1):
+                self.send(ws, frame(seq))
+            if count >= 2:
+                self.recv(ws)  # periodic ack
+            self.send(ws, json.dumps({'type': 'stream_end', 'last_sequence': count}))
+            self.assertEqual(json.loads(self.recv(ws))['type'], 'stopped')
+            self.wait_closed(ws)
+            self.wait_source_released()
+            self.assertEqual(self.store.require_session(self.session_id)['phase'], 'running')
+            self.assertEqual(self.store.source_row(self.session_id, 'loopback')['state'],
+                             'drained')
+        self.assertEqual([len(s.frames) for s in self.factory.sinks], [0, 2, 3])
+        self.assertEqual(self.store.source_row(self.session_id, 'loopback')['acked_sequence'], 3)
+
     def test_start_frames_ack_stream_end(self):
         ws = self.client()
         self.send(ws, self.start_payload())
@@ -212,6 +232,23 @@ class RejectionTests(IngestBase):
         ws = self.client()
         self.send(ws, self.start_payload())
         self.expect_error(ws, 'session_ended')
+
+    def test_session_paused_rejects_new_and_closes_existing(self):
+        active = self.client()
+        self.send(active, self.start_payload())
+        self.recv(active)
+        self.store.set_phase(self.session_id, 'paused', now=1_000_001)
+        self.server.close_session(self.session_id, error_code='session_paused')
+        self.expect_error(active, 'session_paused')
+        self.wait_closed(active)
+        again = self.client()
+        self.send(again, self.start_payload())
+        self.expect_error(again, 'session_paused')
+        self.store.set_phase(self.session_id, 'running', now=1_000_002)
+        resumed = self.client()
+        self.send(resumed, self.start_payload())
+        self.assertEqual(json.loads(self.recv(resumed))['type'], 'started')
+
 
     def test_bad_binding(self):
         ws = self.client()
@@ -308,6 +345,50 @@ class IsolationTests(IngestBase):
         self.send(slow, frame(1))
         self.close(slow)
         self.close(fast)
+
+    def test_closing_one_session_does_not_close_another(self):
+        first = self.client()
+        self.send(first, self.start_payload())
+        self.recv(first)
+        other = self.client()
+        self.send(other, self.start_payload(
+            session_id=self.other['session_id'], stream_token=self.other_token,
+            event='cal_z/evt_z'))
+        self.recv(other)
+        self.server.close_session(self.session_id, error_code='session_paused')
+        self.assertEqual(json.loads(self.recv(first))['code'], 'session_paused')
+        self.send(other, frame(1))
+        self.send(other, frame(2))
+        self.assertEqual(json.loads(self.recv(other))['sequence'], 2)
+
+    def test_one_stt_sink_failure_does_not_interrupt_other_session(self):
+        class FailingSink(FakeSink):
+            async def feed(self, _pcm):
+                raise RuntimeError('one recognizer failed')
+
+        original_open = self.factory.open
+
+        def open_sink(session_id, source, on_final):
+            if session_id == self.session_id:
+                sink = FailingSink(on_final)
+                self.factory.sinks.append(sink)
+                return sink
+            return original_open(session_id, source, on_final)
+
+        self.factory.open = open_sink
+        first = self.client()
+        self.send(first, self.start_payload())
+        self.recv(first)
+        second = self.client()
+        self.send(second, self.start_payload(
+            session_id=self.other['session_id'], stream_token=self.other_token,
+            event='cal_z/evt_z'))
+        self.recv(second)
+        self.send(first, frame(1))
+        self.assertEqual(json.loads(self.recv(first))['code'], 'internal')
+        self.send(second, frame(1))
+        self.send(second, frame(2))
+        self.assertEqual(json.loads(self.recv(second))['sequence'], 2)
 
 
 class IdleTests(IngestBase):

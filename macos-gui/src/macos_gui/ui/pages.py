@@ -140,7 +140,8 @@ class ListPage(QWidget):
         selected = self._selected_session()
         self.session_list.clear()
         for item in snapshot.get('sessions', []):
-            phase_text = '可采集' if item['phase'] == 'recording' else '排空中'
+            phase_text = {'running': '可采集', 'paused': 'owner 离会，暂停中',
+                          'draining': '排空中'}.get(item['phase'], item['phase'])
             started = _format_started(item.get('started_at'))
             parts = [item['title'], item['meeting_no']]
             if started:
@@ -148,7 +149,7 @@ class ListPage(QWidget):
             parts.append(phase_text)
             row = QListWidgetItem('  ·  '.join(parts))
             row.setData(Qt.ItemDataRole.UserRole, item)
-            if item['phase'] != 'recording':
+            if item['phase'] != 'running':
                 row.setFlags(row.flags() & ~Qt.ItemFlag.ItemIsSelectable & ~Qt.ItemFlag.ItemIsEnabled)
             self.session_list.addItem(row)
             if selected and selected['session_id'] == item['session_id']:

@@ -164,7 +164,7 @@ class ScriptedClient:
         self.sessions_payload = {'user': {'open_id': 'ou_A', 'name': 'Kai Han',
                                           'email': 'kai.han@nio.com'},
                                  'sessions': [{'session_id': 's-1', 'meeting_no': '111',
-                                               'title': '周会', 'phase': 'recording',
+                                                'title': '周会', 'phase': 'running',
                                                'started_at': 1_763_000_000.0,
                                                'recorder_command_args': {
                                                    'session': 's-1', 'event': 'c/e',

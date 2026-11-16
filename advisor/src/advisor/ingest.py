@@ -222,17 +222,19 @@ class _Connection:
         if not isinstance(first_sequence, int) or first_sequence < 1:
             self._release_and_raise('bad_message', 'invalid first_sequence')
         self.speaker = start.get('speaker') or '本机'
-        self.store.ensure_source(self.session_id, self.source)
         row = self.store.source_row(self.session_id, self.source)
+        if row is None:
+            self.store.ensure_source(self.session_id, self.source)
+            row = self.store.source_row(self.session_id, self.source)
         assert row is not None
         self.acked = row['acked_sequence']
         if not start.get('resume'):
             if self.acked and first_sequence != 1:
                 self._release_and_raise('bad_message', 'fresh start must begin at 1')
-            if self.acked:
-                # New capture epoch: previous unacked range is explicitly lost.
-                self.store.mark_source_lost(self.session_id, self.source,
-                                            lost_from=None, lost_to=None)
+            if row['state'] != 'live' or self.acked:
+                # A new run also resets a source ended before its first frame.
+                if row['state'] == 'live':
+                    self.store.mark_source_lost(self.session_id, self.source)
                 self.store.source_reset(self.session_id, self.source,
                                         first_sequence - 1)
                 self.acked = first_sequence - 1
@@ -314,6 +316,11 @@ class _Connection:
                                 self.session_id, self.source, exc.code, exc.message)
                     await self.fail(exc.code, exc.message)
                     return
+                except Exception:
+                    LOG.exception('ingest sink failed: session=%s source=%s',
+                                  self.session_id, self.source)
+                    await self.fail('internal', 'source recognition unavailable')
+                    return
         except websockets.ConnectionClosed:
             LOG.info('ingest connection lost: session=%s source=%s last_seq=%s acked=%s',
                      self.session_id, self.source, self.last_seq, self.acked)
@@ -336,6 +343,10 @@ class _Connection:
         return self.sink
 
     async def _frame(self, raw: bytes):
+        phase = self.store.require_session(self.session_id)['phase']
+        if phase != 'running':
+            raise IngestError('session_paused' if phase == 'paused' else 'session_ended',
+                              f'session is {phase}')
         if len(raw) < 4 or len(raw) > MAX_FRAME_BYTES or (len(raw) - 4) % 2:
             raise IngestError('bad_message', 'invalid frame')
         (sequence,) = struct.unpack('<I', raw[:4])

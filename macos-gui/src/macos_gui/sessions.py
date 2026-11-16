@@ -6,7 +6,7 @@ started_at, recorder_command_args|null}].
 """
 from .api import NetworkError
 
-KNOWN_PHASES = ('recording', 'draining')
+KNOWN_PHASES = ('running', 'paused', 'draining')  # v2: paused 可见、无采集参数
 ARGS_KEYS = {'session', 'event', 'url', 'token', 'mic'}
 
 

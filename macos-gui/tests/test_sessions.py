@@ -14,7 +14,7 @@ class NormalizeTests(unittest.TestCase):
                         'phase': 'draining', 'started_at': 2.0,
                         'recorder_command_args': None},
                        {'session_id': 's-1', 'meeting_no': '111', 'title': 'A',
-                        'phase': 'recording', 'started_at': 1.0,
+                         'phase': 'running', 'started_at': 1.0,
                         'recorder_command_args': {'session': 's-1', 'event': 'c/e',
                                                   'url': 'ws://h:8400/ingest',
                                                   'token': 'st-x', 'mic': False}}]}
@@ -28,15 +28,18 @@ class NormalizeTests(unittest.TestCase):
 
     def test_malformed_items_are_dropped(self):
         payload = {'user': {'open_id': 'ou_A'}, 'sessions': [
-            {'session_id': 's-ok', 'phase': 'recording',
+            {'session_id': 's-ok', 'phase': 'running',
+              'recorder_command_args': None},
+            {'session_id': 's-paused', 'phase': 'paused',
              'recorder_command_args': None},
             {'session_id': 's-bad-phase', 'phase': 'ended'},
-            {'session_id': '', 'phase': 'recording'},
+            {'session_id': '', 'phase': 'running'},
             'garbage',
-            {'session_id': 's-bad-args', 'phase': 'recording',
+            {'session_id': 's-bad-args', 'phase': 'running',
              'recorder_command_args': {'session': 's-bad-args'}}]}
         snapshot = normalize_sessions(payload)
-        self.assertEqual([s['session_id'] for s in snapshot['sessions']], ['s-ok'])
+        self.assertEqual([s['session_id'] for s in snapshot['sessions']],
+                         ['s-ok', 's-paused'])
 
     def test_missing_user_or_sessions_raises(self):
         with self.assertRaises(NetworkError):

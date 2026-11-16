@@ -604,10 +604,10 @@ class SessionStore:
                 'WHERE session_id=? AND source=?', (lost_from, lost_to, session_id, source))
 
     def source_reset(self, session_id, source, acked_sequence):
-        """New capture epoch (resume:false after stale): reset cursor, keep live."""
+        """New capture epoch: reset cursor and prior run's drain marker."""
         with self.unit_of_work() as tx:
             tx.connection.execute(
-                "UPDATE sources SET state='live',acked_sequence=?,lost_from=NULL,"
+                "UPDATE sources SET state='live',acked_sequence=?,last_sequence=NULL,lost_from=NULL,"
                 'lost_to=NULL WHERE session_id=? AND source=?',
                 (acked_sequence, session_id, source))
 

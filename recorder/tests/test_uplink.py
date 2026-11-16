@@ -30,6 +30,7 @@ class FakeIngest:
         self.stream_ends: dict[str, int] = {}
         self.acked: dict[str, int] = {}
         self.bad_tokens = set()
+        self.paused = False
         self.drop_after: dict[str, int] = {}       # source -> close after N frames
         self.stale_for: set[str] = set()            # reply stale_sequence once
         self.loop = asyncio.new_event_loop()
@@ -50,6 +51,10 @@ class FakeIngest:
             source = start.get('source')
             if start.get('stream_token') in self.bad_tokens:
                 await ws.send(json.dumps({'type': 'error', 'code': 'bad_token'}))
+                await ws.close()
+                return
+            if self.paused:
+                await ws.send(json.dumps({'type': 'error', 'code': 'session_paused'}))
                 await ws.close()
                 return
             if source in self.stale_for:
@@ -189,6 +194,15 @@ class HappyPathTests(UplinkBase):
 
 
 class ReconnectTests(UplinkBase):
+    def test_paused_exits_without_retrying(self):
+        self.server.paused = True
+        uplink = self.make_uplink()
+        uplink.offer(self.frame(1))
+        self.assertTrue(self.wait_for(uplink.stopped.is_set))
+        self.assertEqual(uplink.exit_code, 3)
+        self.assertIn('session paused', uplink.exit_reason)
+        self.assertEqual(self.server.sessions, 1)
+
     def test_reconnect_retransmits_only_unacked(self):
         self.server.drop_after['loopback'] = 1  # drop after first frame each time
         uplink = self.make_uplink()
