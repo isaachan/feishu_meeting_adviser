@@ -106,11 +106,26 @@ class ValidatorTests(unittest.TestCase):
             validator.validate('ou_A', {'no': MEETING_NO})
         self.assertEqual(ctx.exception.code, 'meeting_not_found')
 
-    def test_not_organizer(self):
+    def test_not_organizer_returns_flag(self):
+        # v2: the admission decision moved to the API layer; the validator
+        # reports organizer_ok instead of raising (STATE_MACHINES v2 §0).
         validator, _a, _h = self.make([event(organizer='ou_SOMEONE_ELSE')])
+        binding = validator.validate('ou_A', {'no': MEETING_NO})
+        self.assertFalse(binding['organizer_ok'])
+        validator, _a, _h = self.make([event(organizer='ou_A')])
+        self.assertTrue(validator.validate('ou_A', {'no': MEETING_NO})['organizer_ok'])
+
+    def test_attendees_and_ambiguous(self):
+        ev1 = event(organizer='ou_A')
+        ev1['attendees'] = [{'open_id': 'ou_B'}, {'user_id': 'ou_C'}]
+        validator, _a, _h = self.make([ev1])
+        binding = validator.validate('ou_A', {'no': MEETING_NO})
+        self.assertEqual(binding['attendees'], {'ou_B', 'ou_C'})
+        validator2, _a2, _h2 = self.make([event(organizer='ou_A'),
+                                          event(event_id='evt_2', organizer='ou_A')])
         with self.assertRaises(CalendarError) as ctx:
-            validator.validate('ou_A', {'no': MEETING_NO})
-        self.assertEqual(ctx.exception.code, 'not_organizer')
+            validator2.validate('ou_A', {'no': MEETING_NO})
+        self.assertEqual(ctx.exception.code, 'meeting_ambiguous')
 
     def test_outside_window_both_sides(self):
         for start, end in ((NOW - 7200, NOW - 3600), (NOW + 3600, NOW + 7200)):

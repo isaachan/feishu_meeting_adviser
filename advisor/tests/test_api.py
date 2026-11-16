@@ -112,6 +112,67 @@ class ApiBase(unittest.TestCase):
                          key=key or f'join-{self.counter}-{no}')
 
 
+class CAdmissionTests(ApiBase):
+    """SM-04: supervisor (小C) admission via grant list + occurrence invite."""
+
+    def setUp(self):
+        super().setUp()
+        self.calendar.occurrences = {'123456789': [
+            {'start_ts': 1762800000, 'organizer_open_id': 'ou_O',
+             'attendees': ['ou_C', 'ou_B']}]}
+
+    def grant(self, open_id, enabled=True):
+        self.store.put_supervisor_grant(f'g-{open_id}', open_id=open_id,
+                                        enabled=enabled, now=1.0)
+
+    def test_invited_supervisor_creates_with_own_identity(self):
+        self.grant('ou_C')
+        status, body = self.join(owner='ou_C')
+        self.assertEqual(status, 200)
+        self.assertEqual(body['phase'], 'running')
+        row = self.store.require_session(body['session_id'])
+        self.assertEqual(row['owner_open_id'], 'ou_C')
+        self.assertEqual(row['organizer_open_id'], 'ou_O')
+
+    def test_organizer_path_unaffected_by_grants(self):
+        status, body = self.join(owner='ou_O')
+        self.assertEqual(status, 200)
+        self.assertEqual(body['phase'], 'running')
+
+    def test_plain_participant_without_grant_rejected(self):
+        status, body = self.post_error('/sessions',
+                                       {'owner_open_id': 'ou_B',
+                                        'meeting_ref': {'no': '123456789'}},
+                                       key='c-nogrant')
+        self.assertEqual((status, body['error']['code']), (409, 'not_supervisor'))
+
+    def test_granted_but_not_invited_rejected(self):
+        self.calendar.occurrences['123456789'][0]['attendees'] = ['ou_X']
+        self.grant('ou_C')
+        status, body = self.post_error('/sessions',
+                                       {'owner_open_id': 'ou_C',
+                                        'meeting_ref': {'no': '123456789'}},
+                                       key='c-noinvite')
+        self.assertEqual((status, body['error']['code']), (409, 'not_invited'))
+
+    def test_disabled_grant_rejected(self):
+        self.grant('ou_C', enabled=False)
+        status, body = self.post_error('/sessions',
+                                       {'owner_open_id': 'ou_C',
+                                        'meeting_ref': {'no': '123456789'}},
+                                       key='c-disabled')
+        self.assertEqual((status, body['error']['code']), (409, 'not_supervisor'))
+
+    def test_supervisor_organizer_uses_a_path(self):
+        # C 在另一场自己是组织者：organizer_ok 命中，无需名单
+        self.calendar.occurrences['999888777'] = [
+            {'start_ts': 1762800000, 'organizer_open_id': 'ou_C', 'attendees': []}]
+        status, body = self.post('/sessions', {'owner_open_id': 'ou_C',
+                                               'meeting_ref': {'no': '999888777'}},
+                                 key='c-organizer')
+        self.assertEqual(status, 200)
+
+
 class CreateSessionTests(ApiBase):
     def test_all_missing_credentials_are_reported_before_reusing_or_creating_session(self):
         self.auth.mode = 'missing'
@@ -173,7 +234,7 @@ class CreateSessionTests(ApiBase):
         self.assertIn('intent=join:123456789', body['error']['authorize_url'])
 
     def test_four_rejection_codes_map(self):
-        for code in ('meeting_not_found', 'not_organizer', 'outside_window'):
+        for code in ('meeting_not_found', 'outside_window'):
             self.calendar.code = code
             status, body = self.post_error('/sessions', {'owner_open_id': 'ou_A',
                                                          'meeting_ref': {'no': '123456789'}},

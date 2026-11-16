@@ -65,14 +65,16 @@ class StubCalendarValidator(CalendarValidator):
             raise CalendarError('meeting_ambiguous')
         occurrence = occurrences[0]
         organizer = occurrence.get('organizer_open_id')
-        if organizer is not None and organizer != owner_open_id:
-            raise CalendarError('not_organizer')
+        organizer_ok = organizer is None or organizer == owner_open_id
+        attendees = set(occurrence.get('attendees') or ())
         return {'event_calendar_id': 'cal_stub',
                 'event_id': occurrence.get('event_id') or f'evt_{meeting_no}',
                 'title': occurrence.get('title') or f'会议 {meeting_no}',
                 'description': occurrence.get('description', self.description),
                 'organizer': organizer if organizer is not None else owner_open_id,
-                'attendees': set(occurrence.get('attendees') or ()),
+                'organizer_ok': organizer_ok,
+                'attendees': attendees,
+                'caller_ids': {owner_open_id},
                 'start': occurrence.get('start_ts', self.DEFAULT_START_TS),
                 'end': occurrence.get('start_ts', self.DEFAULT_START_TS) + 3600}
 
@@ -201,6 +203,18 @@ class AdvisorApi:
             binding = self.calendar.validate(owner, meeting_ref)
         except CalendarError as exc:
             raise ApiError(409, exc.code, 'calendar validation failed') from None
+
+        # Admission (STATE_MACHINES v2 §0): A organizer path first, then the
+        # C path (enabled grant + invite-list hit on the same occurrence).
+        if not binding.get('organizer_ok', True):
+            if owner not in self.store.enabled_supervisor_open_ids():
+                raise ApiError(409, 'not_supervisor',
+                               'caller is neither the organizer nor a supervisor')
+            attendees = binding.get('attendees') or set()
+            caller_ids = binding.get('caller_ids') or {owner}
+            if not (attendees & caller_ids):
+                raise ApiError(409, 'not_invited',
+                               'supervisor is not on this occurrence invite list')
 
         nsdp_text = ''
         if self.nsdp is not None and self.legacy_nsdp:

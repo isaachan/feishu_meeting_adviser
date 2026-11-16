@@ -181,19 +181,22 @@ class FeishuCalendarValidator:
         end = _timestamp(match, 'end_time')
         in_window = start is not None and end is not None and (
             start - WINDOW_SECONDS <= now <= end + WINDOW_SECONDS)
-        if not organizer_ok:
-            raise CalendarError('not_organizer')
         if not in_window:
             raise CalendarError('outside_window')
         calendar_id = match['_calendar_id']
         raw_id = match['event_id']
         event_id = raw_id if '/' in raw_id else f'{calendar_id}/{raw_id}'
+        # organizer_ok is returned, not raised: the admission decision
+        # (A organizer path vs C grant+invite path) belongs to the caller
+        # (STATE_MACHINES v2 §0 / CONTRACT_ADVISOR_API v2.0 §2).
         return {'event_calendar_id': calendar_id,
                 'event_id': event_id,
                 'title': (match.get('summary') or '')[:120],
                 'description': (match.get('description') or '')[:20000],
                 'organizer': _organizer_id(match),
+                'organizer_ok': organizer_ok,
                 'attendees': _attendee_ids(match),
+                'caller_ids': set(identities),
                 'start': start,
                 'end': end}
 
