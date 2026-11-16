@@ -186,7 +186,8 @@ class TestBed:
     flow over HTTP); default 'off' keeps prior beds unchanged.
     """
 
-    def __init__(self, *, nsdp='off', auto_personal_tokens=True):
+    def __init__(self, *, nsdp='off', auto_personal_tokens=True,
+                 extra_advisor_args=()):
         self.tmp = tempfile.mkdtemp(prefix='m1-bed-')
         self.processes = []
         self.ports = {}
@@ -195,6 +196,7 @@ class TestBed:
         self.service = None
         self.nsdp_mode = nsdp
         self.auto_personal_tokens = auto_personal_tokens
+        self.extra_advisor_args = list(extra_advisor_args)
 
     def _advisor_args(self):
         args = ['--model', 'remote', '--remote-backend', 'fake',
@@ -204,7 +206,7 @@ class TestBed:
                      '--nsdp-refresh-s', '2', '--nsdp-retry-s', '1', '--nsdp-nag-s', '2']
         else:
             args += ['--nsdp', 'off']
-        return args
+        return args + self.extra_advisor_args
 
     def start(self):
         last_error = None

@@ -1,6 +1,6 @@
 # 方案 C 待办
 
-- [ ] **T12 · 优先验证飞书会议当前状态查询能力**：核实 advisor 能否主动查询指定会议的当前状态（未开始/进行中/已结束）及组织者或小C是否在会，而非依赖可能错过的会议事件；验证 advisor 晚于会议启动、重启后仍可查询，以及所需 API、权限/OAuth scopes、身份与会议实例标识。记录不可查询、查询延迟或会议结束后不可查询时的边界和兜底方案，供后续 session `running ↔ paused` 自动迁移设计使用。
+- [x] **T12 · 优先验证飞书会议当前状态查询能力**（2026-11-16 由 [studies/meeting-events](studies/meeting-events/README.md) 完成调研，2026-11-17 SM-08 落地接入）：核实 advisor 能否主动查询指定会议的当前状态（未开始/进行中/已结束）及组织者或小C是否在会，而非依赖可能错过的会议事件；验证 advisor 晚于会议启动、重启后仍可查询，以及所需 API、权限/OAuth scopes、身份与会议实例标识。记录不可查询、查询延迟或会议结束后不可查询时的边界和兜底方案，供后续 session `running ↔ paused` 自动迁移设计使用。结论回链：普通会议无推送事件；采用 [poll_user.py](studies/meeting-events/poll_user.py) 用户身份链路（`list_by_no` 被拒回退 `user_active_meeting`），已实现于 [meeting_observer.py](advisor/src/advisor/meeting_observer.py)——查询失败/人员缺席一律 unknown 不伪造离会（[test_meeting_observer.py](advisor/tests/test_meeting_observer.py)）；剩余现场项（owner 离会后用户身份详情可查性、真实日程会议走查）见 TODO_STATEM_MACHINES SM-08 标注。
 - [ ] **T11 · advisor/STT 停机握手竞态**：结束会议时，advisor 的 STT 客户端存在并发接收和提前关闭连接的风险，STT 发送 `stopped` 时可能记录 `ConnectionClosedOK`，末尾识别结果的完整交付需验证。修复方案与验收见 [docs/STT_SHUTDOWN_HANDSHAKE.md](docs/STT_SHUTDOWN_HANDSHAKE.md)。
 - [ ] **T10 · 同一会议复用长期 OpenCode session（待技术验证）**：会议内多次判断复用同一 OpenCode session；先验证多轮上下文与工具结果、并发/取消/重试、重启恢复和长会话压缩，再确定进程隔离与契约迁移。讨论、职责边界和验收要点见 [docs/OPENCODE_MEETING_SESSION.md](docs/OPENCODE_MEETING_SESSION.md)。
 - [x] **T1 · `会议列表` 指令（2026-11-11 立项并完成）**：小A 对 bot 发「会议列表」，bot 经 advisor 用其已授权的日历 token 列出近期会议（含 9 位会议号、时间、是否组织者、是否进行中），供直接复制入会。规则式实现，不进 LLM，不进入会议模型上下文。范围：advisor 新增 `GET /meetings`（复用 FeishuCalendarValidator 读日历），bot 新增指令解析与格式化回复。
