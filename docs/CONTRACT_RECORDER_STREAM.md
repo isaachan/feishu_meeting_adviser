@@ -1,6 +1,6 @@
 # Recorder 流式接入契约（recorder ↔ advisor ingest）
 
-状态：v1 于 2026-11-10 冻结（阶段 0.2）。客户端为 `recorder`（WS 推流），服务端为 `advisor` 的 ingest 网关。变更需 bump `protocol` 版本并同步两侧实现与测试。上游设计：[ARCHITECTURE](ARCHITECTURE.md) D2/D3；语义来源：旧 `legacy/docs/CONTRACT_RECORDER_INPUT.md`（幂等/确认）与旧 `legacy/docs/CONTRACT_STT_STREAM.md`（WS 形态/断连）。
+状态：v1 于 2026-11-10 冻结（阶段 0.2）。**v1.1（2026-11-16，SM-01）**：新增错误码 `session_paused`（§3.4）、明确多段采集（§2.5）与 900 秒计时只认真实音频帧（§4.4）；`protocol=1` 不变，属兼容扩展。客户端为 `recorder`（WS 推流），服务端为 `advisor` 的 ingest 网关。变更需 bump `protocol` 版本并同步两侧实现与测试。上游设计：[ARCHITECTURE](ARCHITECTURE.md) D2/D3；语义来源：旧 `legacy/docs/CONTRACT_RECORDER_INPUT.md`（幂等/确认）与旧 `legacy/docs/CONTRACT_STT_STREAM.md`（WS 形态/断连）；会话 phase 语义见 [STATE_MACHINES](STATE_MACHINES.md) v2。
 
 ## 1. 传输与基线
 
@@ -63,6 +63,7 @@
 
 - `last_sequence` 为本源最后一帧的 `sequence`。服务端持久化补齐到该序号、将源标记 **drained**、回 `stopped` 后关闭连接。
 - 仅在干净停止时发送（`--duration` 到时、正常退出流程）；**Ctrl-C 中断不发送**（沿用旧"中断不伪造 stream_end"语义），此时源由服务端空闲超时/会话排空兜底。
+- **多段采集（v1.1）**：`stream_end` 结束的是**一次采集运行**，不是会话。同一 `running` 会话在 900 秒空闲窗内可再次 `start`（`resume:false` = 新采集纪元，服务端重置源行，STATE_MACHINES §1.1）；会话是否结束由服务端会话域决定，与单次 `stream_end` 无关。
 
 ## 3. 服务端 → 客户端
 
@@ -104,7 +105,8 @@
 | `bad_protocol` | protocol 版本不支持 | 停止重试，报告用户 |
 | `bad_message` | 非法消息/帧（首帧非 start、二进制长度非法、sequence 回退、未知 type） | 停止重试，报告用户 |
 | `bad_token` | 流令牌未知/过期/吊销/与会话不匹配 | 停止重试（会话可能已被结束），提示用户找 bot 重新入会 |
-| `session_ended` | 会话已 ended | 同上 |
+| `session_ended` | 会话已 ended 或 draining | 同上 |
+| `session_paused`（v1.1） | 会话 paused（owner 离会，暂停辅助）：新连接被拒；在途连接由服务端冲刷后以此码关闭 | **停止重连**（非临时错误，重连只会再次被拒）；提示用户"会话已暂停"；GUI 保持会话可见，恢复 running 后由用户手动重新开始采集；CLI 以退出码 3 结束 |
 | `bad_binding` | `event` 与会话绑定不一致 | 停止重试，检查命令 |
 | `source_conflict` | 同 `(session, source)` 已有活跃连接 | 等待旧连接释放后重试 |
 | `stale_sequence` | 重传起点早于服务端保留窗口（第 4.3 节） | 丢弃旧缓冲，从当前采集点重连（`resume:false`） |
@@ -133,8 +135,9 @@
 
 ### 4.4 会话侧兜底
 
-- 会话 draining/ended 后：新连接返回 `session_ended`；在途连接由服务端主动关闭（冲刷后）。
-- 采集空闲超时（advisor 配置项）触发会话 draining 的逻辑在会话域，不在本契约面；ingest 连接自身只有 120 s 空闲上限。
+- 会话 draining/ended 后：新连接返回 `session_ended`；在途连接由服务端主动关闭（冲刷后）。会话 paused：新连接与在途连接按 §3.4 `session_paused` 处理。
+- 采集空闲超时（advisor 配置项，900 秒）触发会话 draining 的逻辑在会话域，不在本契约面；ingest 连接自身只有 120 s 空闲上限。
+- **900 秒计时口径（v1.1）**：会话域空闲时钟只认**真实音频帧**（本协议二进制帧）；心跳/ping、`gap`/`stop`/`stream_end`、控制 JSON 与建连握手一律不续期。客户端不得以心跳维持会话存活。
 
 ## 5. 服务端实现要求（advisor ingest）
 

@@ -1,6 +1,8 @@
 # 会参谋 Domain Model · UML 类图草案 v2
 
 > 2026-11-16。与 [服务状态机草案](SERVICE_STATE_MACHINES_V2.md) 配套，**非数据库建表图，也非现有实现**。实线表示业务关联/归属，虚线表示仅以契约引用的跨服务对象；类名用英文便于对照代码，中文释义及约束见图下。小A/小C是飞书 Context 的角色，session owner 是会参谋 Context 的角色；C 是配置的启动能力，**不是与 A/B 互斥的用户类型**。
+>
+> **2026-11-16 更新：目标规则已冻结至 [STATE_MACHINES](STATE_MACHINES.md) v2（含 schema v5 落地形态）**；本文 I5 中「`owner_revoked` 是否封禁再申请待确认」已定为**允许重新申请**（新行重审），与冻结版冲突处以冻结版为准。
 
 ```mermaid
 classDiagram

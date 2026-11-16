@@ -96,6 +96,8 @@ laptop 对云端只有一种入口：ingest WS（流令牌鉴权）。**每条�
 
 ## 4. 核心数据流与状态机
 
+> **2026-11-16 起，权威状态机规格为 [STATE_MACHINES](STATE_MACHINES.md) v2**（会话 `running/paused/draining/ended`、按会议实例唯一建会、单人单占位、订阅 `expired/subscriber_cancelled/owner_revoked`、draining 绝对截止）。以下 4.2/4.3 为 v1 历史描述，保留作演进参照，与 v2 冲突处以 v2 为准。
+
 ### 4.0 启动一场会议（S1 时序）
 
 ```

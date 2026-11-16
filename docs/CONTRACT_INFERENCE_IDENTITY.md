@@ -5,7 +5,7 @@
 
 ## 任务身份
 
-- advisor 在 `metadata.owner_open_id` 中发送当前会话的组织者 open_id；它来自服务端会话记录，不能由会议文字或模型选择。
+- advisor 在 `metadata.owner_open_id` 中发送当前会话的** advisor session owner** open_id（组织者小A 或名单内小C，先到先得；语义见 [STATE_MACHINES](STATE_MACHINES.md) v2 §0）；它来自服务端会话记录，不能由会议文字或模型选择。
 - 格式为 `ou_` 后接 1–128 个 ASCII 字母、数字、下划线或连字符。字段缺省兼容旧客户端，但不提供组织者专属工具能力。
 - 若字段存在，`content_hash` 为以下对象的 SHA-256：`{system,input,output,backend,model,owner_open_id}`；序列化仍按原契约使用 sorted keys、`ensure_ascii=False` 和紧凑分隔符。缺省时保持原算法。
 - gateway 校验字段格式与摘要；同一 `request_id` 不能绑定不同组织者。组织者身份与任务一同持久化，用于执行及重试；不传递用户 token。

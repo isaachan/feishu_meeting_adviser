@@ -1,5 +1,7 @@
 # Auth 服务契约（OAuth 凭据托管）
 
+> **v1.6（2026-11-16，SM-01/SM-08）**：用户 OAuth scope 集扩展——新增用户版 `vc:meeting.meetingevent:read`（会话观测轮询，见 studies/meeting-events `poll_user.py` 链路）。**请求集合**（授权 URL/code 换取/刷新均携带）= BASE ∪ {`vc:meeting.meetingevent:read`}；**校验下限** BASE = 原 3 项（§1）。存量凭据（无 vc scope）继续通过校验与刷新，不强制重授权；缺该 scope 的 token 用于会话观测时由使用方（advisor）按「观测能力缺失 → unknown + 一次性提醒重新授权」处理。stub transport（`integrations/`）同步跟随请求集合。
+>
 > **v1.5（2026-11-14）Jira PAT 扩展**：支持组织者 Jira PAT 的一次性表单提交及受控只读查询，见 §9。
 > 入会时 advisor 分别检查三种 provider 的凭据是否存在或可用；NSDP/Jira 提交不验活，详见 CONTRACT_ADVISOR_API v1.6。
 >
@@ -22,7 +24,7 @@
 | 刷新 | `https://accounts.feishu.cn/oauth/v3/token` |
 | 身份 | `https://open.feishu.cn/open-apis/authen/v1/user_info` |
 
-- scopes：`calendar:calendar:read`、`calendar:calendar.event:read`、`offline_access`。
+- scopes（v1.6）：**BASE**（校验下限，存量与刷新必须满足）= `calendar:calendar:read`、`calendar:calendar.event:read`、`offline_access`；**请求集合**（授权/换取/刷新时实际申请）= BASE + `vc:meeting.meetingevent:read`（用户版，用于 advisor 会话观测轮询）。凭据记录校验（换取/刷新/读取）只要求 ⊇ BASE，多出的 scope 允许；因此新增 scope 不使存量凭据失效。
 - redirect URI 必须与飞书应用后台注册值**精确匹配**（`https://<域名>/oauth/callback`）。
 - **红线**：user_access_token/refresh_token 绝不进入 IM 文本、不下发 laptop；内部 API 响应仅给 advisor，用后不留存。**v1.1 起红线同样覆盖 NSDP token（§8）。**
 - **v1.1**：`GET /credentials/{open_id}/token` 接受 `?provider=feishu|nsdp`（缺省 feishu，向后兼容）；飞书响应 `{access_token, expires_at, scopes}`，NSDP 响应 `{token, updated_at}`。
@@ -139,7 +141,7 @@
 
 ## 7. 版本
 
-API v1（v1.1 见 §8；v1.2 变更：§2.1 discovery 变体、§2.3 `/authorize/status`、§4.1 采纳语义与 user_info 摘要落存；v1.3 变更：§2.4 `GET /users/{open_id}/profile`、§4.1 第 7 步档案持久化、§5 profiles 目录）。不兼容变更递增版本号，并同步 auth/advisor 两侧实现、测试与 `integrations/` 用例。
+API v1（v1.1 见 §8；v1.2 变更：§2.1 discovery 变体、§2.3 `/authorize/status`、§4.1 采纳语义与 user_info 摘要落存；v1.3 变更：§2.4 `GET /users/{open_id}/profile`、§4.1 第 7 步档案持久化、§5 profiles 目录；v1.4/v1.5 见文首变更记录；**v1.6 变更：§1 scopes 拆分 BASE/请求集合并新增用户版 `vc:meeting.meetingevent:read`，存量凭据不受影响**）。不兼容变更递增版本号，并同步 auth/advisor 两侧实现、测试与 `integrations/` 用例。
 
 ## 8. NSDP token 提交通道（v1.1）
 

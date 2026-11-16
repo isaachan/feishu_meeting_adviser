@@ -1,5 +1,7 @@
 # Advisor 内部 API 契约（bot ↔ advisor）
 
+> **v2.0（2026-11-16，SM-01）**：状态机 v2 落契约——会话 phase `recording→running` 更名并新增 `paused`（语义见 [STATE_MACHINES](STATE_MACHINES.md) v2）；会话按**会议实例唯一**（`meeting_instance_key`），新增单人单占位；订阅新增 `expired`/`subscriber_cancelled`/`owner_revoked`、`requested` 可撤回、`owner_revoked` 后可重申；新增 §9.3/§9.4 supervisor（小C）名单配置面；§1.1 新增错误码；§8.3 GUI 面新增 `paused` 展示。不兼容变更（phase 更名、订阅语义）， advisor/bot/admin-site/macos-gui 同仓同步切换（§10）。
+>
 > **v1.6（2026-11-14）**：`POST /sessions` 入会前检查组织者飞书 OAuth、NSDP token、Jira PAT；缺失时一次返回所有缺失项及链接，bot 转发组织者，完成后重发入会。仅入会设此门，NSDP/Jira 在会中查询失败不暂停其他判断；不在建会时预取数据。飞书 token 可复用 GUI 授权；NSDP/Jira 在入会时仅检查是否已提交，使用时才验证。凭据服务不可用则拒绝入会。以下早期版本中相反的入会规则以本条为准。
 >
 > **v1.5（2026-11-14）**：不在建会时预取 NSDP。gateway 的受控查询工具报告授权缺失或失效时，经 outbox 通知组织者；会议其余判断继续。`nsdp_hold` 为兼容保留字段，正常运行会清除旧 hold。
@@ -26,8 +28,16 @@
 | `auth_unavailable` | 飞书/凭据服务不可达（fail-closed） | 提示稍后重试 |
 | `nsdp_unavailable` | NSDP/noam 不可达（**v1.2a 起入会不再触发**：降级建会，见 §1.1；码位保留供后续使用） | 提示"NSDP 服务暂时不可用，稍后再试" |
 | `session_ended` / `session_draining` | 会话已结束/排空中，操作被拒 | 告知原因 |
-| `not_owner` | 操作者不是该会话/订阅的 owner | 回答"只有组织者可以…" |
-| `invalid_state` | 状态机非法迁移（含订阅已 revoked 再申请等） | 按 §6.6 对应话术回复 |
+| `session_paused` | 会话 paused（owner 离会）暂停辅助中；仅 ingest 面使用（CONTRACT_RECORDER_STREAM v1.1），API 面以 `phase` 字段表达 | 告知原因（暂停中，owner 回会后恢复） |
+| `not_owner` | 操作者不是该会话/订阅的 owner | 回答"只有会话 owner 可以…" |
+| `meeting_ambiguous`（v2） | 同会议号在时间窗内命中多个候选场次，无法消歧 | 请用户稍后在目标场次时间窗内重试 |
+| `session_claimed`（v2） | 该实例已有**他人**的非 ended 会话（先到先得，归属不可转移） | 告知"该会议已由他人启动会参谋" |
+| `instance_ended`（v2） | 该实例已有会话且已 ended/draining（每实例一生一个 session，不可复建） | 告知"该场会议的辅助已结束，不可重新开始" |
+| `claim_conflict`（v2） | 申请人在其他非 ended 会话已有归属（owner 或订阅，requested 也算占位）；或 owner 申请订阅自己的会话 | 告知"你已归属另一场未结束的会议，先结束/退出后再试" |
+| `not_supervisor`（v2） | 既非该日历事件组织者，也不在 supervisor（小C）名单 | 告知"仅组织者或管理员授权的参会者可启动" |
+| `not_invited`（v2） | 名单内小C 但不在该场日历邀请名单（也非组织者） | 告知原因 |
+| `identity_unresolved`（v2） | supervisor 名单配置时身份无法唯一解析（§9.4） | 面向 admin 显示，不转发用户 |
+| `invalid_state` | 状态机非法迁移（含对 `expired` 行审批、终态订阅行 decide 等） | 按 §6.6 对应话术回复 |
 | `internal` | 服务端内部错误 | 提示稍后重试 |
 
 **NSDP 门（v1.1）**：组织者面全部指令（入会/会议列表/状态/结束会议/审批/组织者撤销）在执行前要求该 open_id 已有 NSDP token；无/失效 → 409 `authorization_required`（NSDP 变体），bot 每次都回新提交链接（被动持续提醒）。订阅面（小B 的申请/取消）**不经过**该门。会话进行中 token 失效：监督器置 `nsdp_hold=1`（挂起该会话全部模型决策），经 outbox 向小A 周期性 DM 新提交链接（默认 5 分钟一条）；重新提交成功后自动恢复。NSDP 数据由 advisor 侧取（noam 子进程，token 仅存在于子进程环境），以 `kind:"nsdp"` 材料文档进入模型上下文。**v1.2a（2026-11-13，T7）**：NSDP 取数不可达（超时/后端故障）**不再拒绝入会**——降级为无 NSDP 材料建会，监督器首个维护周期起自动补取（成功即入材料，401 即挂起并提醒）；token 隐式验活由建会时点移至该首次取数。取数侧对同一 token 短 TTL 缓存（默认 10 分钟），避免连续建会重复跑全量 `nsdp info`。
@@ -45,12 +55,14 @@
 
 ```json
 {"session_id": "s-3f9c", "meeting_no": "123456789", "title": "周会",
- "phase": "recording", "started_at": "2026-11-10T14:00:00+08:00",
- "recorder_command_args": {"session": "s-3f9c", "event": "cal_x/evt_y",
-   "url": "ws://server:8400/ingest", "token": "st-xxx", "mic": false}}
+  "phase": "running", "meeting_instance_key": "123456789|cal_x/evt_y|1762801200",
+  "started_at": "2026-11-10T14:00:00+08:00",
+  "recorder_command_args": {"session": "s-3f9c", "event": "cal_x/evt_y",
+    "url": "ws://server:8400/ingest", "token": "st-xxx", "mic": false}}
 ```
 
-- 语义：校验（会议存在 + 小A 是组织者 + 时间窗）→ 建会（材料 = 日历事件描述，空则无）→ 铸流令牌 → 监督器自动 consume。命令文本由 bot 按模板渲染（附录见 CONTRACT_RECORDER_STREAM）；**响应中不得含任何用户凭据**。
+- 语义（v2 准入链，顺序固定）：凭据门（同 v1.6）→ 解析目标 occurrence（owner 日历 ±12h 窗口内按 `meeting_no` 匹配；0 个 → `meeting_not_found`，>1 个 → `meeting_ambiguous`）→ 时间窗（±30min，`outside_window`）→ 准入（组织者身份命中走 A 路径；否则须在 supervisor 名单且命中该场邀请名单或本人组织者，见 §9.3；失败 → `not_organizer` / `not_supervisor` / `not_invited`）→ 实例与占位唯一（STATE_MACHINES §0：非 ended 同事件绑定会话 → 本人幂等 `existing:true` / 他人 `session_claimed`；精确 instance key 已有 ended/draining 会话 → `instance_ended`；本人已有其他非 ended 归属 → `claim_conflict`）→ 建会（phase=`running`，写 controller claim，材料 = 日历事件描述）→ 铸流令牌 → 监督器启动。命令文本由 bot 按模板渲染（附录见 CONTRACT_RECORDER_STREAM）；**响应中不得含任何用户凭据**。
+- v2 提醒义务（bot 话术层，SM-12 落实）：建会成功回复须提示「建会后 900 秒内需开始采集，超时本场失效且不可重建」。
 - 凭据缺失/失效（409）：
 
 ```json
@@ -58,9 +70,9 @@
  "authorize_url": "https://<域名>/oauth/start?state=…"}
 ```
 
-  小A 完成授权后重发入会指令（state 已绑定意图，auth 侧可提示续接）。
-- 四种拒绝：`authorization_required` / `meeting_not_found` / `not_organizer` / `outside_window`（S1 验收口径逐条对应）。
-- 幂等与并发：同一 `(owner, meeting_no)` 已有 recording 会话 → 返回既有会话（不重建、令牌不换）；同 key 重放 → 原响应。
+  小A/小C 完成授权后重发入会指令（state 已绑定意图，auth 侧可提示续接）。
+- 拒绝码全集：`authorization_required` / `meeting_not_found` / `meeting_ambiguous` / `not_organizer` / `not_supervisor` / `not_invited` / `outside_window` / `session_claimed` / `instance_ended` / `claim_conflict`。
+- 幂等与并发：同一 owner 对同一实例的非 ended 会话重试 → 返回既有会话（`existing:true`，不重建、令牌不换）；并发双人抢占同一实例 → 事务级唯一约束，后到者 `session_claimed`；同 key 重放 → 原响应。
 
 ## 3. 会话查询与结束
 
@@ -80,10 +92,10 @@
 
 ```json
 {"sessions": [{"session_id": "s-3f9c", "meeting_no": "123456789", "title": "周会",
-  "phase": "recording", "started_at": "…", "idle_timeout_s": 900}]}
+  "phase": "running", "started_at": "…", "idle_timeout_s": 900}]}
 ```
 
-只返回 recording/draining 会话（按 started_at 倒序；"最近一场 recording" = 首元素）。
+只返回 running/paused/draining 会话（v2：全部非 ended，按 started_at 倒序；"最近一场未结束会话" = 首元素）。
 
 ### 3.2 `GET /sessions/{id}/status?owner_open_id=ou_A`
 
@@ -102,7 +114,7 @@
 {"owner_open_id": "ou_A"}
 ```
 
-成功（200）：`{"session_id": "s-3f9c", "phase": "draining"}`。会话进入 draining：在途输入/模型任务/待发回答全部落定后自动置 ended（draining 排空语义沿用旧 advisor）。已 ended 再调 → 幂等返回 `{"phase": "ended"}`。非 owner → `not_owner`。
+成功（200）：`{"session_id": "s-3f9c", "phase": "draining"}`。会话（running 或 paused）进入 draining：在途输入/模型任务/待发回答在**绝对排空截止**（STATE_MACHINES §1.3）内落定后自动置 ended。已 ended 再调 → 幂等返回 `{"phase": "ended"}`。非 owner → `not_owner`（日历组织者不是 owner 时同样 `not_owner`）。
 
 ## 4. 订阅申请（S3.1–S3.2）
 
@@ -116,11 +128,13 @@
 
 ```json
 {"request_no": 7, "session_id": "s-3f9c", "state": "requested",
- "owner_open_id": "ou_A", "title": "周会"}
+  "approval_deadline_at": 1762801800.0,
+  "owner_open_id": "ou_A", "title": "周会"}
 ```
 
-- 会议号解析到**任何 owner** 名下 phase=recording 的会话才受理；未命中 / draining / ended → `not_found`（bot 回"未找到该会议或会议已结束"）。
-- `request_no`（即 #rN）**全局唯一**、单调递增，advisor 分配。
+- 会议号解析到唯一实例的 `running`/`paused` 会话才受理（v2：**paused 也受理**，已定 2026-11-16）；未命中 / draining / ended → `not_found`（bot 回"未找到该会议或会议已结束"）。
+- 申请人在任何**非 ended** 会话已有归属（owner/订阅，`requested` 也算占位）→ `claim_conflict`（STATE_MACHINES §3.1）。
+- `request_no`（即 #rN）**全局唯一**、单调递增，advisor 分配；`approval_deadline_at`（Unix 秒）为持久化审批截止，到期未决自动 `expired`。
 - 审批请求的 IM 投递由 bot 直接完成（不走 outbox，不承诺可靠投递——bot 离线期间申请可丢，小B 重发即可）。
 
 ## 5. 审批与撤销（S3.3–S3.5）
@@ -133,20 +147,23 @@
 
 成功（200）：`{"request_no": 7, "state": "approved" | "denied"}`。
 
-- 仅 `requested` 可 decide；重复 decide 幂等返回当前状态；非该会话 owner → `not_owner`；请求已撤销 → `invalid_state`。
+- 仅 `requested` 可 decide；重复 decide（含各终态行）幂等返回当前状态；**对 `expired` 行 decide → `invalid_state`**（逾期审批不得复活，重申请走新行）；非该会话 owner → `not_owner`。
 - `approve` 生效口径：**从下一条决策起**该收件人进入 fan-out 集合（仅前向，不回溯）。
 
 ### 5.2 `POST /subscriptions/{request_no}/revoke`
 
-```json
-{"owner_open_id": "ou_A"}
-```
+调用者必须是**会话 owner 或该订阅的 subscriber 本人**（二选一字段：`owner_open_id` / `subscriber_open_id`）。v2 按调用者与当前状态落不同终态：
 
-成功（200）：`{"request_no": 7, "state": "revoked"}`。
+| 调用者 | 当前状态 | 结果 | 语义 |
+|---|---|---|---|
+| subscriber 本人 | `requested` | `subscriber_cancelled` | **撤回申请**（v2 新增）：释放占位，可再申请新行 |
+| subscriber 本人 | `approved` | `subscriber_cancelled` | 退订：取消该收件人 pending IM，释放占位 |
+| owner | `approved` | `owner_revoked` | 撤销：即时止血（取消 pending IM），释放占位；**可重新申请**（新行重审） |
+| owner | `requested` | `invalid_state`（409） | owner 对未审批行应使用 decide |
+| 其他组合 | 非 `requested`/`approved` | `invalid_state`（409） | 终态行幂等回显见下 |
 
-- 调用者必须是**会话 owner 或该订阅的 subscriber 本人**（二选一字段：`owner_open_id` / `subscriber_open_id`；2026-11-11 T1 修订：参会者自退订）。
-- 仅 `approved` 可撤销（`requested`/`denied` 下撤销 → `invalid_state`）；**revoked 为终态**。
-- 撤销即刻止血：该收件人 pending 的 IM 行置 cancelled（沿用旧 `reconcile_destinations` 语义），后续决策不再 fan-out。
+- 终态行重复 revoke → `200 {request_no, state: <当前终态>}`（幂等回显，含旧 `revoked` 历史行）。
+- 撤销/退订即刻止血：该收件人 pending 的 IM 行置 `cancelled`，后续决策不再 fan-out；已 `sent`/`uncertain` 不追回。
 
 ## 6. 与 REQUIREMENTS S3 边界的逐条对应
 
@@ -158,8 +175,7 @@
 | 审批请求不承诺可靠投递 | §4.1 bot 直发，不走 outbox |
 | 已批准分发走 outbox，可靠 | §7 pending/result 状态机 |
 | approved 再申请幂等 | §6.1 |
-| denied 再申请走新审批 | §6.2 |
-| revoked 终态，再申请拒绝 | §6.3 |
+| denied / expired / subscriber_cancelled / owner_revoked 再申请 | §6.2/§6.3 一律新行新 request_no、重新审批 |
 | ended 拒新订阅 | §4.1 draining/ended → not_found |
 
 ### 6.1 approved 再申请（幂等提示，不新建）
@@ -169,20 +185,25 @@
 → 200 {"request_no": 7, "state": "approved", "existing": true}
 ```
 
-### 6.2 denied 再申请（新建审批）
+### 6.2 denied / expired / subscriber_cancelled 再申请（新建审批）
 
 ```json
-→ 201 {"request_no": 12, "state": "requested", "previous": {"request_no": 7, "state": "denied"}}
+→ 201 {"request_no": 12, "state": "requested",
+        "previous": {"request_no": 7, "state": "denied"}}
 ```
 
-### 6.3 revoked 再申请（终态拒绝）
+### 6.3 owner_revoked 再申请（v2：允许，推翻 v1 终态拒绝）
 
 ```json
-→ 409 {"error": {"code": "invalid_state",
-         "message": "subscription #7 revoked by organizer; terminal state"}}
+→ 201 {"request_no": 13, "state": "requested",
+        "previous": {"request_no": 7, "state": "owner_revoked"}}
 ```
 
-bot 回小B："该订阅已被组织者撤销"。
+v1 中「revoked 终态再申请 → 409」作废（已定 2026-11-16）；旧 `revoked` 历史行同样可再申请。bot 不再使用"该订阅已被组织者撤销（不可再申请）"话术。
+
+### 6.4 审批超时（v2 新增）
+
+`requested` 行到期未决 → 系统 `expired` 并释放占位；bot 对 subscriber 的「状态」查询显示过期状态；逾期的 decide 返回 `invalid_state`，subscriber 重新申请即可。
 
 ## 7. outbox 拉取与回写（通知面）
 
@@ -264,7 +285,7 @@ bot 回小B："该订阅已被组织者撤销"。
      "url": "ws://server:8400/ingest", "token": "st-xxx", "mic": false}}]}
 ```
 
-- 会话集：该 open_id 名下 `recording`（含完整 `recorder_command_args`，可启动采集）+ `draining`（`recorder_command_args` 为 `null`，仅展示）；按 `started_at` 倒序。args 组装复用建会逻辑（§2），白名单与 CONTRACT_RECORDER_STREAM 附录 A 一致。
+- 会话集（v2）：该 open_id 名下全部**非 ended** 会话，按 `started_at` 倒序——`running`（含完整 `recorder_command_args`，可启动采集）；`paused`（`recorder_command_args` 为 `null`，GUI 展示"owner 离会暂停中"，**不自动重开**，恢复 running 后用户手动重新开始采集）；`draining`（`null`，仅展示）。args 组装复用建会逻辑（§2），白名单与 CONTRACT_RECORDER_STREAM 附录 A 一致。
 - 鉴权：device_token 未知/不匹配 → 401 `bad_token`（GUI 引导重新扫码）。
 - 红线：**响应不得含任何用户 OAuth 凭据**；流令牌 `st-xxx` 本就要下发 laptop 内存（与 bot 渲染命令下发同级受信面，v1 接受，见 §8.5）。
 
@@ -304,6 +325,29 @@ bot 回小B："该订阅已被组织者撤销"。
 - 幂等口径：draining 再调 → 200 `{"phase": "draining"}`；ended 再调 → 200 `{"phase": "ended"}`；不存在 → 404 `not_found`。
 - 审计：advisor 记 `admin ending` 日志行（区别于 owner 面的 `session ending`）。
 
+### 9.3 `GET /admin/supervisors` —— supervisor（小C）名单（v2 新增）
+
+```json
+{"supervisors": [{"login_name": "kai.han", "open_id": "ou_C",
+  "enabled": true, "updated_at": 1762800000.0, "updated_by": "admin"}]}
+```
+
+- 返回全部名单行（含禁用与未解析项：`open_id` 为 `null` 即未解析/多解，不参与准入）。
+- 名单是**会话 owner 权限面**：admin-site 维持 localhost-only/受信网络边界（REQUIREMENTS 非目标：公网匿名访问）；部署面扩大前必须先加认证。
+
+### 9.4 `PUT /admin/supervisors` —— 配置/启停（v2 新增）
+
+```json
+{"login_name": "kai.han", "enabled": true}
+```
+
+→ 200 `{"login_name": "kai.han", "open_id": "ou_C", "enabled": true, "updated_at": …}`。
+
+- `login_name` 形如 `kai.han`：advisor 以 `<login_name>@<配置的默认邮箱域>` 在身份目录（`users` 表 + auth profiles）中解析唯一 `open_id`；也可直接提交完整邮箱或 `ou_` 开头的 open_id。
+- 解析失败/多解 → 409 `identity_unresolved`（行保留 `open_id=null`、`enabled=false`；该用户完成一次 GUI 登录/飞书授权进入目录后可重新启用）。**名字缺失/多解一律拒绝启用，不得以展示名作权限主键。**
+- 启停/删除幂等；写审计（`updated_by` + 时间戳持久化）。名单移除对已启动 session 的影响：**不追溯**——已建会话不因名单变更终止/迁移（准入只在建会时校验）。
+- bot/GUI 不可经任何端点声明 supervisor 身份（本面仅 §9 admin 入口，localhost 边界内）。
+
 ## 10. 版本
 
-API v1（响应体保留 `"api": 1` 字段位，首版不强制）；v1.1 NSDP 门；v1.2 GUI 面（§8）；v1.3 运维面（§9）；v1.4 §9.1 身份目录与订阅列表（依赖 CONTRACT_AUTH v1.3）。不兼容变更递增版本号并同步 bot/advisor/macos-gui/admin-site 侧实现、测试与 `integrations/` 用例。
+API v1（响应体保留 `"api": 1` 字段位，首版不强制）；v1.1 NSDP 门；v1.2 GUI 面（§8）；v1.3 运维面（§9）；v1.4 §9.1 身份目录与订阅列表（依赖 CONTRACT_AUTH v1.3）；**v2.0（2026-11-16）状态机 v2**：phase 更名/新增 `paused`、实例唯一建会、单人单占位、订阅新状态与重申/撤回、§9.3/§9.4 supervisor 名单面、GUI §8.3 paused 展示。不兼容变更递增版本号并同步 bot/advisor/macos-gui/admin-site 侧实现、测试与 `integrations/` 用例；v2.0 为同仓整体切换（单机 `local-up` 一次拉起全部节点），无 v1/v2 双轨窗口。

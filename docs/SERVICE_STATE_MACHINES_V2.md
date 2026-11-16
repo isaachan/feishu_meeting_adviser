@@ -1,6 +1,8 @@
 # 服务状态机 · 业务讨论后草案 v2
 
 > 2026-11-16。基于新增小C、单会议/单人归属和可重复订阅的业务输入及后续澄清。**设计稿，尚未改现行冻结契约或代码。**配套领域类图见 [DOMAIN_MODEL_V2](DOMAIN_MODEL_V2.md)。`running` 只表示**会参谋已就绪、允许采集**，不表示飞书会议已开始、GUI 正在录音或 STT/模型服务健康。
+>
+> **2026-11-16 更新：目标规则已冻结至 [STATE_MACHINES](STATE_MACHINES.md) v2 与 CONTRACT_ADVISOR_API v2.0 / CONTRACT_RECORDER_STREAM v1.1 / CONTRACT_AUTH v1.6**；本文遗留待定项已按 [TODO_STATEM_MACHINES](../TODO_STATEM_MACHINES.md) SM-00 决策收口：paused 在途任务**立即作废**；paused **接收**新订阅申请；owner 回会后 GUI **不自动**重开采集；owner 撤销后**允许**重新申请（下文「暂按旧规则禁止」口径作废）；`requested` 本人**可撤回**；提前建会 900 秒报废**接受**。本文与冻结版冲突处，以冻结版为准。
 
 ## 0. 开始建模前：遗漏、歧义与本稿处理
 
