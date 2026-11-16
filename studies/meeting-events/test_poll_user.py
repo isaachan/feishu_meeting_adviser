@@ -1,8 +1,9 @@
 import contextlib
 import io
 import unittest
+from unittest.mock import patch
 
-from poll_user import parse_token_response
+from poll_user import active_ids, parse_token_response
 
 
 class ParseTokenResponseTest(unittest.TestCase):
@@ -20,6 +21,17 @@ class ParseTokenResponseTest(unittest.TestCase):
             token = parse_token_response({'access_token': 'u-token', 'scope': 'other'})
         self.assertEqual(token, 'u-token')
         self.assertIn('vc:meeting.meetingevent:read', stderr.getvalue())
+
+
+class ActiveIdsTest(unittest.TestCase):
+    def test_selects_matching_meeting_only(self):
+        data = {'meetings': [
+            {'meeting_no': '111111111', 'meeting_id': 'm1'},
+            {'meeting_no': '828952943', 'meeting_id': 'm2'},
+            {'meeting_no': '828952943'},
+        ]}
+        with patch('poll_user.fetch', return_value=data):
+            self.assertEqual(active_ids('828952943', 'token'), ['m2'])
 
 
 if __name__ == '__main__':

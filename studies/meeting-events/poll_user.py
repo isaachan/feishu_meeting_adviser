@@ -12,7 +12,7 @@ import sys
 import time
 from urllib import error, parse, request
 
-from poll import API, details, lookup, observations
+from poll import API, details, fetch, lookup, observations
 
 
 AUTHORIZE = 'https://accounts.feishu.cn/open-apis/authen/v1/authorize'
@@ -114,6 +114,16 @@ def authorize(app_id, app_secret, port):
     return exchange(outcome['code'], verifier, redirect, app_id, app_secret)
 
 
+def active_ids(meeting_no, token):
+    """Meetings the authorized user is currently in (needs no extra scope)."""
+    data = fetch(API + '/vc/v1/bots/user_active_meeting',
+                 operation='查询用户正在参加的会议', token=token)
+    meetings = data.get('meetings') if isinstance(data, dict) else None
+    return [str(m['meeting_id']) for m in meetings or []
+            if isinstance(m, dict) and str(m.get('meeting_no')) == meeting_no
+            and m.get('meeting_id')]
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='按会议号轮询普通飞书会议（用户身份 vc:meeting.meetingevent:read）')
@@ -133,12 +143,36 @@ def main():
 
     token = os.getenv('FEISHU_USER_ACCESS_TOKEN') or authorize(app_id, app_secret, args.port)
     known = {}
+    resolved = []
+    fallback = False
     print(f'轮询会议号 {args.meeting_no}（用户身份）；输出是状态变化，不是飞书推送事件。',
           file=sys.stderr, flush=True)
     try:
         while True:
             try:
-                for mid in lookup(args.meeting_no, token):
+                found = lookup(args.meeting_no, token)
+                fallback = False
+                if found:
+                    resolved = found
+            except RuntimeError as exc:
+                text = str(exc)
+                if 'code=99991672' in text or 'code=99991679' in text:
+                    if not fallback:
+                        fallback = True
+                        print('按会议号查询被拒（scope 不足），改用「用户正在参加的会议」接口；'
+                              '需授权用户本人保持在会中。', file=sys.stderr, flush=True)
+                    try:
+                        found = active_ids(args.meeting_no, token)
+                        if found:
+                            resolved = found
+                    except RuntimeError as active_exc:
+                        print(active_exc, file=sys.stderr, flush=True)
+                else:
+                    print(exc, file=sys.stderr, flush=True)
+                    if 'HTTP 401' in text:
+                        print('用户 token 可能已过期（约 2 小时）；重新运行以重新授权。', file=sys.stderr)
+            try:
+                for mid in resolved:
                     meeting = details(mid, token)
                     if str(meeting.get('meeting_no')) != args.meeting_no:
                         continue
