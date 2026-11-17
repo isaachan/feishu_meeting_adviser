@@ -103,7 +103,7 @@
 
 | 项 | 配置名 | 默认（工程初始值） | 到期动作 |
 |---|---|---|---|
-| 无音频（业务定值） | `idle_timeout_s` | 900 | S4 → draining |
+| 无音频（业务定值） | `idle_timeout_s` | 900（可经 CONTRACT_ADVISOR_API §9.5 运行时覆盖，**仅新会话生效**，范围 60–86400） | S4 → draining |
 | 排空总预算 | `drain_deadline_s` | 600 | S6 强制 ended |
 | 审批等待 | `approval_ttl_s` | 1800 | T4 expired + 释放占位 |
 | 回答有效期 | `reply_validity_s` | 3600 | 未发送 cancelled；发送中依回写/预算转 uncertain |
@@ -140,6 +140,8 @@
 8. v7→v8：`sessions.drain_diagnostics TEXT`（S6 诊断记录）、`outbox.delivery_deadline_at REAL`（回答有效期，存量 pending/sending 行回填 `created_ns/1e9+3600`）。两段式发送：bot 先 `POST /outbox/{uuid}/result {status:"sending"}` 认领再投递（CONTRACT_ADVISOR_API §7.2），发送中进程崩溃由 advisor 重启 `recover()` 或预算到期转 `uncertain`，绝不盲发重试。
 
 9. v8→v9：`users.user_id TEXT`（CONTRACT_AUTH v1.7 飞书登录名，supervisor grant §9.4 的 bare login 解析键）。存量行 `user_id` 为 NULL，由身份目录惰性刷新（auth profiles 补档后回填），无需数据迁移。
+
+10. v9→v10：新表 `app_config(key, value, updated_ns, updated_by)`（CONTRACT_ADVISOR_API §9.5 运行时配置）。无行回填——缺省键回落进程默认（`AdviserSettings`），存量会话行内 `idle_timeout_s` 不变。
 
 ## 7. 与 v1 的差异与兼容窗口
 

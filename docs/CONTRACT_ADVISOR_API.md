@@ -348,6 +348,28 @@ v1 中「revoked 终态再申请 → 409」作废（已定 2026-11-16）；旧 `
 - 启停/删除幂等；写审计（`updated_by` + 时间戳持久化）。名单移除对已启动 session 的影响：**不追溯**——已建会话不因名单变更终止/迁移（准入只在建会时校验）。
 - bot/GUI 不可经任何端点声明 supervisor 身份（本面仅 §9 admin 入口，localhost 边界内）。
 
+### 9.5 `GET/POST /admin/config` —— 运行时配置（v2.2 新增）
+
+`GET` →
+
+```json
+{"idle_timeout_s": 900, "default_idle_timeout_s": 900,
+ "updated_at": null, "updated_by": null}
+```
+
+`POST`（须携带 `X-Idempotency-Key`）：
+
+```json
+{"idle_timeout_s": 1200}
+```
+
+→ 200 `{"idle_timeout_s": 1200, "default_idle_timeout_s": 900, "updated_at": …, "updated_by": "admin"}`。
+
+- 目前仅 `idle_timeout_s`（无音频排空阈值，STATE_MACHINES §5）一项。值为 **60–86400 的整数秒**；非法值 → 400 `bad_message`。
+- 值持久化于 advisor（`app_config` 表，schema v10），重启保留；未写过该键时 `idle_timeout_s` 回显进程默认（`default_idle_timeout_s` 恒为进程默认，用于前端「恢复默认」提示），`updated_at/by` 为 `null`。
+- 生效范围与 §9.4 同口径**不追溯**：仅对此后**新建**的会话生效（建会时把当时值持久化进会话行）；已建 running/paused/draining 会话保持建会时的值。bot 建会提醒话术中的「900 秒」为默认业务口径文案，修改本配置不改话术（已知差异）。
+- 与 §9 同端口、同无认证、同 localhost/受信网络边界；仅 admin-site 使用。
+
 ## 10. 版本
 
-API v1（响应体保留 `"api": 1` 字段位，首版不强制）；v1.1 NSDP 门；v1.2 GUI 面（§8）；v1.3 运维面（§9）；v1.4 §9.1 身份目录与订阅列表（依赖 CONTRACT_AUTH v1.3）；**v2.0（2026-11-16）状态机 v2**：phase 更名/新增 `paused`、实例唯一建会、单人单占位、订阅新状态与重申/撤回、§9.3/§9.4 supervisor 名单面、GUI §8.3 paused 展示；**v2.1（2026-11-17）§9.4 bare login 优先按飞书 `user_id`（CONTRACT_AUTH v1.7）解析，email 兜底保留**（additive）。不兼容变更递增版本号并同步 bot/advisor/macos-gui/admin-site 侧实现、测试与 `integrations/` 用例；v2.0 为同仓整体切换（单机 `local-up` 一次拉起全部节点），无 v1/v2 双轨窗口。
+API v1（响应体保留 `"api": 1` 字段位，首版不强制）；v1.1 NSDP 门；v1.2 GUI 面（§8）；v1.3 运维面（§9）；v1.4 §9.1 身份目录与订阅列表（依赖 CONTRACT_AUTH v1.3）；**v2.0（2026-11-16）状态机 v2**：phase 更名/新增 `paused`、实例唯一建会、单人单占位、订阅新状态与重申/撤回、§9.3/§9.4 supervisor 名单面、GUI §8.3 paused 展示；v2.1（2026-11-17）§9.4 bare login 优先按飞书 `user_id`（CONTRACT_AUTH v1.7）解析，email 兜底保留；**v2.2（2026-11-17）§9.5 运行时配置面：`idle_timeout_s` 运维可配（仅新会话生效）**（additive）。不兼容变更递增版本号并同步 bot/advisor/macos-gui/admin-site 侧实现、测试与 `integrations/` 用例；v2.0 为同仓整体切换（单机 `local-up` 一次拉起全部节点），无 v1/v2 双轨窗口。
