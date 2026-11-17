@@ -12,7 +12,8 @@ import sys
 import time
 from urllib import parse
 
-from poll import API, fetch, get_token, lookup
+from poll import API, fetch
+from poll_user import active_ids, authorize
 
 
 PHASES = (('muted_1', '主持人静音'), ('unmuted', '主持人开麦'),
@@ -33,12 +34,13 @@ def details(meeting_id, token):
 
 def resolve_active_meeting(meeting_no, token):
     matches = []
-    for meeting_id in lookup(meeting_no, token):
+    for meeting_id in dict.fromkeys(active_ids(meeting_no, token)):
         meeting = details(meeting_id, token)
         if str(meeting.get('meeting_no')) == meeting_no and meeting.get('status') == 2:
             matches.append(meeting_id)
     if len(matches) != 1:
-        raise RuntimeError(f'会议号 {meeting_no} 对应 {len(matches)} 场进行中的会议；需恰好一场')
+        raise RuntimeError(f'授权用户正在参加的会议中，会议号 {meeting_no} 对应 {len(matches)} 场进行中的会议；'
+                           '需恰好一场，且授权用户本人须在会中')
     return matches[0]
 
 
@@ -87,9 +89,10 @@ def assess(phases):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='对照主持人麦克风切换与会议 use_audio 字段')
+    parser = argparse.ArgumentParser(description='用用户 OAuth 对照主持人麦克风切换与会议 use_audio 字段')
     parser.add_argument('meeting_no', help='进行中的 9 位会议号')
     parser.add_argument('--meeting-id', help='已知会议 ID 时跳过会议号查询')
+    parser.add_argument('--port', type=int, default=8767, help='本机 OAuth 回调端口，默认 8767')
     parser.add_argument('--samples', type=int, default=2, help='每阶段采样次数，默认 2')
     parser.add_argument('--interval', type=float, default=2.0, help='阶段内采样间隔秒数，默认 2')
     args = parser.parse_args()
@@ -97,18 +100,29 @@ def main():
         parser.error('meeting_no 须为 9 位数字')
     if args.samples < 1 or args.interval < 2:
         parser.error('--samples 须 >= 1，--interval 须 >= 2 秒')
+    if not 1024 <= args.port <= 65535:
+        parser.error('--port 须在 1024..65535')
     app_id, app_secret = os.getenv('BOT_APP_ID'), os.getenv('BOT_APP_SECRET')
-    if not app_id or not app_secret:
-        parser.error('请设置 BOT_APP_ID 和 BOT_APP_SECRET')
+    token = os.getenv('FEISHU_USER_ACCESS_TOKEN')
+    if not token and (not app_id or not app_secret):
+        parser.error('请设置 BOT_APP_ID 和 BOT_APP_SECRET 以进行 OAuth，或提供 FEISHU_USER_ACCESS_TOKEN')
 
     try:
-        token, _ = get_token(app_id, app_secret)
+        token = token or authorize(app_id, app_secret, args.port)
         meeting_id = args.meeting_id or resolve_active_meeting(args.meeting_no, token)
-        if args.meeting_id:
-            meeting = details(meeting_id, token)
-            if (str(meeting.get('meeting_no')) != args.meeting_no or
-                    meeting.get('status') != 2):
-                raise RuntimeError('指定会议 ID 与会议号不匹配，或会议未在进行中')
+        meeting = details(meeting_id, token)
+        if (str(meeting.get('meeting_no')) != args.meeting_no or
+                meeting.get('status') != 2):
+            raise RuntimeError('指定会议 ID 与会议号不匹配，或会议未在进行中')
+        preflight = observation(meeting)
+        print(json.dumps({'observed_at': datetime.now(timezone.utc).isoformat(),
+                          'phase': 'preflight', 'sample': 0,
+                          'meeting_no': args.meeting_no, 'meeting_id': meeting_id,
+                          **preflight}, ensure_ascii=False), flush=True)
+        if not preflight['use_audio_present']:
+            print('结论：用户身份的会议详情响应未返回 meeting.ability.use_audio；'
+                  '该字段无法用于此身份下的主持人麦克风判断。', file=sys.stderr, flush=True)
+            return 0
         print(f'已定位进行中的会议 {meeting_id}。请由同一位主持人操作麦克风。',
               file=sys.stderr, flush=True)
         phases = []
