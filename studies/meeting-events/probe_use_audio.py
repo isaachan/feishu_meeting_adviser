@@ -10,34 +10,59 @@ import json
 import os
 import sys
 import time
-from urllib import parse
+from urllib import error, parse, request
 
-from poll import API, fetch
+from poll import API, diagnostic
 from poll_user import active_ids, authorize
 
 
 PHASES = (('muted_1', '主持人静音'), ('unmuted', '主持人开麦'),
           ('muted_2', '主持人再次静音'))
-AUDIO_KEYS = ('audio', 'mic', 'mute', 'speak', 'host', 'owner')
+
+def fetch_full(url, token):
+    """Keep the complete JSON envelope returned by Feishu."""
+    req = request.Request(url, headers={
+        'Accept': 'application/json', 'Authorization': 'Bearer ' + token})
+    try:
+        with request.urlopen(req, timeout=15) as response:
+            result = json.load(response)
+            status = response.status
+    except error.HTTPError as exc:
+        try:
+            result = json.load(exc)
+        except (ValueError, OSError):
+            result = None
+        raise diagnostic('获取会议详情', exc.code, result) from None
+    except (error.URLError, OSError, ValueError) as exc:
+        raise RuntimeError(f'获取会议详情请求失败：{type(exc).__name__}') from None
+    if not isinstance(result, dict) or result.get('code') != 0:
+        raise diagnostic('获取会议详情', status, result)
+    return result
 
 
 def details(meeting_id, token):
     query = parse.urlencode({'with_meeting_ability': 'true',
                              'with_participants': 'true'})
-    data = fetch(API + '/vc/v1/meetings/' + parse.quote(meeting_id, safe='') + '?' + query,
-                 operation='获取会议详情（含会议能力）', token=token)
-    meeting = data.get('meeting')
+    result = fetch_full(API + '/vc/v1/meetings/' + parse.quote(meeting_id, safe='') + '?' + query,
+                        token)
+    data = result.get('data')
+    meeting = data.get('meeting') if isinstance(data, dict) else None
     if not isinstance(meeting, dict):
         raise RuntimeError('会议详情缺少 meeting')
-    return meeting
+    return result
+
+
+def meeting_from(result):
+    return result['data']['meeting']
 
 
 def resolve_active_meeting(meeting_no, token):
     matches = []
     for meeting_id in dict.fromkeys(active_ids(meeting_no, token)):
-        meeting = details(meeting_id, token)
+        result = details(meeting_id, token)
+        meeting = meeting_from(result)
         if str(meeting.get('meeting_no')) == meeting_no and meeting.get('status') == 2:
-            matches.append(meeting_id)
+            matches.append((meeting_id, result))
     if len(matches) != 1:
         raise RuntimeError(f'授权用户正在参加的会议中，会议号 {meeting_no} 对应 {len(matches)} 场进行中的会议；'
                            '需恰好一场，且授权用户本人须在会中')
@@ -46,26 +71,17 @@ def resolve_active_meeting(meeting_no, token):
 
 def observation(meeting):
     ability = meeting.get('ability')
-    participants = meeting.get('participants')
-    people = participants if isinstance(participants, list) else []
-    interesting = lambda key: any(part in key.lower() for part in AUDIO_KEYS)
     return {
         'meeting_status': meeting.get('status'),
-        'ability_present': isinstance(ability, dict),
         'use_audio_present': isinstance(ability, dict) and 'use_audio' in ability,
         'use_audio': ability.get('use_audio') if isinstance(ability, dict) else None,
-        'ability_keys': sorted(ability) if isinstance(ability, dict) else [],
-        'meeting_host_fields': {key: value for key, value in meeting.items()
-                                if interesting(key) and key != 'ability'},
-        'participants': [
-            {'id': person.get('id'), 'status': person.get('status'),
-             'audio_or_host_fields': {key: value for key, value in person.items()
-                                      if interesting(key)}}
-            for person in people if isinstance(person, dict)
-        ],
-        'participant_keys': sorted({key for person in people if isinstance(person, dict)
-                                    for key in person}),
     }
+
+
+def print_response(phase, sample, result):
+    print(json.dumps({'observed_at': datetime.now(timezone.utc).isoformat(),
+                      'phase': phase, 'sample': sample, 'response': result},
+                     ensure_ascii=False), flush=True)
 
 
 def assess(phases):
@@ -93,6 +109,7 @@ def main():
     parser.add_argument('meeting_no', help='进行中的 9 位会议号')
     parser.add_argument('--meeting-id', help='已知会议 ID 时跳过会议号查询')
     parser.add_argument('--port', type=int, default=8767, help='本机 OAuth 回调端口，默认 8767')
+    parser.add_argument('--once', action='store_true', help='只打印一次完整响应，不进入切换实验')
     parser.add_argument('--samples', type=int, default=2, help='每阶段采样次数，默认 2')
     parser.add_argument('--interval', type=float, default=2.0, help='阶段内采样间隔秒数，默认 2')
     args = parser.parse_args()
@@ -109,20 +126,22 @@ def main():
 
     try:
         token = token or authorize(app_id, app_secret, args.port)
-        meeting_id = args.meeting_id or resolve_active_meeting(args.meeting_no, token)
-        meeting = details(meeting_id, token)
+        if args.meeting_id:
+            meeting_id = args.meeting_id
+            result = details(meeting_id, token)
+        else:
+            meeting_id, result = resolve_active_meeting(args.meeting_no, token)
+        meeting = meeting_from(result)
         if (str(meeting.get('meeting_no')) != args.meeting_no or
                 meeting.get('status') != 2):
             raise RuntimeError('指定会议 ID 与会议号不匹配，或会议未在进行中')
         preflight = observation(meeting)
-        print(json.dumps({'observed_at': datetime.now(timezone.utc).isoformat(),
-                          'phase': 'preflight', 'sample': 0,
-                          'meeting_no': args.meeting_no, 'meeting_id': meeting_id,
-                          **preflight}, ensure_ascii=False), flush=True)
-        if not preflight['use_audio_present']:
-            print('结论：用户身份的会议详情响应未返回 meeting.ability.use_audio；'
-                  '该字段无法用于此身份下的主持人麦克风判断。', file=sys.stderr, flush=True)
+        print_response('preflight', 0, result)
+        if args.once:
             return 0
+        if not preflight['use_audio_present']:
+            print('当前响应缺少 meeting.ability.use_audio；继续采集各阶段的完整响应。',
+                  file=sys.stderr, flush=True)
         print(f'已定位进行中的会议 {meeting_id}。请由同一位主持人操作麦克风。',
               file=sys.stderr, flush=True)
         phases = []
@@ -130,13 +149,10 @@ def main():
             input(f'{prompt}后按回车开始采样（Ctrl+C 退出）：')
             rows = []
             for sample in range(1, args.samples + 1):
-                meeting = details(meeting_id, token)
-                row = observation(meeting)
+                result = details(meeting_id, token)
+                row = observation(meeting_from(result))
                 rows.append(row)
-                print(json.dumps({'observed_at': datetime.now(timezone.utc).isoformat(),
-                                  'phase': phase, 'sample': sample,
-                                  'meeting_no': args.meeting_no, 'meeting_id': meeting_id,
-                                  **row}, ensure_ascii=False), flush=True)
+                print_response(phase, sample, result)
                 if sample < args.samples:
                     time.sleep(args.interval)
             phases.append(rows)

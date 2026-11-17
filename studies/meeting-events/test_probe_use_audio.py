@@ -1,43 +1,60 @@
 import contextlib
 import io
+import json
 import unittest
 from unittest.mock import patch
 
-from probe_use_audio import assess, details, main, observation, resolve_active_meeting
+from probe_use_audio import assess, details, fetch_full, main, observation, resolve_active_meeting
 
 
 class UseAudioProbeTest(unittest.TestCase):
     def test_resolve_uses_user_active_meeting(self):
         with patch('probe_use_audio.active_ids', return_value=['m1', 'm1']) as active, \
                 patch('probe_use_audio.details', return_value={
-                    'meeting_no': '123456789', 'status': 2}) as get_details:
-            self.assertEqual(resolve_active_meeting('123456789', 'user-token'), 'm1')
+                    'code': 0, 'data': {'meeting': {
+                        'meeting_no': '123456789', 'status': 2}}}) as get_details:
+            meeting_id, result = resolve_active_meeting('123456789', 'user-token')
+            self.assertEqual(meeting_id, 'm1')
+            self.assertEqual(result['code'], 0)
         active.assert_called_once_with('123456789', 'user-token')
         get_details.assert_called_once_with('m1', 'user-token')
 
-    def test_oauth_preflight_reports_missing_ability_without_prompting(self):
+    def test_once_prints_complete_response_without_prompting(self):
         stdout, stderr = io.StringIO(), io.StringIO()
         with patch.dict('os.environ', {'BOT_APP_ID': 'app', 'BOT_APP_SECRET': 'secret'},
                         clear=True), \
-                patch('sys.argv', ['probe_use_audio.py', '123456789']), \
+                patch('sys.argv', ['probe_use_audio.py', '123456789', '--once']), \
                 patch('probe_use_audio.authorize', return_value='user-token') as authorize, \
                 patch('probe_use_audio.active_ids', return_value=['meeting-id']), \
                 patch('probe_use_audio.details', return_value={
-                    'meeting_no': '123456789', 'status': 2, 'participants': []}), \
+                    'code': 0, 'msg': 'success', 'request_id': 'abc',
+                    'data': {'meeting': {'meeting_no': '123456789', 'status': 2,
+                                        'participants': [{'id': 'host', 'name': 'Kai'}],
+                                        'extra_field': {'nested': 42}}}}), \
                 patch('builtins.input', side_effect=AssertionError('must not prompt')):
             with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
                 self.assertEqual(main(), 0)
         authorize.assert_called_once_with('app', 'secret', 8767)
-        self.assertIn('"use_audio_present": false', stdout.getvalue())
-        self.assertIn('用户身份的会议详情响应未返回', stderr.getvalue())
+        record = json.loads(stdout.getvalue())
+        self.assertEqual(record['response']['request_id'], 'abc')
+        self.assertEqual(record['response']['data']['meeting']['participants'][0]['name'], 'Kai')
+        self.assertEqual(record['response']['data']['meeting']['extra_field'], {'nested': 42})
 
     def test_details_requests_ability_and_participants(self):
-        with patch('probe_use_audio.fetch', return_value={'meeting': {'status': 2}}) as fetch:
-            self.assertEqual(details('a/b', 'token'), {'status': 2})
+        result = {'code': 0, 'msg': 'success', 'data': {'meeting': {'status': 2}}}
+        with patch('probe_use_audio.fetch_full', return_value=result) as fetch:
+            self.assertEqual(details('a/b', 'token'), result)
         url = fetch.call_args.args[0]
         self.assertIn('/vc/v1/meetings/a%2Fb?', url)
         self.assertIn('with_meeting_ability=true', url)
         self.assertIn('with_participants=true', url)
+
+    def test_fetch_full_keeps_top_level_fields(self):
+        response = io.BytesIO(b'{"code":0,"msg":"ok","extra":{"x":1},"data":{}}')
+        response.status = 200
+        with patch('probe_use_audio.request.urlopen', return_value=response):
+            result = fetch_full('https://open.feishu.cn/open-apis/vc/v1/meetings/m1', 'token')
+        self.assertEqual(result['extra'], {'x': 1})
 
     def test_observation_keeps_missing_distinct_from_false(self):
         self.assertFalse(observation({'ability': {}})['use_audio_present'])
@@ -45,8 +62,6 @@ class UseAudioProbeTest(unittest.TestCase):
             {'id': 'host', 'status': 2, 'mic_state': 'muted'}]})
         self.assertTrue(row['use_audio_present'])
         self.assertIs(row['use_audio'], False)
-        self.assertEqual(row['participants'][0]['audio_or_host_fields'],
-                         {'mic_state': 'muted'})
 
     def test_assessment_requires_stable_boolean_samples(self):
         row = lambda value: {'meeting_status': 2, 'use_audio_present': True,
