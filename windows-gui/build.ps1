@@ -13,9 +13,9 @@ if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed" }
 & $pythonExe -m pip install -e "$root\recorder[windows]" -e "$root\macos-gui[ui]" pyinstaller
 if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed" }
 
-& $pythonExe -m PyInstaller --noconfirm --clean --onedir --windowed `
+& $pythonExe -m PyInstaller --noconfirm --clean --onefile --windowed `
     --name MeetingAdvisor `
-    --distpath "$PSScriptRoot\dist" --workpath "$PSScriptRoot\build" `
+    --distpath "$PSScriptRoot\dist\MeetingAdvisor" --workpath "$PSScriptRoot\build" `
     --specpath "$PSScriptRoot\build" `
     --collect-all process_audio_capture --collect-all soundcard `
     --collect-all uiautomation --collect-all keyring `
