@@ -41,18 +41,18 @@ python3 studies/meeting-events/poll.py 123456789
 
 ## `use_audio` 与主持人麦克风状态对照实验（2026-11-17）
 
-[获取会议详情 API](https://open.feishu.cn/document/server-docs/vc-v1/meeting/get) 的 `meeting.ability.use_audio` 描述是“是否使用音频”，位于**会议级** `ability` 对象中。文档还要求应用身份（`tenant_access_token`）以及查询参数 `with_meeting_ability=true` 才返回 `ability`。字段名和描述均没有说明它是某位参会人的实时麦克风开关，因此需对照实测。
+[获取会议详情 API](https://open.feishu.cn/document/server-docs/vc-v1/meeting/get) 的 `meeting.ability.use_audio` 描述是“是否使用音频”，位于**会议级** `ability` 对象中。文档标注 `ability` 仅在应用身份（`tenant_access_token`）且查询参数 `with_meeting_ability=true` 时返回。此探针改用**用户身份**，先验证该字段是否会出现；若不出现，就无法用当前用户权限验证它与麦克风的关系。
 
-`probe_use_audio.py` 沿用上面的应用凭据和“会议号 → 会议 ID”链路，另外请求 `with_meeting_ability=true&with_participants=true`。请先用飞书客户端发起会议，再运行：
+`probe_use_audio.py` 复用 `poll_user.py` 的 PKCE OAuth：用 `BOT_APP_ID` / `BOT_APP_SECRET` 生成授权链接、在本机接收回调并换取 `user_access_token`，令牌只留在内存。授权用户须本人在会中，探针调用 `user_active_meeting` 将会议号解析为会议 ID，再请求 `with_meeting_ability=true&with_participants=true`。请先在飞书开放平台为应用开通**用户身份** `vc:meeting.meetingevent:read`，并配置 OAuth 重定向地址 `http://127.0.0.1:8767/callback`；然后用飞书客户端发起或加入会议，再运行：
 
 ```bash
-source studies/meeting-events/local.env
+source studies/meeting-events/local.env  # BOT_APP_ID / BOT_APP_SECRET
 python3 studies/meeting-events/probe_use_audio.py 123456789
 ```
 
-需有应用身份的 `vc:meeting.meetingid:read`（按会议号查询）和 `vc:meeting.meetingevent:read`（获取详情）权限，见上表。若已知 VC 会议 ID，可加 `--meeting-id ID` 跳过会议号查询；仍需传会议号作匹配校验。`--samples` 默认每阶段 2 次，`--interval` 默认 2 秒。
+终端会输出授权链接，请用**正在会中的飞书账号**打开并授权。也可预先设置 `FEISHU_USER_ACCESS_TOKEN` 跳过 OAuth；此时无需应用 ID / Secret。若回调端口不是 8767，用 `--port` 指定并在应用后台登记对应地址。已知 VC 会议 ID 时可加 `--meeting-id ID` 跳过 `user_active_meeting` 查询，但仍需传会议号作匹配校验。`--samples` 默认每阶段 2 次，`--interval` 默认 2 秒。此流程不要求应用身份的 `vc:meeting.meetingid:read` 权限。
 
-按程序提示由**同一位主持人**依次操作“静音 → 开麦 → 再次静音”，每次完成后按回车。程序每次采样输出一行 JSON，包含 `use_audio_present`、`use_audio`、`ability_keys`、会议中的主持人相关字段，以及参会人中含 `audio` / `mic` / `mute` / `speak` / `host` / `owner` 的字段和全部参会人字段名。末尾给出对照判断。
+程序先输出一行 `phase=preflight` 的 JSON，包含 `use_audio_present`、`use_audio`、`ability_keys`、会议中的主持人相关字段，以及参会人中含 `audio` / `mic` / `mute` / `speak` / `host` / `owner` 的字段和全部参会人字段名。若用户身份响应缺少 `use_audio`，立即报告并结束；`null` 不会被当作 `false`。若字段存在，再按提示由**同一位主持人**依次操作“静音 → 开麦 → 再次静音”，每次完成后按回车，末尾给出对照判断。
 
 判读口径：三个阶段均稳定且 `use_audio` 不变，说明它不能反映**这次主持人麦克风切换**。若值按 `false → true → false` 变化，也只说明会议级字段与这次操作同步；应让另一名参会人保持音频连接并独立切换麦克风，进一步排除“会议中是否有音频”等会议级含义。字段缺失、值非布尔、阶段内不稳定或会议中途结束时，实验结果视为未知。此探针只读，不修改会议设置或现有服务。
 
