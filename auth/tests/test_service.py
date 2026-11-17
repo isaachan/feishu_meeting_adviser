@@ -56,7 +56,8 @@ class FakeTransport:
     def user_info(self, token):
         self.subject_calls += 1
         return {'open_id': self.open_id, 'name': 'Kai Han',
-                'en_name': 'Kai Han', 'email': 'kai.han@nio.com'}
+                'en_name': 'Kai Han', 'email': 'kai.han@nio.com',
+                'user_id': 'kai.han'}
 
 
 class ManualClock:
@@ -240,6 +241,7 @@ class DiscoveryLoginTests(unittest.TestCase):
             self.assertEqual(result['status'], 'completed')
             self.assertEqual(result['user']['open_id'], 'ou_KAI')
             self.assertEqual(result['user']['email'], 'kai.han@nio.com')
+            self.assertEqual(result['user']['user_id'], 'kai.han')
             # red line: no token material in the status payload
             self.assertNotIn('access_token', result)
             self.assertNotIn('refresh_token', str(result))
@@ -321,6 +323,23 @@ class TokenTests(unittest.TestCase):
             profile = service.user_profile('ou_A')
             self.assertEqual(profile['name'], 'Kai Han')
             self.assertEqual(profile['email'], 'kai.han@nio.com')
+            self.assertEqual(profile['user_id'], 'kai.han')
+
+    def test_token_read_backfills_user_id_into_pre_v1_7_profile(self):
+        """Existing profiles captured before user_id (v1.7) refresh lazily."""
+        clock = ManualClock()
+        with TemporaryDirectory() as tmp:
+            transport = FakeTransport()
+            service = self.prepare(tmp, transport, clock)
+            profile_path = next((Path(tmp) / 'profiles').glob('*.json'))
+            profile_path.write_text(json.dumps(
+                {'version': 1, 'open_id': 'ou_A', 'name': 'Kai Han',
+                 'en_name': 'Kai Han', 'email': None, 'user_id': None,
+                 'updated_at': 1.0}), encoding='utf-8')
+            token = service.get_valid_token('ou_A')
+            self.assertEqual(token['access_token'], 'u-first')
+            profile = service.user_profile('ou_A')
+            self.assertEqual(profile['user_id'], 'kai.han')
 
     def test_near_expiry_refreshes_once_with_rotation(self):
         clock = ManualClock()

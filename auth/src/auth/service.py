@@ -124,7 +124,8 @@ class AuthService:
         if isinstance(user, dict) and valid_open_id(user.get('open_id')):
             return {'status': 'completed', 'user': {
                 'open_id': user['open_id'], 'name': user.get('name'),
-                'en_name': user.get('en_name'), 'email': user.get('email')}}
+                'en_name': user.get('en_name'), 'email': user.get('email'),
+                'user_id': user.get('user_id')}}
         return {'status': 'pending'}
 
     def user_profile(self, open_id):
@@ -199,10 +200,13 @@ class AuthService:
         """Persist the identity profile for pre-v1.3 users, best-effort once.
 
         Never blocks token delivery: any failure is swallowed and retried on
-        the next credential read while the profile stays missing.
+        the next credential read while the profile stays missing. Since v1.7
+        a stored profile lacking ``user_id`` (pre-v1.7 capture) is refreshed
+        the same lazy way.
         """
         try:
-            if self.profiles.read(open_id) is not None:
+            existing = self.profiles.read(open_id)
+            if existing is not None and existing.get('user_id') is not None:
                 return
             info = self.transport.user_info(access_token)
             if info.get('open_id') == open_id:

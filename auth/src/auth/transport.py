@@ -78,7 +78,7 @@ class FeishuTransport:
         return self.user_info(token)['open_id']
 
     def user_info(self, token):
-        """Return the identity summary {open_id, name, en_name, email}.
+        """Return the identity summary {open_id, name, en_name, email, user_id}.
 
         Used by the discovery login (CONTRACT_AUTH v1.2): the summary lands in
         the state record for /authorize/status; tokens never leave this module.
@@ -98,7 +98,8 @@ class FeishuTransport:
 
         # Discard everything else from the raw provider response immediately.
         return {'open_id': open_id, 'name': text('name'),
-                'en_name': text('en_name'), 'email': text('email')}
+                'en_name': text('en_name'), 'email': text('email'),
+                'user_id': text('user_id')}
 
     def subject_hash(self, open_id: str) -> str:
         return digest([self.credentials.app_id, open_id])

@@ -1,5 +1,7 @@
 # Auth 服务契约（OAuth 凭据托管）
 
+> **v1.7（2026-11-17，supervisor login 解析）**：身份摘要（§2.3 status、§2.4 profile、§4.1 落存）新增 `user_id` 字段——飞书 user_info 返回的租户内登录名（如 `kai.han`），可为 `null`（以实际返回为准）。存量档案缺 `user_id` 时，§2.4 的惰性补档同样适用（下次凭据读取时 best-effort 重取一次）。供 advisor supervisor grant 按 login 解析（CONTRACT_ADVISOR_API §9.4）。additive，存量消费方不受影响。
+>
 > **v1.6（2026-11-16，SM-01/SM-08）**：用户 OAuth scope 集扩展——新增用户版 `vc:meeting.meetingevent:read`（会话观测轮询，见 studies/meeting-events `poll_user.py` 链路）。**请求集合**（授权 URL/code 换取/刷新均携带）= BASE ∪ {`vc:meeting.meetingevent:read`}；**校验下限** BASE = 原 3 项（§1）。存量凭据（无 vc scope）继续通过校验与刷新，不强制重授权；缺该 scope 的 token 用于会话观测时由使用方（advisor）按「观测能力缺失 → unknown + 一次性提醒重新授权」处理。stub transport（`integrations/`）同步跟随请求集合。
 >
 > **v1.5（2026-11-14）Jira PAT 扩展**：支持组织者 Jira PAT 的一次性表单提交及受控只读查询，见 §9。
@@ -78,7 +80,7 @@
 
 ```json
 {"status": "completed", "user": {"open_id": "ou_A", "name": "Kai Han",
-  "en_name": "Kai Han", "email": "kai.han@nio.com"}}
+  "en_name": "Kai Han", "email": "kai.han@nio.com", "user_id": "kai.han"}}
 ```
 
 - `pending`：state 存在、未过期、回调尚未完成；`completed`：回调成功、凭据已按 open_id 落库（幂等可重复读）。不存在或 TTL 过期 → `404 {"code": "not_found"}`。
@@ -91,11 +93,11 @@
 
 ```json
 {"open_id": "ou_A", "name": "Kai Han", "en_name": "Kai Han",
- "email": "kai.han@nio.com", "updated_at": 1762900000.0}
+ "email": "kai.han@nio.com", "user_id": "kai.han", "updated_at": 1762900000.0}
 ```
 
-- 返回 §4.1 第 7 步持久化的身份档案（name/en_name/email 可为 `null`，以飞书 user_info 实际返回为准）。
-- **存量用户惰性补档**：v1.3 之前已授权、尚无档案的用户，在下一次 `GET /credentials/{open_id}/token` 命中可用 token 时由 auth 顺带 best-effort 补档一次（失败不影响 token 返回，缺档期间重复尝试）。
+- 返回 §4.1 第 7 步持久化的身份档案（name/en_name/email/user_id 可为 `null`，以飞书 user_info 实际返回为准）。
+- **存量用户惰性补档**：v1.3 之前已授权、尚无档案的用户，在下一次 `GET /credentials/{open_id}/token` 命中可用 token 时由 auth 顺带 best-effort 补档一次（失败不影响 token 返回，缺档期间重复尝试）。**v1.7 起已存档但缺 `user_id` 的档案同样按此语义惰性重取**。
 - 用户从未授权 → `404 {"code": "unknown_user"}`；open_id 非法 → 400 `bad_message`。
 - **任何情况下不返回 token**（红线同 §1）；供 advisor 身份目录（CONTRACT_ADVISOR_API §9.1）拉取显示名。
 
@@ -117,7 +119,7 @@
 3. 经 user_info 取得授权者 open_id：**非 discovery state** 必须等于 state 绑定的 open_id（防串换账号），否则显式失败页；**discovery state（v1.2，`intent:"gui:login"`）** 无绑定可校验，以 user_info 的 open_id **采纳**为主体（发现式登录语义）。
 4. 落盘成功后返回简化成功页：显示"授权成功，请回到飞书重新发送刚才的指令（<intent 摘要>）"；discovery state 显示"登录成功，请回到采集应用"。
 5. 任何一步失败：显式失败页（含原因），不静默重试；code 一次性，失败不重放。
-6. **user_info 摘要落 state 记录（v1.2）**：成功路径将 `{open_id, name, en_name, email}` 写入 state 记录（供 `GET /authorize/status` 读取；discovery 与非 discovery 均落）。摘要不含任何 token；state 表 TTL 回收语义不变。
+6. **user_info 摘要落 state 记录（v1.2）**：成功路径将 `{open_id, name, en_name, email, user_id}` 写入 state 记录（供 `GET /authorize/status` 读取；discovery 与非 discovery 均落）。摘要不含任何 token；state 表 TTL 回收语义不变。
 7. **身份档案持久化（v1.3）**：成功路径同时将同一摘要写入持久档案 `<数据目录>/profiles/<open_id>.json`（§5），供 `GET /users/{open_id}/profile`（§2.4）读取；写失败按第 5 条显式失败处理，不产生半凭据状态。
 
 ### 4.2 `GET /oauth/callback?error=…`（用户拒绝授权）
@@ -127,7 +129,7 @@
 ## 5. 存储格式与权限
 
 - 目录 `<auth 数据目录>/credentials/`（0700），每 open_id 一文件（0600），≤64 KiB。
-- 身份档案目录 `<auth 数据目录>/profiles/`（v1.3，0700），每 open_id 一文件（0600）：`{version:1, open_id, name, en_name, email, updated_at}`，不含任何 token；与凭据文件同样的原子写/`O_NOFOLLOW` 语义。
+- 身份档案目录 `<auth 数据目录>/profiles/`（v1.3，0700），每 open_id 一文件（0600）：`{version:1, open_id, name, en_name, email, user_id, updated_at}`，不含任何 token；与凭据文件同样的原子写/`O_NOFOLLOW` 语义。
 - 原子写：临时文件 + fsync + `rename` + 目录 fsync；读取 `O_NOFOLLOW`（照搬旧实现）。
 - 记录字段：`{version:1, open_id, state: ready|refreshing|reauthorization_required, access_token, refresh_token, expires_at, refresh_expires_at, scopes, refresh_margin}`。
 - state 记录（PKCE/state 表）独立于凭据文件，同样原子写、带 TTL 回收。
@@ -141,7 +143,7 @@
 
 ## 7. 版本
 
-API v1（v1.1 见 §8；v1.2 变更：§2.1 discovery 变体、§2.3 `/authorize/status`、§4.1 采纳语义与 user_info 摘要落存；v1.3 变更：§2.4 `GET /users/{open_id}/profile`、§4.1 第 7 步档案持久化、§5 profiles 目录；v1.4/v1.5 见文首变更记录；**v1.6 变更：§1 scopes 拆分 BASE/请求集合并新增用户版 `vc:meeting.meetingevent:read`，存量凭据不受影响**）。不兼容变更递增版本号，并同步 auth/advisor 两侧实现、测试与 `integrations/` 用例。
+API v1（v1.1 见 §8；v1.2 变更：§2.1 discovery 变体、§2.3 `/authorize/status`、§4.1 采纳语义与 user_info 摘要落存；v1.3 变更：§2.4 `GET /users/{open_id}/profile`、§4.1 第 7 步档案持久化、§5 profiles 目录；v1.4/v1.5 见文首变更记录；v1.6 变更：§1 scopes 拆分 BASE/请求集合并新增用户版 `vc:meeting.meetingevent:read`，存量凭据不受影响；**v1.7 变更：身份摘要新增 `user_id` 字段（§2.3/§2.4/§4.1/§5），存量档案缺 `user_id` 时惰性补档**）。不兼容变更递增版本号，并同步 auth/advisor 两侧实现、测试与 `integrations/` 用例。
 
 ## 8. NSDP token 提交通道（v1.1）
 

@@ -38,7 +38,8 @@ class FakeTransport:
 
     def user_info(self, token):
         return {'open_id': self.open_id, 'name': 'Kai Han',
-                'en_name': 'Kai Han', 'email': 'kai.han@nio.com'}
+                'en_name': 'Kai Han', 'email': 'kai.han@nio.com',
+                'user_id': 'kai.han'}
 
 
 OPENER = request.build_opener(request.ProxyHandler({}))  # bypass macOS system proxy
@@ -104,6 +105,7 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(profile['open_id'], 'ou_A')
         self.assertEqual(profile['name'], 'Kai Han')
         self.assertEqual(profile['email'], 'kai.han@nio.com')
+        self.assertEqual(profile['user_id'], 'kai.han')
         self.assertNotIn('access_token', profile)
 
     def test_profile_unknown_and_invalid_open_id(self):

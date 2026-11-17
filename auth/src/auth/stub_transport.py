@@ -37,4 +37,5 @@ class StubTransport:
     def user_info(self, token):
         open_id = self.subject(token)
         return {'open_id': open_id, 'name': f'用户 {open_id}',
-                'en_name': f'Stub {open_id}', 'email': f'{open_id}@stub.local'}
+                'en_name': f'Stub {open_id}', 'email': f'{open_id}@stub.local',
+                'user_id': f'uid-{open_id}'}

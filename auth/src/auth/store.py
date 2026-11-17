@@ -133,13 +133,14 @@ class ProfileStore:
                 or value.get('open_id') != open_id):
             raise AuthError('oauth_invalid_local_file')
         return {key: value.get(key)
-                for key in ('open_id', 'name', 'en_name', 'email', 'updated_at')}
+                for key in ('open_id', 'name', 'en_name', 'email', 'user_id', 'updated_at')}
 
     def write(self, open_id, info, *, now):
         path, _ = self._paths(open_id)
         record = {'version': 1, 'open_id': open_id,
                   'name': info.get('name'), 'en_name': info.get('en_name'),
-                  'email': info.get('email'), 'updated_at': now}
+                  'email': info.get('email'), 'user_id': info.get('user_id'),
+                  'updated_at': now}
         write_private_json(path, record)
 
 
