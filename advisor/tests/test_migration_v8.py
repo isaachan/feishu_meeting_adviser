@@ -1,4 +1,4 @@
-"""Schema v4 -> v8 migration tests (STATE_MACHINES v2 §6.2)."""
+"""Schema v4 -> v10 migration tests (STATE_MACHINES v2 §6.2)."""
 import unittest
 from pathlib import Path
 import sqlite3
@@ -96,7 +96,7 @@ class MigrationTests(unittest.TestCase):
     def test_v4_upgrades_to_v5_in_place(self):
         store = self.open()
         version = store.db.execute('PRAGMA user_version').fetchone()[0]
-        self.assertEqual(version, 9)
+        self.assertEqual(version, 10)
         phases = {row['session_id']: row['phase']
                   for row in store.db.execute('SELECT session_id,phase FROM sessions')}
         self.assertEqual(phases, {'s-live': 'running', 's-old': 'ended'})
@@ -134,7 +134,23 @@ class MigrationTests(unittest.TestCase):
         SessionStore.initialize(fresh)
         store = SessionStore(fresh)
         self.addCleanup(store.close)
-        self.assertEqual(store.db.execute('PRAGMA user_version').fetchone()[0], 9)
+        self.assertEqual(store.db.execute('PRAGMA user_version').fetchone()[0], 10)
+
+    def test_v9_adds_app_config_table(self):
+        # fresh v10 db downgraded to v9 (drop app_config) then reopened
+        v9 = Path(self.tmp.name) / 'v9.sqlite3'
+        SessionStore.initialize(v9)
+        with sqlite3.connect(v9) as db:
+            db.execute('DROP TABLE app_config')
+            db.execute('PRAGMA user_version=9')
+        store = SessionStore(v9)
+        self.addCleanup(store.close)
+        self.assertEqual(store.db.execute('PRAGMA user_version').fetchone()[0], 10)
+        self.assertIsNone(store.app_config_value('idle_timeout_s'))
+        row = store.put_app_config('idle_timeout_s', 1200, now=2.0)
+        self.assertEqual((row['key'], row['value'], row['updated_by']),
+                         ('idle_timeout_s', '1200', 'admin'))
+        self.assertEqual(store.app_config_value('idle_timeout_s'), 1200)
 
     def test_v8_adds_users_user_id_column(self):
         # fresh v9 db downgraded to a pre-v9 users shape (no user_id column)
@@ -165,7 +181,7 @@ class MigrationTests(unittest.TestCase):
         self.addCleanup(store.close)
         cols = {row['name'] for row in store.db.execute('PRAGMA table_info(sessions)')}
         self.assertTrue({'owner_presence', 'observed_at', 'vc_meeting_id'} <= cols)
-        self.assertEqual(store.db.execute('PRAGMA user_version').fetchone()[0], 9)
+        self.assertEqual(store.db.execute('PRAGMA user_version').fetchone()[0], 10)
 
     def test_legacy_requested_rows_get_deadlines_and_single_claim(self):
         with sqlite3.connect(self.path) as db:

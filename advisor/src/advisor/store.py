@@ -6,6 +6,7 @@ revoked terminal, draining/ended reject new subscriptions and late results).
 """
 import functools
 import hashlib
+import json
 from pathlib import Path
 import secrets
 import sqlite3
@@ -26,7 +27,7 @@ from .sqlite import SQLiteDatabase
 SESSION_TABLES = {
     'sessions', 'inputs', 'context', 'jobs', 'outbox', 'session_materials',
     'sources', 'subscriptions', 'idempotency', 'gui_devices', 'users',
-    'session_claims', 'supervisor_grants'}
+    'session_claims', 'supervisor_grants', 'app_config'}
 
 
 def _tables(db) -> set[str]:
@@ -50,6 +51,9 @@ def upgrade_schema(database: SQLiteDatabase) -> None:
     subscription approval deadline/closed_by.
     v8→v9: identity directory ``users.user_id`` (CONTRACT_AUTH v1.7 login
     names, supervisor grant §9.4 resolution).
+    v9→v10: runtime config table ``app_config`` (CONTRACT_ADVISOR_API §9.5;
+    key/value with audit columns; no row backfill — absent keys fall back to
+    process defaults).
     """
     version = database.connection.execute('PRAGMA user_version').fetchone()[0]
     if version == SCHEMA_VERSION:
@@ -192,7 +196,14 @@ def upgrade_schema(database: SQLiteDatabase) -> None:
             if 'user_id' not in columns:
                 db.execute('ALTER TABLE users ADD COLUMN user_id TEXT')
             db.execute('PRAGMA user_version=9')
-        return
+        version = 9
+    if version == 9:
+        with database.transaction():
+            database.connection.execute(
+                '''CREATE TABLE IF NOT EXISTS app_config (
+                    key TEXT PRIMARY KEY, value TEXT NOT NULL,
+                    updated_ns INTEGER NOT NULL, updated_by TEXT NOT NULL DEFAULT 'admin')''')
+            database.connection.execute('PRAGMA user_version=10')
     # fresh (0/empty) and unknown versions are judged by require_schema
 
 
@@ -639,6 +650,39 @@ class SessionStore:
         row = self.db.execute('SELECT * FROM supervisor_grants WHERE login_name=?',
                               (login_name,)).fetchone()
         return dict(row)
+
+    # -- runtime config (CONTRACT_ADVISOR_API §9.5) ---------------------------
+
+    @_locked
+    def app_config_row(self, key):
+        row = self.db.execute('SELECT * FROM app_config WHERE key=?', (key,)).fetchone()
+        return dict(row) if row else None
+
+    @_locked
+    def app_config_value(self, key):
+        """JSON-decoded stored value, or None when the key was never set
+        (callers fall back to process defaults from AdviserSettings)."""
+        row = self.app_config_row(key)
+        if row is None:
+            return None
+        try:
+            return json.loads(row['value'])
+        except ValueError:
+            raise StorageError('invalid stored config') from None
+
+    def put_app_config(self, key, value, *, updated_by='admin', now=None):
+        if not isinstance(key, str) or not key:
+            raise StorageError('invalid config key')
+        moment = time.time() if now is None else now
+        with self.unit_of_work() as tx:
+            tx.connection.execute(
+                '''INSERT INTO app_config(key,value,updated_ns,updated_by)
+                   VALUES (?,?,?,?)
+                   ON CONFLICT(key) DO UPDATE SET
+                     value=excluded.value, updated_ns=excluded.updated_ns,
+                     updated_by=excluded.updated_by''',
+                (key, encode(value), int(moment * 1_000_000_000), updated_by))
+        return self.app_config_row(key)
 
     # -- gui devices (CONTRACT_ADVISOR_API §8) --------------------------------
 

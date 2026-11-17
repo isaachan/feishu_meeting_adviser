@@ -19,7 +19,7 @@ from .models import (Caption, JobState, MaterialState, ReplyState, SourceState,
                      caption_to_dict, digest)
 from .sqlite import SQLiteDatabase
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 SCHEMA = (
     '''CREATE TABLE sessions (
@@ -89,6 +89,9 @@ SCHEMA = (
     'CREATE UNIQUE INDEX session_claims_active ON session_claims(user_open_id) WHERE active=1',
     '''CREATE TABLE supervisor_grants (
         login_name TEXT PRIMARY KEY, open_id TEXT, enabled INTEGER NOT NULL DEFAULT 0,
+        updated_ns INTEGER NOT NULL, updated_by TEXT NOT NULL DEFAULT 'admin')''',
+    '''CREATE TABLE app_config (
+        key TEXT PRIMARY KEY, value TEXT NOT NULL,
         updated_ns INTEGER NOT NULL, updated_by TEXT NOT NULL DEFAULT 'admin')''',
     '''CREATE TABLE idempotency (
         key TEXT PRIMARY KEY, response TEXT NOT NULL, created_ns INTEGER NOT NULL)''',
