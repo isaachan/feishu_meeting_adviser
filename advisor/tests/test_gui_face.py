@@ -118,7 +118,7 @@ class GuiFaceBase(unittest.TestCase):
         _, start = self.post('/gui/login/start')
         self.auth.status = {'status': 'completed', 'user': {
             'open_id': 'ou_A', 'name': 'Kai Han', 'en_name': 'Kai Han',
-            'email': 'kai.han@nio.com'}}
+            'email': 'kai.han@nio.com', 'user_id': 'kai.han'}}
         _, poll = self.get('/gui/login/poll?device_code=' + parse.quote(start['device_code']))
         return start, poll
 
@@ -142,7 +142,8 @@ class LoginFlowTests(GuiFaceBase):
         self.assertEqual(poll['status'], 'completed')
         self.assertTrue(poll['device_token'].startswith('dt-'))
         self.assertEqual(poll['user'], {'open_id': 'ou_A', 'name': 'Kai Han',
-                                        'email': 'kai.han@nio.com'})
+                                        'email': 'kai.han@nio.com',
+                                        'user_id': 'kai.han'})
         # one-shot: the same device_code cannot mint a second token
         code, body = self.get_error('/gui/login/poll?device_code=' + parse.quote(start['device_code']))
         self.assertEqual(code, 404)

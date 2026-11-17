@@ -19,7 +19,7 @@ from .models import (Caption, JobState, MaterialState, ReplyState, SourceState,
                      caption_to_dict, digest)
 from .sqlite import SQLiteDatabase
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 SCHEMA = (
     '''CREATE TABLE sessions (
@@ -98,7 +98,7 @@ SCHEMA = (
         created_ns INTEGER NOT NULL, last_seen_ns INTEGER NOT NULL)''',
     'CREATE INDEX gui_devices_owner ON gui_devices(open_id)',
     '''CREATE TABLE users (
-        open_id TEXT PRIMARY KEY, name TEXT, en_name TEXT, email TEXT,
+        open_id TEXT PRIMARY KEY, name TEXT, en_name TEXT, email TEXT, user_id TEXT,
         checked_ns INTEGER NOT NULL DEFAULT 0)''',
 )
 

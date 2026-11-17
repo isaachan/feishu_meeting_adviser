@@ -331,21 +331,50 @@ class AdvisorApi:
         """login_name -> unique open_id via the identity directory.
 
         Accepts an ``ou_`` open_id directly, a full email, or a bare login
-        that is completed with the configured default email domain. Returns
-        None when the directory cannot resolve it uniquely (the grant row is
-        then stored disabled with open_id NULL, per §9.4).
+        that is matched against the directory's Feishu ``user_id`` (login
+        name, CONTRACT_AUTH v1.7) and then completed with the configured
+        default email domain. Returns None when the directory cannot resolve
+        it uniquely (the grant row is then stored disabled with open_id NULL,
+        per §9.4).
         """
         if not isinstance(login_name, str) or not login_name.strip():
             return None
         candidate = login_name.strip()
         if candidate.startswith('ou_'):
             return candidate
+        rows = self.store.db.execute(
+            'SELECT open_id FROM users WHERE user_id IS NOT NULL '
+            'AND lower(user_id)=lower(?)', (candidate,)).fetchall()
+        if len(rows) == 1:
+            return rows[0]['open_id']
+        if len(rows) > 1:  # ambiguous login names never resolve
+            return None
         email = candidate if '@' in candidate else f'{candidate}@{self.email_domain}'
         rows = self.store.db.execute(
             'SELECT open_id FROM users WHERE lower(email)=lower(?)', (email,)).fetchall()
         if len(rows) == 1:
             return rows[0]['open_id']
         return None
+
+    def _refresh_directory_logins(self):
+        """Best-effort pull of auth profiles for pre-v1.7 directory rows.
+
+        Runs when a supervisor login cannot be resolved: the auth profile may
+        already carry the Feishu user_id (CONTRACT_AUTH v1.7 lazy backfill).
+        Degrades silently — resolution then simply fails as before.
+        """
+        for open_id in self.store.users_missing_user_id():
+            try:
+                profile = self.auth.user_profile(open_id)
+            except AuthUnavailable:
+                return
+            if profile is None:
+                self.store.upsert_user(open_id, now=self.clock())
+                continue
+            self.store.upsert_user(open_id, name=profile.get('name'),
+                                   en_name=profile.get('en_name'),
+                                   email=profile.get('email'),
+                                   user_id=profile.get('user_id'), now=self.clock())
 
     def admin_supervisors(self):
         rows = self.store.supervisor_grants()
@@ -362,6 +391,10 @@ class AdvisorApi:
                 or not isinstance(enabled, bool):
             raise ApiError(400, 'bad_message', 'login_name and enabled required')
         open_id = self._resolve_grant_identity(login_name)
+        if enabled and open_id is None and not login_name.strip().startswith('ou_'):
+            # the directory may predate CONTRACT_AUTH v1.7 login capture
+            self._refresh_directory_logins()
+            open_id = self._resolve_grant_identity(login_name)
         if enabled and open_id is None:
             # keep an audit trail but never enable an unresolved identity
             self.store.put_supervisor_grant(login_name.strip(), open_id=None,
@@ -389,7 +422,7 @@ class AdvisorApi:
         for open_id in sorted(open_ids):
             row = directory.get(open_id)
             stale = (row is None or row['checked_ns'] == 0  # migration seed: never checked
-                     or (row['name'] is None
+                     or ((row['name'] is None or row.get('user_id') is None)
                          and now_ns - row['checked_ns'] > 300 * 1_000_000_000))
             if not stale:
                 continue
@@ -403,11 +436,14 @@ class AdvisorApi:
                 continue
             self.store.upsert_user(open_id, name=profile.get('name') if profile else None,
                                    en_name=profile.get('en_name') if profile else None,
-                                   email=profile.get('email') if profile else None, now=now)
+                                   email=profile.get('email') if profile else None,
+                                   user_id=profile.get('user_id') if profile else None,
+                                   now=now)
             directory[open_id] = {'open_id': open_id,
                                   'name': profile.get('name') if profile else None,
                                   'en_name': profile.get('en_name') if profile else None,
                                   'email': profile.get('email') if profile else None,
+                                  'user_id': profile.get('user_id') if profile else None,
                                   'checked_ns': now_ns}
         return directory
 
@@ -630,13 +666,13 @@ class AdvisorApi:
                                    email=user.get('email'), now=self.clock())
         self.store.upsert_user(open_id, name=user.get('name'),
                                en_name=user.get('en_name'), email=user.get('email'),
-                               now=self.clock())
+                               user_id=user.get('user_id'), now=self.clock())
         with self._gui_lock:
             self._gui_logins.pop(device_code, None)  # one-shot: second poll 404s
         LOG.info('gui device registered: open_id=%s', open_id)
         return {'status': 'completed', 'device_token': device_token,
                 'user': {'open_id': open_id, 'name': user.get('name'),
-                         'email': user.get('email')}}
+                         'email': user.get('email'), 'user_id': user.get('user_id')}}
 
     def gui_sessions(self, token):
         device = self.store.device(token, now=self.clock())

@@ -96,7 +96,7 @@ class MigrationTests(unittest.TestCase):
     def test_v4_upgrades_to_v5_in_place(self):
         store = self.open()
         version = store.db.execute('PRAGMA user_version').fetchone()[0]
-        self.assertEqual(version, 8)
+        self.assertEqual(version, 9)
         phases = {row['session_id']: row['phase']
                   for row in store.db.execute('SELECT session_id,phase FROM sessions')}
         self.assertEqual(phases, {'s-live': 'running', 's-old': 'ended'})
@@ -134,7 +134,24 @@ class MigrationTests(unittest.TestCase):
         SessionStore.initialize(fresh)
         store = SessionStore(fresh)
         self.addCleanup(store.close)
-        self.assertEqual(store.db.execute('PRAGMA user_version').fetchone()[0], 8)
+        self.assertEqual(store.db.execute('PRAGMA user_version').fetchone()[0], 9)
+
+    def test_v8_adds_users_user_id_column(self):
+        # fresh v9 db downgraded to a pre-v9 users shape (no user_id column)
+        early = Path(self.tmp.name) / 'v8.sqlite3'
+        SessionStore.initialize(early)
+        with sqlite3.connect(early) as db:
+            db.execute('ALTER TABLE users DROP COLUMN user_id')
+            db.execute("INSERT INTO users(open_id,name,email,checked_ns) "
+                       "VALUES ('ou_K','Kai HAN',NULL,1)")
+            db.execute('PRAGMA user_version=8')
+        store = SessionStore(early)
+        self.addCleanup(store.close)
+        cols = {row['name'] for row in store.db.execute('PRAGMA table_info(users)')}
+        self.assertIn('user_id', cols)
+        row = store.db.execute("SELECT * FROM users WHERE open_id='ou_K'").fetchone()
+        self.assertEqual(row['name'], 'Kai HAN')
+        self.assertIsNone(row['user_id'])
 
     def test_early_v5_without_observation_columns_is_upgraded(self):
         early = Path(self.tmp.name) / 'early.sqlite3'
@@ -148,7 +165,7 @@ class MigrationTests(unittest.TestCase):
         self.addCleanup(store.close)
         cols = {row['name'] for row in store.db.execute('PRAGMA table_info(sessions)')}
         self.assertTrue({'owner_presence', 'observed_at', 'vc_meeting_id'} <= cols)
-        self.assertEqual(store.db.execute('PRAGMA user_version').fetchone()[0], 8)
+        self.assertEqual(store.db.execute('PRAGMA user_version').fetchone()[0], 9)
 
     def test_legacy_requested_rows_get_deadlines_and_single_claim(self):
         with sqlite3.connect(self.path) as db:

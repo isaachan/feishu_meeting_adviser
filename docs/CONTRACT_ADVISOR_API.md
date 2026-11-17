@@ -343,11 +343,11 @@ v1 中「revoked 终态再申请 → 409」作废（已定 2026-11-16）；旧 `
 
 → 200 `{"login_name": "kai.han", "open_id": "ou_C", "enabled": true, "updated_at": …}`。
 
-- `login_name` 形如 `kai.han`：advisor 以 `<login_name>@<配置的默认邮箱域>` 在身份目录（`users` 表 + auth profiles）中解析唯一 `open_id`；也可直接提交完整邮箱或 `ou_` 开头的 open_id。
+- `login_name` 形如 `kai.han`（v2.1）：advisor 先按身份目录（`users` 表，源为 CONTRACT_AUTH v1.7 身份摘要的飞书 `user_id`）精确匹配登录名，未命中再以 `<login_name>@<配置的默认邮箱域>` 兜底；也可直接提交完整邮箱或 `ou_` 开头的 open_id。bare login 解析失败时 advisor 会先对目录中缺 `user_id` 的行做一次 auth profiles 惰性刷新再重试（依赖该用户完成过一次 GUI 登录/飞书授权）。
 - 解析失败/多解 → 409 `identity_unresolved`（行保留 `open_id=null`、`enabled=false`；该用户完成一次 GUI 登录/飞书授权进入目录后可重新启用）。**名字缺失/多解一律拒绝启用，不得以展示名作权限主键。**
 - 启停/删除幂等；写审计（`updated_by` + 时间戳持久化）。名单移除对已启动 session 的影响：**不追溯**——已建会话不因名单变更终止/迁移（准入只在建会时校验）。
 - bot/GUI 不可经任何端点声明 supervisor 身份（本面仅 §9 admin 入口，localhost 边界内）。
 
 ## 10. 版本
 
-API v1（响应体保留 `"api": 1` 字段位，首版不强制）；v1.1 NSDP 门；v1.2 GUI 面（§8）；v1.3 运维面（§9）；v1.4 §9.1 身份目录与订阅列表（依赖 CONTRACT_AUTH v1.3）；**v2.0（2026-11-16）状态机 v2**：phase 更名/新增 `paused`、实例唯一建会、单人单占位、订阅新状态与重申/撤回、§9.3/§9.4 supervisor 名单面、GUI §8.3 paused 展示。不兼容变更递增版本号并同步 bot/advisor/macos-gui/admin-site 侧实现、测试与 `integrations/` 用例；v2.0 为同仓整体切换（单机 `local-up` 一次拉起全部节点），无 v1/v2 双轨窗口。
+API v1（响应体保留 `"api": 1` 字段位，首版不强制）；v1.1 NSDP 门；v1.2 GUI 面（§8）；v1.3 运维面（§9）；v1.4 §9.1 身份目录与订阅列表（依赖 CONTRACT_AUTH v1.3）；**v2.0（2026-11-16）状态机 v2**：phase 更名/新增 `paused`、实例唯一建会、单人单占位、订阅新状态与重申/撤回、§9.3/§9.4 supervisor 名单面、GUI §8.3 paused 展示；**v2.1（2026-11-17）§9.4 bare login 优先按飞书 `user_id`（CONTRACT_AUTH v1.7）解析，email 兜底保留**（additive）。不兼容变更递增版本号并同步 bot/advisor/macos-gui/admin-site 侧实现、测试与 `integrations/` 用例；v2.0 为同仓整体切换（单机 `local-up` 一次拉起全部节点），无 v1/v2 双轨窗口。

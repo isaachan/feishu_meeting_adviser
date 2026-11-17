@@ -139,6 +139,8 @@
 
 8. v7→v8：`sessions.drain_diagnostics TEXT`（S6 诊断记录）、`outbox.delivery_deadline_at REAL`（回答有效期，存量 pending/sending 行回填 `created_ns/1e9+3600`）。两段式发送：bot 先 `POST /outbox/{uuid}/result {status:"sending"}` 认领再投递（CONTRACT_ADVISOR_API §7.2），发送中进程崩溃由 advisor 重启 `recover()` 或预算到期转 `uncertain`，绝不盲发重试。
 
+9. v8→v9：`users.user_id TEXT`（CONTRACT_AUTH v1.7 飞书登录名，supervisor grant §9.4 的 bare login 解析键）。存量行 `user_id` 为 NULL，由身份目录惰性刷新（auth profiles 补档后回填），无需数据迁移。
+
 ## 7. 与 v1 的差异与兼容窗口
 
 - `recording→running` 更名 + `paused` 新增：advisor/bot/admin-site/macos-gui 同仓同步切换，无长期双轨；部署顺序 = 单机 `local-up` 整栈一次拉起（CONTRACT_ADVISOR_API §10 v2.0）。

@@ -48,6 +48,8 @@ def upgrade_schema(database: SQLiteDatabase) -> None:
     v4→v5: state machine v2 (STATE_MACHINES §6) — phase rename + paused,
     meeting-instance uniqueness, session claims, supervisor grants,
     subscription approval deadline/closed_by.
+    v8→v9: identity directory ``users.user_id`` (CONTRACT_AUTH v1.7 login
+    names, supervisor grant §9.4 resolution).
     """
     version = database.connection.execute('PRAGMA user_version').fetchone()[0]
     if version == SCHEMA_VERSION:
@@ -182,6 +184,14 @@ def upgrade_schema(database: SQLiteDatabase) -> None:
                        "WHERE channel='im' AND state IN ('pending','sending') "
                        'AND delivery_deadline_at IS NULL')
             db.execute('PRAGMA user_version=8')
+        version = 8
+    if version == 8:
+        with database.transaction():
+            db = database.connection
+            columns = {row['name'] for row in db.execute('PRAGMA table_info(users)')}
+            if 'user_id' not in columns:
+                db.execute('ALTER TABLE users ADD COLUMN user_id TEXT')
+            db.execute('PRAGMA user_version=9')
         return
     # fresh (0/empty) and unknown versions are judged by require_schema
 
@@ -366,17 +376,27 @@ class SessionStore:
     # -- identity directory (CONTRACT_ADVISOR_API §9.1) ----------------------
 
     @_locked
-    def upsert_user(self, open_id, *, name=None, en_name=None, email=None, now=None):
+    def upsert_user(self, open_id, *, name=None, en_name=None, email=None,
+                    user_id=None, now=None):
         """Latest-wins profile upsert; NULL fields keep their existing values."""
         moment = time.time() if now is None else now
         self.db.execute(
-            '''INSERT INTO users(open_id,name,en_name,email,checked_ns) VALUES(?,?,?,?,?)
+            '''INSERT INTO users(open_id,name,en_name,email,user_id,checked_ns)
+               VALUES(?,?,?,?,?,?)
                ON CONFLICT(open_id) DO UPDATE SET
                  name=COALESCE(excluded.name,users.name),
                  en_name=COALESCE(excluded.en_name,users.en_name),
                  email=COALESCE(excluded.email,users.email),
+                 user_id=COALESCE(excluded.user_id,users.user_id),
                  checked_ns=excluded.checked_ns''',
-            (open_id, name, en_name, email, int(moment * 1_000_000_000)))
+            (open_id, name, en_name, email, user_id, int(moment * 1_000_000_000)))
+
+    @_locked
+    def users_missing_user_id(self, limit=50):
+        """Directory rows captured before CONTRACT_AUTH v1.7 (login names)."""
+        rows = self.db.execute(
+            'SELECT open_id FROM users WHERE user_id IS NULL LIMIT ?', (limit,))
+        return [row['open_id'] for row in rows]
 
     @_locked
     def users_map(self, open_ids):

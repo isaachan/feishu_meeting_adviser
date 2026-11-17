@@ -14,6 +14,9 @@ OPENER = request.build_opener(request.ProxyHandler({}))
 
 
 class FakeAuth:
+    def __init__(self, profiles=None):
+        self.profiles = profiles or {}
+
     def get_token(self, open_id, **_kwargs):
         return {'access_token': 't'}
 
@@ -24,7 +27,7 @@ class FakeAuth:
         return {'token': 'x'}
 
     def user_profile(self, open_id):
-        return None
+        return self.profiles.get(open_id)
 
 
 class FakeCalendar:
@@ -117,6 +120,32 @@ class SupervisorGrantTests(GrantsBase):
                                        {'login_name': 'dupe@nio.com', 'enabled': True},
                                        key='g5')
         self.assertEqual((status, body['error']['code']), (409, 'identity_unresolved'))
+
+    def test_put_resolves_bare_login_via_user_id(self):
+        # CONTRACT_AUTH v1.7: the Feishu login name (user_id) resolves without
+        # any email on file.
+        self.store.upsert_user('ou_C', name='Kai HAN 韩锴', user_id='kai.han', now=1.0)
+        status, body = self.post('/admin/supervisors',
+                                 {'login_name': 'kai.han', 'enabled': True}, key='g10')
+        self.assertEqual(status, 200)
+        self.assertEqual((body['open_id'], body['enabled']), ('ou_C', True))
+
+    def test_user_id_match_takes_precedence_over_email(self):
+        self.store.upsert_user('ou_login', name='A', user_id='kai.han', now=1.0)
+        self.store.upsert_user('ou_mail', name='B', email='kai.han@nio.com', now=1.0)
+        _, body = self.post('/admin/supervisors',
+                            {'login_name': 'kai.han', 'enabled': True}, key='g11')
+        self.assertEqual(body['open_id'], 'ou_login')
+
+    def test_unresolved_login_refreshes_pre_v1_7_directory_from_auth(self):
+        # stored row predates user_id capture; auth profile already has it
+        self.store.upsert_user('ou_C', name='Kai HAN 韩锴', now=1.0)
+        self.api.auth.profiles['ou_C'] = {'open_id': 'ou_C', 'name': 'Kai HAN 韩锴',
+                                          'email': None, 'user_id': 'kai.han'}
+        status, body = self.post('/admin/supervisors',
+                                 {'login_name': 'kai.han', 'enabled': True}, key='g12')
+        self.assertEqual(status, 200)
+        self.assertEqual(body['open_id'], 'ou_C')
 
     def test_listing_and_disable_persist(self):
         self.seed_identity()
