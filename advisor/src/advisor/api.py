@@ -109,7 +109,7 @@ class AdvisorApi:
                  auth_client, calendar_validator, ingest_url, host='127.0.0.1',
                  clock=time.time, nsdp=None, nsdp_join_budget_s=12.0,
                  legacy_nsdp=False, email_domain='nio.com', approval_ttl_s=1800,
-                 drain_deadline_s=600):
+                 drain_deadline_s=600, idle_timeout_s=900):
         self.store = store
         self.supervisor = supervisor
         self.auth = auth_client
@@ -123,6 +123,7 @@ class AdvisorApi:
         self.email_domain = email_domain
         self.approval_ttl_s = approval_ttl_s
         self.drain_deadline_s = drain_deadline_s
+        self.idle_timeout_s = idle_timeout_s
         self._gui_logins: dict = {}
         self._gui_lock = threading.Lock()
 
@@ -243,6 +244,7 @@ class AdvisorApi:
                 title=binding['title'], event_calendar_id=binding['event_calendar_id'],
                 event_id=binding['event_id'], description=binding.get('description') or '',
                 now=self.clock(), nsdp_text=nsdp_text,
+                idle_timeout_s=self._effective_idle_timeout_s(),
                 instance_key=meeting_instance_key(
                     meeting_no, binding['event_calendar_id'], binding['event_id'],
                     binding.get('start') or 0),
@@ -409,6 +411,37 @@ class AdvisorApi:
         return {'login_name': row['login_name'], 'open_id': row['open_id'],
                 'enabled': bool(row['enabled']),
                 'updated_at': row['updated_ns'] / 1e9, 'updated_by': row['updated_by']}
+
+    # -- admin config (CONTRACT_ADVISOR_API §9.5) ------------------------------
+
+    IDLE_TIMEOUT_MIN_S = 60
+    IDLE_TIMEOUT_MAX_S = 86400
+
+    def _effective_idle_timeout_s(self) -> int:
+        """Runtime config wins over the process default (§9.5); applied to
+        new sessions only — existing rows keep their persisted value."""
+        stored = self.store.app_config_value('idle_timeout_s')
+        return self.idle_timeout_s if stored is None else int(stored)
+
+    def _config_response(self, row):
+        return {'idle_timeout_s': self._effective_idle_timeout_s(),
+                'default_idle_timeout_s': self.idle_timeout_s,
+                'updated_at': row['updated_ns'] / 1e9 if row else None,
+                'updated_by': row['updated_by'] if row else None}
+
+    def admin_get_config(self):
+        return self._config_response(self.store.app_config_row('idle_timeout_s'))
+
+    def admin_put_config(self, body):
+        value = body.get('idle_timeout_s')
+        if not isinstance(value, int) or isinstance(value, bool) \
+                or not self.IDLE_TIMEOUT_MIN_S <= value <= self.IDLE_TIMEOUT_MAX_S:
+            raise ApiError(400, 'bad_message',
+                           f'idle_timeout_s must be an integer in '
+                           f'[{self.IDLE_TIMEOUT_MIN_S}, {self.IDLE_TIMEOUT_MAX_S}]')
+        row = self.store.put_app_config('idle_timeout_s', value, now=self.clock())
+        LOG.info('admin config: idle_timeout_s=%s (applies to new sessions only)', value)
+        return self._config_response(row)
 
     # -- admin face (CONTRACT_ADVISOR_API §9) --------------------------------
 
@@ -786,6 +819,8 @@ def build_api_server(api: AdvisorApi, host='127.0.0.1', port=8380):
                 self._run(lambda: (api.admin_sessions(), False))
             elif parsed.path == '/admin/supervisors':
                 self._run(lambda: (api.admin_supervisors(), False))
+            elif parsed.path == '/admin/config':
+                self._run(lambda: (api.admin_get_config(), False))
             elif parsed.path.startswith('/sessions/') and parsed.path.endswith('/status'):
                 session_id = parsed.path[len('/sessions/'):-len('/status')]
                 self._run(lambda: (api.session_status(session_id), False))
@@ -816,6 +851,11 @@ def build_api_server(api: AdvisorApi, host='127.0.0.1', port=8380):
                 body = self._read_json()
                 self._run(lambda: api.with_idempotency(
                     key, lambda: api.admin_put_supervisor(body)))
+                return
+            if parsed.path == '/admin/config':
+                body = self._read_json()
+                self._run(lambda: api.with_idempotency(
+                    key, lambda: api.admin_put_config(body)))
                 return
 
             def run(body):

@@ -140,7 +140,8 @@ def main() -> None:
                       ingest_url=args.ingest_url, nsdp=nsdp_service,
                       approval_ttl_s=settings.approval_ttl_s,
                       drain_deadline_s=settings.drain_deadline_s,
-                     nsdp_join_budget_s=args.nsdp_join_budget_s)
+                      idle_timeout_s=settings.idle_timeout_s,
+                      nsdp_join_budget_s=args.nsdp_join_budget_s)
     stop_ingest = start_ingest_thread(ingest)
     supervisor.start()
     server = build_api_server(api, host=args.api_host, port=args.api_port)
