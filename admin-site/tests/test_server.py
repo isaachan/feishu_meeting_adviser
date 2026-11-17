@@ -39,7 +39,8 @@ class StubAdvisorHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         length = int(self.headers.get('Content-Length') or 0)
         raw = self.rfile.read(length) if length else b''
-        type(self).calls.append(('POST', self.path, raw.decode()))
+        type(self).calls.append(('POST', self.path, raw.decode(),
+                                 self.headers.get('X-Idempotency-Key')))
         if self.path == '/admin/sessions/s-1/end':
             self._reply({'session_id': 's-1', 'phase': 'draining'})
         elif self.path == '/admin/supervisors':
@@ -140,7 +141,7 @@ class SessionProxyTests(AdminSiteBase):
     def test_end_posts_to_admin_face_without_body(self):
         status, body = self.post('/api/sessions/s-1/end')
         self.assertEqual((status, body['phase']), (200, 'draining'))
-        self.assertIn(('POST', '/admin/sessions/s-1/end', ''), self.stub_calls)
+        self.assertIn(('POST', '/admin/sessions/s-1/end', '', None), self.stub_calls)
 
     def test_advisor_error_status_passthrough(self):
         status, body = self.post_error('/api/sessions/s-unknown/end')
@@ -236,3 +237,14 @@ class SupervisorProxyTests(AdminSiteBase):
         forwarded = [c for c in self.stub_calls if c[1] == '/admin/supervisors']
         self.assertEqual(json.loads(forwarded[-1][2]),
                          {'login_name': 'kai.han', 'enabled': False})
+
+    def test_put_supervisor_sends_fresh_idempotency_key(self):
+        # CONTRACT_ADVISOR_API: every POST carries X-Idempotency-Key; advisor
+        # rejects /admin/supervisors without one (400 bad_message).
+        for enabled in (True, False, True):
+            self.post('/api/supervisors',
+                      json.dumps({'login_name': 'kai.han', 'enabled': enabled}).encode())
+        keys = [c[3] for c in self.stub_calls if c[1] == '/admin/supervisors']
+        self.assertEqual(len(keys), 3)
+        self.assertTrue(all(isinstance(k, str) and 0 < len(k) <= 128 for k in keys))
+        self.assertEqual(len(set(keys)), 3, 'each logical request must use a fresh key')

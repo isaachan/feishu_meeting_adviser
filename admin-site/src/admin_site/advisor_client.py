@@ -5,6 +5,7 @@ and trimmed to the admin face.
 """
 import json
 from urllib import error, request
+from uuid import uuid4
 
 
 class AdvisorApiError(Exception):
@@ -21,12 +22,14 @@ class AdvisorAdminClient:
         self.timeout = timeout
         self.opener = opener or request.build_opener(request.ProxyHandler({})).open
 
-    def _call(self, method, path, payload=None):
+    def _call(self, method, path, payload=None, *, idempotency_key=None):
         data = None
         headers = {}
         if payload is not None:
             data = json.dumps(payload, ensure_ascii=False).encode()
             headers['Content-Type'] = 'application/json'
+        if idempotency_key:
+            headers['X-Idempotency-Key'] = idempotency_key
         req = request.Request(self.base_url + path, data=data, method=method,
                               headers=headers)
         try:
@@ -55,5 +58,9 @@ class AdvisorAdminClient:
         return self._call('GET', '/admin/supervisors')
 
     def admin_put_supervisor(self, login_name, enabled):
+        # Fresh key per logical request (contract §"所有 POST 必须携带"): retries
+        # of one click dedup server-side; a later toggle is a new key, never a
+        # replay of the previous response.
         return self._call('POST', '/admin/supervisors',
-                          {'login_name': login_name, 'enabled': enabled})
+                          {'login_name': login_name, 'enabled': enabled},
+                          idempotency_key=uuid4().hex)

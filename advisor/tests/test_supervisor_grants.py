@@ -132,6 +132,13 @@ class SupervisorGrantTests(GrantsBase):
                                        {'login_name': 'kai.han'}, key='g8')
         self.assertEqual((status, body['error']['code']), (400, 'bad_message'))
 
+    def test_missing_idempotency_key_rejected(self):
+        # contract §"所有 POST 必须携带 X-Idempotency-Key"; the admin-site client
+        # regression (2026-11-17) shipped without the header — pin the seam.
+        status, body = self.post_error('/admin/supervisors',
+                                       {'login_name': 'kai.han', 'enabled': True})
+        self.assertEqual((status, body['error']['code']), (400, 'bad_message'))
+
     def test_grants_survive_restart(self):
         self.seed_identity()
         self.post('/admin/supervisors', {'login_name': 'kai.han', 'enabled': True}, key='g9')
