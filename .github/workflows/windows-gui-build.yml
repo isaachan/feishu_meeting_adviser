@@ -12,12 +12,16 @@ jobs:
         with:
           python-version: '3.12'
           architecture: x64
+      - name: Stamp timestamp
+        id: timestamp
+        shell: powershell
+        run: 'echo "stamp=$(Get-Date -Format ''yyyyMMdd-HHmmss'')" >> $env:GITHUB_OUTPUT'
       - name: Build Windows app
         shell: powershell
         run: ./windows-gui/build.ps1
       - name: Upload Windows application
         uses: actions/upload-artifact@v4
         with:
-          name: MeetingAdvisor-windows-x64
+          name: MeetingAdvisor-windows-x64-${{ steps.timestamp.outputs.stamp }}
           path: windows-gui/dist/MeetingAdvisor/
           if-no-files-found: error
