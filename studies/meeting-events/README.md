@@ -39,6 +39,23 @@ python3 studies/meeting-events/poll.py 123456789
 
 保持运行后按序操作：电脑发起会议 → 手机入会 → 手机退出 → 电脑结束会议。每观察到一次变化输出一行 JSON（`label` = 会议开始/人加入/人退出/会议结束）。API 报错会打印具体接口、HTTP 状态、飞书 code 与 msg（不含凭据）。离线单测：`python3 -m unittest discover -s studies/meeting-events -p 'test_*.py'`。
 
+## `use_audio` 与主持人麦克风状态对照实验（2026-11-17）
+
+[获取会议详情 API](https://open.feishu.cn/document/server-docs/vc-v1/meeting/get) 的 `meeting.ability.use_audio` 描述是“是否使用音频”，位于**会议级** `ability` 对象中。文档还要求应用身份（`tenant_access_token`）以及查询参数 `with_meeting_ability=true` 才返回 `ability`。字段名和描述均没有说明它是某位参会人的实时麦克风开关，因此需对照实测。
+
+`probe_use_audio.py` 沿用上面的应用凭据和“会议号 → 会议 ID”链路，另外请求 `with_meeting_ability=true&with_participants=true`。请先用飞书客户端发起会议，再运行：
+
+```bash
+source studies/meeting-events/local.env
+python3 studies/meeting-events/probe_use_audio.py 123456789
+```
+
+需有应用身份的 `vc:meeting.meetingid:read`（按会议号查询）和 `vc:meeting.meetingevent:read`（获取详情）权限，见上表。若已知 VC 会议 ID，可加 `--meeting-id ID` 跳过会议号查询；仍需传会议号作匹配校验。`--samples` 默认每阶段 2 次，`--interval` 默认 2 秒。
+
+按程序提示由**同一位主持人**依次操作“静音 → 开麦 → 再次静音”，每次完成后按回车。程序每次采样输出一行 JSON，包含 `use_audio_present`、`use_audio`、`ability_keys`、会议中的主持人相关字段，以及参会人中含 `audio` / `mic` / `mute` / `speak` / `host` / `owner` 的字段和全部参会人字段名。末尾给出对照判断。
+
+判读口径：三个阶段均稳定且 `use_audio` 不变，说明它不能反映**这次主持人麦克风切换**。若值按 `false → true → false` 变化，也只说明会议级字段与这次操作同步；应让另一名参会人保持音频连接并独立切换麦克风，进一步排除“会议中是否有音频”等会议级含义。字段缺失、值非布尔、阶段内不稳定或会议中途结束时，实验结果视为未知。此探针只读，不修改会议设置或现有服务。
+
 ## 过程记录
 
 - `listen.py` 实测普通会议零事件 → 查文档确认推送仅限 API 预约会议。
