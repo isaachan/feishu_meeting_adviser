@@ -52,7 +52,13 @@ python3 studies/meeting-events/probe_use_audio.py 123456789
 
 终端会输出授权链接，请用**正在会中的飞书账号**打开并授权。也可预先设置 `FEISHU_USER_ACCESS_TOKEN` 跳过 OAuth；此时无需应用 ID / Secret。若回调端口不是 8767，用 `--port` 指定并在应用后台登记对应地址。已知 VC 会议 ID 时可加 `--meeting-id ID` 跳过 `user_active_meeting` 查询，但仍需传会议号作匹配校验。`--samples` 默认每阶段 2 次，`--interval` 默认 2 秒。此流程不要求应用身份的 `vc:meeting.meetingid:read` 权限。
 
-程序先输出一行 `phase=preflight` 的 JSON，包含 `use_audio_present`、`use_audio`、`ability_keys`、会议中的主持人相关字段，以及参会人中含 `audio` / `mic` / `mute` / `speak` / `host` / `owner` 的字段和全部参会人字段名。若用户身份响应缺少 `use_audio`，立即报告并结束；`null` 不会被当作 `false`。若字段存在，再按提示由**同一位主持人**依次操作“静音 → 开麦 → 再次静音”，每次完成后按回车，末尾给出对照判断。
+程序先输出一行 `phase=preflight` 的 JSON；其中 `response` 是获取会议详情接口返回的**完整 JSON**，包括顶层 `code` / `msg` / `data` 和 `data.meeting` 的所有字段，不做字段筛选。只想看一次完整响应时加 `--once`：
+
+```bash
+python3 studies/meeting-events/probe_use_audio.py 123456789 --once
+```
+
+不加 `--once` 时，即使响应缺少 `use_audio`，也会继续按提示采集“静音 → 开麦 → 再次静音”各阶段的完整响应；每行保留 `phase` 和 `sample` 供对照。末尾的自动判断只读取 `use_audio`，不影响原始响应的输出。缺失字段不会被当作 `false`。
 
 判读口径：三个阶段均稳定且 `use_audio` 不变，说明它不能反映**这次主持人麦克风切换**。若值按 `false → true → false` 变化，也只说明会议级字段与这次操作同步；应让另一名参会人保持音频连接并独立切换麦克风，进一步排除“会议中是否有音频”等会议级含义。字段缺失、值非布尔、阶段内不稳定或会议中途结束时，实验结果视为未知。此探针只读，不修改会议设置或现有服务。
 
