@@ -64,3 +64,12 @@ class AdvisorAdminClient:
         return self._call('POST', '/admin/supervisors',
                           {'login_name': login_name, 'enabled': enabled},
                           idempotency_key=uuid4().hex)
+
+    def admin_get_config(self):
+        return self._call('GET', '/admin/config')
+
+    def admin_put_config(self, idle_timeout_s):
+        # Same fresh-key rationale as admin_put_supervisor.
+        return self._call('POST', '/admin/config',
+                          {'idle_timeout_s': idle_timeout_s},
+                          idempotency_key=uuid4().hex)

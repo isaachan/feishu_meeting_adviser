@@ -57,6 +57,10 @@
   #grant-form input { background: var(--bg); border: 1px solid var(--border);
     color: var(--fg); border-radius: 6px; padding: 5px 10px; font-size: 13px;
     font-family: var(--mono); width: 240px; }
+  #view-settings input { background: var(--bg); border: 1px solid var(--border);
+    color: var(--fg); border-radius: 6px; padding: 5px 10px; font-size: 13px;
+    font-family: var(--mono); width: 120px; }
+  .hint { color: var(--dim); font-size: 12px; white-space: normal; margin-top: 2px; }
   td.subs { white-space: normal; min-width: 180px; }
   td.subs .sub { display: flex; align-items: center; gap: 6px; margin: 2px 0; }
   #log-tabs { display: flex; gap: 4px; margin-bottom: 10px; flex-wrap: wrap; }
@@ -80,6 +84,7 @@
   <nav>
     <button id="tab-sessions" class="active">会话</button>
     <button id="tab-grants">Supervisor</button>
+    <button id="tab-settings">设置</button>
     <button id="tab-logs">日志</button>
   </nav>
 </header>
@@ -116,6 +121,25 @@
       <tbody id="grant-rows"></tbody>
     </table>
     <div id="grant-empty" class="hidden">名单为空</div>
+  </section>
+
+  <section id="view-settings" class="hidden">
+    <div class="toolbar">
+      <span>运行参数在 advisor 持久化，重启后保留；修改仅对此后新建的会话生效，已建会话保持建会时的值。</span>
+    </div>
+    <table>
+      <thead><tr><th>参数</th><th>当前值</th><th>新值</th><th>默认值</th><th>最近修改</th><th>操作</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>无音频排空阈值（秒）<div class="hint">连续无真实音频达到该时长，会话进入 draining</div></td>
+          <td class="mono" id="idle-current">—</td>
+          <td><input type="number" id="idle-input" min="60" max="86400" step="1"></td>
+          <td class="mono" id="idle-default">—</td>
+          <td id="idle-updated">—</td>
+          <td><button class="btn" id="idle-save">保存</button></td>
+        </tr>
+      </tbody>
+    </table>
   </section>
 
   <section id="view-logs" class="hidden">
@@ -295,6 +319,43 @@ async function putGrant(login, enabled) {
   loadGrants();
 }
 
+/* ---------------- settings ---------------- */
+async function loadConfig() {
+  let data = null;
+  try {
+    const resp = await fetch('api/config');
+    data = await resp.json();
+    if (!resp.ok) throw new Error((data.error && data.error.message) || resp.status);
+  } catch (err) {
+    banner('err', '获取设置失败：' + err.message);
+    return;
+  }
+  $('idle-current').textContent = data.idle_timeout_s;
+  $('idle-default').textContent = data.default_idle_timeout_s;
+  $('idle-updated').textContent = data.updated_at
+    ? `${fmtTs(data.updated_at)}（${escapeHtml(data.updated_by || '')}）` : '未修改';
+  $('idle-input').value = data.idle_timeout_s;
+}
+
+async function saveIdleTimeout() {
+  const value = Number($('idle-input').value);
+  if (!Number.isInteger(value) || value < 60 || value > 86400) {
+    banner('err', '无音频排空阈值须为 60–86400 的整数（秒）');
+    return;
+  }
+  try {
+    const resp = await fetch('api/config', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ idle_timeout_s: value }) });
+    const body = await resp.json();
+    if (!resp.ok) throw new Error((body.error && body.error.message) || resp.status);
+    banner('ok', `已保存：无音频排空阈值 = ${body.idle_timeout_s} 秒（仅对新会话生效）`);
+  } catch (err) {
+    banner('err', '保存失败：' + err.message);
+  }
+  loadConfig();
+}
+
 /* ---------------- logs ---------------- */
 const KEYS = ['advisor', 'gateway', 'stt-server', 'bot', 'auth'];
 const logLabel = (key) => key === 'stt-server' ? 'sst' : key;
@@ -364,12 +425,15 @@ function selectLog(key) {
 function showView(name) {
   const sessions = name === 'sessions';
   const grants = name === 'grants';
+  const settings = name === 'settings';
   $('view-sessions').classList.toggle('hidden', !sessions);
   $('view-grants').classList.toggle('hidden', !grants);
-  $('view-logs').classList.toggle('hidden', sessions || grants);
+  $('view-settings').classList.toggle('hidden', !settings);
+  $('view-logs').classList.toggle('hidden', sessions || grants || settings);
   $('tab-sessions').classList.toggle('active', sessions);
   $('tab-grants').classList.toggle('active', grants);
-  $('tab-logs').classList.toggle('active', sessions || grants ? false : true);
+  $('tab-settings').classList.toggle('active', settings);
+  $('tab-logs').classList.toggle('active', sessions || grants || settings ? false : true);
   $('banner').className = '';
   if (sessions) {
     loadSessions(false);
@@ -380,6 +444,7 @@ function showView(name) {
     clearInterval(sessionsTimer);
   }
   if (grants) loadGrants();
+  if (settings) loadConfig();
   if (name === 'logs') {
     if (!currentKey) selectLog('advisor');
     markServices();
@@ -388,7 +453,9 @@ function showView(name) {
 
 $('tab-sessions').onclick = () => showView('sessions');
 $('tab-grants').onclick = () => showView('grants');
+$('tab-settings').onclick = () => showView('settings');
 $('tab-logs').onclick = () => showView('logs');
+$('idle-save').onclick = saveIdleTimeout;
 $('grant-add').onclick = () => {
   const login = $('grant-login').value.trim();
   if (!login) { banner('err', '请输入账号标识'); return; }

@@ -33,6 +33,9 @@ class StubAdvisorHandler(BaseHTTPRequestHandler):
             self._reply({'supervisors': [{'login_name': 'kai.han', 'open_id': 'ou_C',
                                           'enabled': True, 'updated_at': 1762800000.0,
                                           'updated_by': 'admin'}]})
+        elif self.path == '/admin/config':
+            self._reply({'idle_timeout_s': 900, 'default_idle_timeout_s': 900,
+                         'updated_at': None, 'updated_by': None})
         else:
             self._reply({'error': {'code': 'not_found', 'message': 'nope'}}, 404)
 
@@ -48,6 +51,15 @@ class StubAdvisorHandler(BaseHTTPRequestHandler):
             self._reply({'login_name': body['login_name'], 'open_id': 'ou_C',
                          'enabled': body['enabled'], 'updated_at': 1762800000.0,
                          'updated_by': 'admin'})
+        elif self.path == '/admin/config':
+            body = json.loads(raw)
+            if getattr(type(self), 'reject_config', False):
+                self._reply({'error': {'code': 'bad_message',
+                                       'message': 'idle_timeout_s out of range'}}, 400)
+            else:
+                self._reply({'idle_timeout_s': body['idle_timeout_s'],
+                             'default_idle_timeout_s': 900,
+                             'updated_at': 1762800000.0, 'updated_by': 'admin'})
         else:
             self._reply({'error': {'code': 'not_found', 'message': 'nope'}}, 404)
 
@@ -248,3 +260,59 @@ class SupervisorProxyTests(AdminSiteBase):
         self.assertEqual(len(keys), 3)
         self.assertTrue(all(isinstance(k, str) and 0 < len(k) <= 128 for k in keys))
         self.assertEqual(len(set(keys)), 3, 'each logical request must use a fresh key')
+
+
+class ConfigProxyTests(AdminSiteBase):
+    def test_config_get_proxied(self):
+        status, body, _ = self.get('/api/config')
+        self.assertEqual(status, 200)
+        self.assertEqual((body['idle_timeout_s'], body['default_idle_timeout_s']),
+                         (900, 900))
+        self.assertIsNone(body['updated_at'])
+
+    def test_config_post_forwards_body_with_fresh_idempotency_key(self):
+        for value in (1200, 900):
+            req = request.Request(
+                f'http://127.0.0.1:{self.port}/api/config', method='POST',
+                data=json.dumps({'idle_timeout_s': value}).encode(),
+                headers={'Content-Type': 'application/json'})
+            with OPENER.open(req, timeout=5) as response:
+                body = json.loads(response.read())
+            self.assertEqual(body['idle_timeout_s'], value)
+        forwarded = [c for c in self.stub_calls if c[1] == '/admin/config']
+        self.assertEqual([json.loads(c[2])['idle_timeout_s'] for c in forwarded],
+                         [1200, 900])
+        keys = [c[3] for c in forwarded]
+        self.assertTrue(all(isinstance(k, str) and 0 < len(k) <= 128 for k in keys))
+        self.assertEqual(len(set(keys)), 2, 'each save must use a fresh key')
+
+    def test_config_error_passthrough(self):
+        # advisor-side validation failure surfaces with status/code intact
+        handler = type('Handler', (StubAdvisorHandler,),
+                       {'calls': [], 'reject_config': True})
+        stub = ThreadingHTTPServer(('127.0.0.1', 0), handler)
+        port = stub.server_address[1]
+        threading.Thread(target=stub.serve_forever, daemon=True).start()
+        self.addCleanup(stub.shutdown)
+        self.addCleanup(stub.server_close)
+        server = build_server(AdvisorAdminClient(f'http://127.0.0.1:{port}'),
+                              self.logs, host='127.0.0.1', port=0)
+        admin_port = server.server_address[1]
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.shutdown)
+        self.addCleanup(server.server_close)
+        req = request.Request(
+            f'http://127.0.0.1:{admin_port}/api/config', method='POST',
+            data=b'{"idle_timeout_s": 5}', headers={'Content-Type': 'application/json'})
+        try:
+            with OPENER.open(req, timeout=5) as response:
+                self.fail('expected HTTPError')
+        except error.HTTPError as exc:
+            self.assertEqual(exc.code, 400)
+            self.assertEqual(json.loads(exc.read())['error']['code'], 'bad_message')
+
+    def test_index_has_settings_tab(self):
+        with OPENER.open(self.url('/'), timeout=5) as response:
+            html = response.read().decode('utf-8')
+        for marker in ('tab-settings', 'view-settings', 'api/config', 'idle-save'):
+            self.assertIn(marker, html)

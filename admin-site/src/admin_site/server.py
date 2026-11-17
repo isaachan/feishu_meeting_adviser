@@ -98,6 +98,8 @@ def build_server(advisor: AdvisorAdminClient, logs_dir, *, host='127.0.0.1', por
                 self._proxy(advisor.admin_sessions)
             elif parsed.path == '/api/supervisors':
                 self._proxy(advisor.admin_supervisors)
+            elif parsed.path == '/api/config':
+                self._proxy(advisor.admin_get_config)
             elif parsed.path == '/api/services':
                 self._reply_json(200, {'services': [
                     {'key': key, 'file': name, 'exists': (logs_root / name).exists(),
@@ -122,6 +124,8 @@ def build_server(advisor: AdvisorAdminClient, logs_dir, *, host='127.0.0.1', por
                 self._proxy(lambda: advisor.admin_end_session(session_id))
             elif parsed.path == '/api/supervisors':
                 self._proxy(lambda: advisor.admin_put_supervisor(**self._read_json()))
+            elif parsed.path == '/api/config':
+                self._proxy(lambda: advisor.admin_put_config(**self._read_json()))
             else:
                 self._discard_body()
                 self._reply_json(404, {'error': {'code': 'not_found', 'message': 'unknown path'}})
