@@ -111,6 +111,7 @@ class Controller(QObject):
             self.login_status.emit('暂时连不上服务器，重试中…')
         elif event['state'] == 'expired':
             self._start_login()  # regenerate the QR automatically
+            self.login_status.emit('二维码已过期，已自动换新，请重新扫码')
         elif event['state'] == 'completed':
             config_mod.save_device_token(self.store, event['device_token'])
             self.token = event['device_token']
