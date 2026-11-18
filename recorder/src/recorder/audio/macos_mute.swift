@@ -1,13 +1,15 @@
 import AppKit
 import ApplicationServices
 import Foundation
+import ImageIO
+import ScreenCaptureKit
 
 // Read only the microphone action of a Feishu meeting window. The action is
 // the opposite of the current state: "打开麦克风" means currently muted.
 let meetingBundles = ["com.electron.lark.iron", "com.electron.lark"]
 let meetingTitles = ["飞书会议", "Feishu Meeting", "Lark Meeting"]
-let mutedActions = ["打开麦克风", "取消静音", "Unmute", "Turn on microphone"]
-let liveActions = ["关闭麦克风", "静音", "Mute", "Turn off microphone"]
+let mutedActions = ["打开麦克风", "Turn on microphone"]
+let liveActions = ["关闭麦克风", "Turn off microphone"]
 
 func attribute(_ element: AXUIElement, _ name: String) -> AnyObject? {
     var value: CFTypeRef?
@@ -54,10 +56,8 @@ func inspect(_ window: AXUIElement) -> (Bool, String)? {
     return nil
 }
 
-func sample() -> [String: Any] {
-    guard AXIsProcessTrusted() else {
-        return ["muted": NSNull(), "source": "permission", "detail": "需要辅助功能权限", "in_meeting": false]
-    }
+func accessibilitySample() -> (Bool?, String, Bool) {
+    guard AXIsProcessTrusted() else { return (nil, "辅助功能未授权", false) }
     var foundMeeting = false
     for bundle in meetingBundles {
         for app in NSRunningApplication.runningApplications(withBundleIdentifier: bundle) {
@@ -73,22 +73,134 @@ func sample() -> [String: Any] {
                 }
                 foundMeeting = true
                 if let (muted, label) = inspect(window) {
-                    return ["muted": muted, "source": "meeting_button", "detail": label, "in_meeting": true]
+                    return (muted, label, true)
                 }
             }
         }
     }
-    return ["muted": NSNull(), "source": foundMeeting ? "unknown" : "none",
-            "detail": foundMeeting ? "未找到可用的麦克风按钮" : "未找到飞书会议窗口",
-            "in_meeting": foundMeeting]
+    return (nil, foundMeeting ? "未找到可用的麦克风按钮" : "未找到飞书会议窗口", foundMeeting)
 }
 
-_ = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
-while true {
-    if let data = try? JSONSerialization.data(withJSONObject: sample(), options: [.fragmentsAllowed]),
-       let line = String(data: data, encoding: .utf8) {
-        print(line)
-        fflush(stdout)
+struct IconStats {
+    let red: Int
+    let gray: Int
+    let area: Int
+
+    var muted: Bool? {
+        let signal = max(25, area / 12)
+        if red >= signal && red > gray { return true }
+        if gray >= signal && red < max(8, area / 200) { return false }
+        return nil
     }
-    Thread.sleep(forTimeInterval: 0.3)
+}
+
+func iconStats(_ image: CGImage, centerX: Int, centerY: Int, radius: Int) -> IconStats? {
+    let rect = CGRect(x: centerX - radius, y: centerY - radius,
+                      width: radius * 2, height: radius * 2).integral
+    guard rect.minX >= 0, rect.minY >= 0,
+          rect.maxX <= CGFloat(image.width), rect.maxY <= CGFloat(image.height),
+          let crop = image.cropping(to: rect) else { return nil }
+    let width = crop.width
+    let height = crop.height
+    var pixels = [UInt8](repeating: 0, count: width * height * 4)
+    let space = CGColorSpaceCreateDeviceRGB()
+    let bitmap = CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
+    guard let context = CGContext(data: &pixels, width: width, height: height,
+                                  bitsPerComponent: 8, bytesPerRow: width * 4,
+                                  space: space, bitmapInfo: bitmap) else { return nil }
+    context.draw(crop, in: CGRect(x: 0, y: 0, width: width, height: height))
+    var red = 0
+    var gray = 0
+    for index in stride(from: 0, to: pixels.count, by: 4) {
+        let r = Int(pixels[index])
+        let g = Int(pixels[index + 1])
+        let b = Int(pixels[index + 2])
+        if r > 170 && r > g * 3 / 2 && r > b * 3 / 2 && g < 170 {
+            red += 1
+        } else if r > 35 && r < 180 && abs(r - g) < 35 && abs(g - b) < 35 {
+            gray += 1
+        }
+    }
+    return IconStats(red: red, gray: gray, area: width * height)
+}
+
+func visualSample() async -> (Bool?, String, Bool) {
+    do {
+        let content = try await SCShareableContent.excludingDesktopWindows(
+            false, onScreenWindowsOnly: true)
+        let windows = content.windows.filter {
+            $0.owningApplication?.bundleIdentifier == "com.electron.lark.iron"
+                && $0.frame.width >= 150 && $0.frame.height >= 100
+        }
+        var observed: Bool? = nil
+        for window in windows {
+            let filter = SCContentFilter(desktopIndependentWindow: window)
+            let config = SCStreamConfiguration()
+            let scale = CGFloat(filter.pointPixelScale)
+            config.width = max(1, Int(filter.contentRect.width * scale))
+            config.height = max(1, Int(filter.contentRect.height * scale))
+            let image = try await SCScreenshotManager.captureImage(
+                contentFilter: filter, configuration: config)
+            let compact = window.frame.width / window.frame.height > 2.4
+                && window.frame.height < 150
+            let centerX = Int((compact ? 96.0 : 158.0) * scale)
+            let centerY = image.height - Int((compact ? 22.0 : 32.0) * scale)
+            let radius = max(8, Int(14 * scale))
+            guard let state = iconStats(image, centerX: centerX, centerY: centerY,
+                                        radius: radius)?.muted else { continue }
+            if let previous = observed, previous != state {
+                return (nil, "多个会议窗口的麦克风图标状态不一致", true)
+            }
+            observed = state
+        }
+        if let state = observed {
+            return (state, state ? "红色划线麦克风图标" : "灰色麦克风图标", true)
+        }
+        return (nil, windows.isEmpty ? "未找到屏幕上的飞书会议窗口" : "未识别到麦克风图标",
+                !windows.isEmpty)
+    } catch {
+        return (nil, "会议窗口截图不可用：\(error.localizedDescription)", false)
+    }
+}
+
+func sample() async -> [String: Any] {
+    let (axMuted, axDetail, axMeeting) = accessibilitySample()
+    if let muted = axMuted {
+        return ["muted": muted, "source": "meeting_button", "detail": axDetail, "in_meeting": true]
+    }
+    let (iconMuted, iconDetail, iconMeeting) = await visualSample()
+    if let muted = iconMuted {
+        return ["muted": muted, "source": "window_icon", "detail": iconDetail, "in_meeting": true]
+    }
+    let inMeeting = axMeeting || iconMeeting
+    return ["muted": NSNull(), "source": inMeeting ? "unknown" : "none",
+            "detail": inMeeting ? iconDetail : axDetail + "；" + iconDetail,
+            "in_meeting": inMeeting]
+}
+
+@main
+struct HelperMain {
+    static func main() async {
+        if CommandLine.arguments.count == 6 && CommandLine.arguments[1] == "--check-icon" {
+            let url = URL(fileURLWithPath: CommandLine.arguments[2])
+            if let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+               let image = CGImageSourceCreateImageAtIndex(source, 0, nil),
+               let x = Int(CommandLine.arguments[3]),
+               let y = Int(CommandLine.arguments[4]),
+               let radius = Int(CommandLine.arguments[5]),
+               let stats = iconStats(image, centerX: x, centerY: y, radius: radius) {
+                print("red=\(stats.red) gray=\(stats.gray) area=\(stats.area) muted=\(String(describing: stats.muted))")
+            }
+            return
+        }
+        _ = NSApplication.shared
+        while true {
+            if let data = try? JSONSerialization.data(withJSONObject: await sample()),
+               let line = String(data: data, encoding: .utf8) {
+                print(line)
+                fflush(stdout)
+            }
+            try? await Task.sleep(nanoseconds: 300_000_000)
+        }
+    }
 }

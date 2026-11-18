@@ -55,7 +55,9 @@ struct Probe {
                 guard CGImageDestinationFinalize(destination) else {
                     throw NSError(domain: "probe", code: 2)
                 }
-                print("\(output.path) (\(width)x\(height), \(compact ? "compact" : "full"))")
+                print("\(output.path) (\(width)x\(height), scale=\(filter.pointPixelScale), "
+                      + "frame=\(Int(window.frame.width))x\(Int(window.frame.height)), "
+                      + "\(compact ? "compact" : "full"))")
             }
         } catch {
             fputs("采样失败：\(error)\n", stderr)

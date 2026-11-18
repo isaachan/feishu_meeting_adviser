@@ -27,7 +27,7 @@ def ensure_helper_binary(build_dir=None):
         if not swiftc:
             raise RuntimeError('swiftc not found for Mac mute helper')
         tmp = binary.with_suffix('.tmp')
-        result = subprocess.run([swiftc, '-O', str(source), '-o', str(tmp)],
+        result = subprocess.run([swiftc, '-O', '-parse-as-library', str(source), '-o', str(tmp)],
                                 capture_output=True, text=True, timeout=300)
         if result.returncode:
             raise RuntimeError(f'Mac mute helper compile failed: {result.stderr}')
