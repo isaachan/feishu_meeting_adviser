@@ -1,10 +1,13 @@
 """Real calendar validator unit tests: injected HTTP responses, all four S1
-rejection paths, meeting_url matching, silent token refresh, material pickup."""
+rejection paths, meeting_url matching, silent token refresh, material pickup,
+recurring-series master/exception semantics (2026-11-18 bug)."""
 import io
 import json
 import time
 import unittest
+from datetime import datetime
 from urllib import error
+from zoneinfo import ZoneInfo
 
 from advisor.api import CalendarError
 from advisor.auth_client import AuthorizationRequired
@@ -204,6 +207,148 @@ class ListMeetingsTests(unittest.TestCase):
         result = self.make(events).list_meetings('ou_A')
         self.assertLessEqual(len(result['meetings']), 10)
         self.assertFalse(result['meetings'][0]['is_organizer'])
+
+
+class RecurringSeriesTests(unittest.TestCase):
+    """2026-11-18 bug (小A daily meeting): the events list API returns series
+    masters (<uid>_0, first-occurrence timestamps) plus exceptions, not
+    expanded occurrences. A daily series with past occurrences must still
+    bind/list today's occurrence and split series must not collide."""
+
+    TZ = ZoneInfo('Asia/Shanghai')
+
+    def local_ts(self, *parts):
+        return int(datetime(*parts, tzinfo=self.TZ).timestamp())
+
+    def setUp(self):
+        self.now = self.local_ts(2033, 5, 18, 10, 49)  # a Wednesday
+        self.today = self.local_ts(2033, 5, 18, 11, 0)
+
+    def make(self, events):
+        auth = FakeAuth()
+        http = FakeHTTP(pages(events))
+        return FeishuCalendarValidator(auth, opener=http, clock=lambda: self.now)
+
+    def master(self, event_id, start, recurrence='FREQ=DAILY;INTERVAL=1', **extra):
+        item = event(event_id, extra.pop('summary', '每日站会'), organizer='ou_A',
+                     start=start, end=extra.pop('end', start + 1800),
+                     no=extra.pop('no', MEETING_NO))
+        item['recurrence'] = recurrence
+        item.update(extra)
+        return item
+
+    def test_daily_series_binds_and_lists_todays_occurrence(self):
+        series_start = self.local_ts(2033, 5, 11, 11, 0)  # first occurrence
+        validator = self.make([self.master('evt_d_0', series_start)])
+        binding = validator.validate('ou_A', {'no': MEETING_NO})
+        self.assertEqual(binding['event_id'], f'cal_x/evt_d_{self.today}')
+        self.assertEqual((binding['start'], binding['end']),
+                         (self.today, self.today + 1800))
+        self.assertEqual(binding['title'], '每日站会')
+        self.assertTrue(binding['organizer_ok'])
+        rows = validator.list_meetings('ou_A')['meetings']
+        # master expanded: today through the days=7 horizon, no past rows
+        self.assertEqual([row['start_ts'] for row in rows],
+                         [self.today + 86400 * i for i in range(7)])
+        self.assertTrue(all(row['meeting_no'] == MEETING_NO for row in rows))
+
+    def test_ended_series_reports_meeting_not_found(self):
+        series_start = self.local_ts(2033, 5, 11, 11, 0)
+        validator = self.make([self.master(
+            'evt_d_0', series_start, recurrence='FREQ=DAILY;UNTIL=20330515T030000Z')])
+        with self.assertRaises(CalendarError) as ctx:
+            validator.validate('ou_A', {'no': MEETING_NO})
+        self.assertEqual(ctx.exception.code, 'meeting_not_found')
+
+    def test_count_exhausted_series_reports_meeting_not_found(self):
+        series_start = self.local_ts(2033, 5, 11, 11, 0)
+        validator = self.make([self.master('evt_d_0', series_start,
+                                           recurrence='FREQ=DAILY;COUNT=3')])
+        with self.assertRaises(CalendarError) as ctx:
+            validator.validate('ou_A', {'no': MEETING_NO})
+        self.assertEqual(ctx.exception.code, 'meeting_not_found')
+
+    def test_split_series_resolves_the_live_one(self):
+        # "此日程及后续" edit: two masters share one meeting_no; only the new
+        # series still has occurrences now.
+        old = self.master('evt_o_0', self.local_ts(2033, 5, 3, 11, 0),
+                          recurrence='FREQ=DAILY;UNTIL=20330515T235959Z')
+        new = self.master('evt_n_0', self.local_ts(2033, 5, 15, 11, 0))
+        validator = self.make([old, new])
+        binding = validator.validate('ou_A', {'no': MEETING_NO})
+        self.assertEqual(binding['event_id'], f'cal_x/evt_n_{self.today}')
+
+    def test_two_live_series_same_no_stay_ambiguous(self):
+        first = self.master('evt_a_0', self.local_ts(2033, 5, 11, 11, 0))
+        second = self.master('evt_b_0', self.local_ts(2033, 5, 15, 11, 0))
+        validator = self.make([first, second])
+        with self.assertRaises(CalendarError) as ctx:
+            validator.validate('ou_A', {'no': MEETING_NO})
+        self.assertEqual(ctx.exception.code, 'meeting_ambiguous')
+
+    def exception(self, master_id, original_start, start, **extra):
+        """Edited instance: docs shape = recurrence empty + is_exception."""
+        uid = master_id[:-2] if master_id.endswith('_0') else master_id
+        item = self.master(f'{uid}_{original_start}', start, **extra)
+        item['recurrence'] = ''
+        item['is_exception'] = True
+        item['recurring_event_id'] = master_id
+        return item
+
+    def test_exception_overrides_its_slot(self):
+        series_start = self.local_ts(2033, 5, 11, 11, 0)
+        moved = self.exception('evt_d_0', self.today, self.today - 19 * 60,
+                               end=self.today + 3600 - 19 * 60)
+        validator = self.make([self.master('evt_d_0', series_start), moved])
+        binding = validator.validate('ou_A', {'no': MEETING_NO})
+        self.assertEqual(binding['event_id'], f'cal_x/evt_d_{self.today}')
+        self.assertEqual(binding['start'], self.today - 19 * 60)
+        rows = [row for row in validator.list_meetings('ou_A')['meetings']
+                if row['start_ts'] == self.today]  # original slot not listed
+        self.assertEqual(rows, [])
+
+    def test_cancelled_exception_deletes_occurrence(self):
+        series_start = self.local_ts(2033, 5, 11, 11, 0)
+        deleted = self.exception('evt_d_0', self.today, self.today)
+        deleted['status'] = 'cancelled'
+        validator = self.make([self.master('evt_d_0', series_start), deleted])
+        with self.assertRaises(CalendarError) as ctx:
+            validator.validate('ou_A', {'no': MEETING_NO})
+        self.assertEqual(ctx.exception.code, 'outside_window')
+        starts = [row['start_ts'] for row in validator.list_meetings('ou_A')['meetings']]
+        self.assertNotIn(self.today, starts)
+
+    def test_weekly_byday_binds_midweek_occurrence(self):
+        validator = self.make([self.master(
+            'evt_w_0', self.local_ts(2033, 5, 7, 11, 0),  # a Friday
+            recurrence='FREQ=WEEKLY;BYDAY=MO,WE')])
+        binding = validator.validate('ou_A', {'no': MEETING_NO})
+        self.assertEqual(binding['event_id'], f'cal_x/evt_w_{self.today}')
+
+    def test_weekly_series_between_occurrences_is_outside_window(self):
+        # next occurrence tomorrow, none covers now
+        validator = self.make([self.master(
+            'evt_w_0', self.local_ts(2033, 5, 17, 11, 0),  # a Tuesday
+            recurrence='FREQ=WEEKLY;BYDAY=TU')])
+        with self.assertRaises(CalendarError) as ctx:
+            validator.validate('ou_A', {'no': MEETING_NO})
+        self.assertEqual(ctx.exception.code, 'outside_window')
+
+    def test_monthly_series_binds_same_day_occurrence(self):
+        validator = self.make([self.master(
+            'evt_m_0', self.local_ts(2033, 3, 18, 11, 0),
+            recurrence='FREQ=MONTHLY;INTERVAL=1')])
+        binding = validator.validate('ou_A', {'no': MEETING_NO})
+        self.assertEqual(binding['start'], self.today)
+
+    def test_unsupported_rule_falls_back_to_first_occurrence(self):
+        # FREQ=MONTHLY;BYDAY=2TU is not expandable: keep the pre-fix behavior
+        # (bind the master around its first occurrence) instead of failing.
+        validator = self.make([self.master(
+            'evt_m_0', self.today, recurrence='FREQ=MONTHLY;BYDAY=2TU')])
+        binding = validator.validate('ou_A', {'no': MEETING_NO})
+        self.assertEqual(binding['start'], self.today)
+        self.assertEqual(binding['event_id'], f'cal_x/evt_m_{self.today}')
 
 
 if __name__ == '__main__':
