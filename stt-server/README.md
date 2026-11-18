@@ -1,6 +1,11 @@
 # stt-server
 
-流式 STT 服务：sherpa-onnx 流式 Zipformer（zh-en-punct int8）经 WebSocket 对外提供识别会话。协议契约见 [CONTRACT_STT_STREAM](../legacy/docs/CONTRACT_STT_STREAM.md)（v1，方案 B 遗留、方案 C 继续沿用，auth 固定 `none`）。客户端为 `legacy/local-meeting-recorder` 的 `stt: remote-stream` 模式与现根目录 `recorder`；本模块不依赖仓库内其他模块。
+流式 STT 服务：经 WebSocket 对外提供识别会话，支持两类引擎（启动时按 `--model-dir` 内容自动选择，`started`/healthz 里的 `model` 即目录名）：
+
+- **流式 Zipformer transducer**（zh-en-punct int8）：partial + final，内置端点检测；
+- **FireRedASR2 AED**（`sherpa-onnx-fire-red-asr2-zh_en-int8-2026-02-26`，非流式）：silero VAD 切段后整段解码，**仅 final 无 partial**；段落=VAD 停顿边界（最长 15s 强切），输出**无标点**（根 TODO T13）。
+
+协议契约见 [CONTRACT_STT_STREAM](../legacy/docs/CONTRACT_STT_STREAM.md)（v1，方案 B 遗留、方案 C 继续沿用，auth 固定 `none`）。客户端为 `legacy/local-meeting-recorder` 的 `stt: remote-stream` 模式与现根目录 `recorder`；本模块不依赖仓库内其他模块。
 
 ## 安装（Ubuntu Server，CPU）
 
@@ -25,6 +30,8 @@ tar xjf /tmp/stt-model.tar.bz2 -C models
   --threads 2 --max-sessions 8
 # 健康检查: curl http://127.0.0.1:8393/healthz
 ```
+
+切换到 FireRedASR2 只需把 `--model-dir` 指向该模型目录（本地栈即改 `scripts/local.env` 的 `STT_MODEL_DIR`），服务自动选引擎。FireRedASR2 额外需要 `silero_vad.onnx` 放在同目录（官方 GitHub release `asr-models/silero_vad.onnx`；网络不通时可用 modelscope 镜像 `xnnehang/k2-fsa-silero-vad`，实测 sha256 `9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6`，2026-11-18 本机冒烟通过：22.8s 测试音频 5 个 final、文本与离线 demo 一致、RTF≈0.17 @2 线程笔记本 CPU、sherpa-onnx 1.13.8 兼容）。注意 sherpa 的 silero VAD 必须按 512 样本窗口喂（session 内已处理），大块直喂会丢帧。
 
 - 每个音频源一条 WebSocket 连接（如 mic + loopback = 2 个会话）；`--max-sessions` 需 ≥ 同时在线客户端数 × 2。
 - CPU 参考：int8 模型每会话 RTF ≈ 0.1（2 线程）；8 会话 ≈ 需要约 2–4 核富余。
