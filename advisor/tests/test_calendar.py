@@ -72,7 +72,9 @@ class FakeHTTP:
             self.token_invalid_once = False
             raise error.HTTPError(req.full_url, 400, 'bad', {},
                                   io.BytesIO(json.dumps({'code': 99991661}).encode()))
-        payload = self.pages[path]
+        payload = self.pages.get(path)
+        if payload is None and path.endswith('/attendees'):
+            payload = {'items': [], 'has_more': False}  # default: no invitees
         if callable(payload):
             payload = payload(req)
         return FakeResponse({'code': 0, 'data': payload})
@@ -349,6 +351,80 @@ class RecurringSeriesTests(unittest.TestCase):
         binding = validator.validate('ou_A', {'no': MEETING_NO})
         self.assertEqual(binding['start'], self.today)
         self.assertEqual(binding['event_id'], f'cal_x/evt_m_{self.today}')
+
+
+class AttendeeFetchTests(unittest.TestCase):
+    """2026-11-18 bug (supervisor not_invited): the events list API omits
+    attendees[]; the 小C admission path must fetch the per-occurrence invite
+    list from the dedicated attendees endpoint."""
+
+    def make(self, events, attendees=None):
+        auth = FakeAuth()
+        pages_ = pages(events)
+        if attendees is not None:
+            pages_['/open-apis/calendar/v4/calendars/cal_x/events/evt_1/attendees'] = attendees
+        http = FakeHTTP(pages_)
+        validator = FeishuCalendarValidator(auth, opener=http, clock=lambda: NOW)
+        return validator, http
+
+    def test_organizer_path_does_not_fetch_attendees(self):
+        validator, http = self.make([event()])
+        binding = validator.validate('ou_A', {'no': MEETING_NO})
+        self.assertTrue(binding['organizer_ok'])
+        self.assertFalse(any(path.endswith('/attendees') for path in http.calls))
+
+    def test_supervisor_membership_fetched_from_attendees_endpoint(self):
+        # organized by someone else, no attendees[] in the list item
+        pages_payload = {'items': [
+            {'type': 'user', 'user_id': 'ou_A', 'rsvp_status': 'accept'},
+            {'type': 'user', 'user_id': 'ou_OTHER', 'rsvp_status': 'needs_action'},
+            {'type': 'user', 'user_id': 'ou_GONE', 'rsvp_status': 'removed'},
+            {'type': 'chat', 'chat_id': 'oc_x'},
+            {'type': 'resource', 'room_id': 'omp_x'},
+        ], 'has_more': False}
+        validator, http = self.make([event(organizer='ou_ORGANIZER')], pages_payload)
+        binding = validator.validate('ou_A', {'no': MEETING_NO})
+        self.assertFalse(binding['organizer_ok'])
+        self.assertEqual(binding['attendees'], {'ou_A', 'ou_OTHER'})
+        self.assertIn('/open-apis/calendar/v4/calendars/cal_x/events/evt_1/attendees',
+                      http.calls)
+
+    def test_absent_invitee_yields_empty_membership(self):
+        pages_payload = {'items': [
+            {'type': 'user', 'user_id': 'ou_OTHER'}], 'has_more': False}
+        validator, _http = self.make([event(organizer='ou_ORGANIZER')], pages_payload)
+        binding = validator.validate('ou_A', {'no': MEETING_NO})
+        self.assertNotIn('ou_A', binding['attendees'])
+
+    def test_attendee_pagination_follows_page_token(self):
+        def serve(req):
+            if 'page_token' not in req.selector:
+                return {'items': [{'type': 'user', 'user_id': 'ou_OTHER'}],
+                        'has_more': True, 'page_token': 'page-2'}
+            return {'items': [{'type': 'user', 'user_id': 'ou_A'}], 'has_more': False}
+        validator, http = self.make([event(organizer='ou_ORGANIZER')], serve)
+        binding = validator.validate('ou_A', {'no': MEETING_NO})
+        self.assertIn('ou_A', binding['attendees'])
+        attendees_calls = [p for p in http.calls if p.endswith('/attendees')]
+        self.assertEqual(attendees_calls, [attendees_calls[0]] * 2)
+
+    def test_series_occurrence_fetches_instance_attendees(self):
+        t = RecurringSeriesTests()
+        t.setUp()
+        series = t.master('evt_d_0', t.local_ts(2033, 5, 11, 11, 0))
+        series['event_organizer'] = {'user_id': 'ou_ORGANIZER'}  # force C path
+        auth = FakeAuth()
+        pages_ = pages([series])
+        instance_path = (f'/open-apis/calendar/v4/calendars/cal_x/events/'
+                         f'evt_d_{t.today}/attendees')
+        pages_[instance_path] = {'items': [
+            {'type': 'user', 'user_id': 'ou_A'}], 'has_more': False}
+        http = FakeHTTP(pages_)
+        validator = FeishuCalendarValidator(auth, opener=http, clock=lambda: t.now)
+        binding = validator.validate('ou_A', {'no': MEETING_NO})
+        self.assertEqual(binding['event_id'], f'cal_x/evt_d_{t.today}')
+        self.assertEqual(binding['attendees'], {'ou_A'})
+        self.assertIn(instance_path, http.calls)
 
 
 if __name__ == '__main__':

@@ -37,9 +37,11 @@ BASE_URL = 'https://open.feishu.cn'
 USER_INFO_PATH = '/open-apis/authen/v1/user_info'
 CALENDARS_PATH = '/open-apis/calendar/v4/calendars'
 EVENTS_PATH = '/open-apis/calendar/v4/calendars/{calendar_id}/events'
+ATTENDEES_PATH = '/open-apis/calendar/v4/calendars/{calendar_id}/events/{event_id}/attendees'
 LIST_RANGE_SECONDS = 12 * 3600
 WINDOW_SECONDS = 30 * 60
 MAX_RESPONSE_BYTES = 1 << 18
+ATTENDEE_PAGE_CAP = 20  # 20 pages x 100 = 2000 invitees per occurrence
 TOKEN_INVALID_CODES = frozenset({20005, 99991661, 99991663, 99991668, 99991677})
 ID_TEXT = re.compile(r'[A-Za-z0-9_.@~-]{1,256}\Z')
 MEETING_NO_IN_URL = re.compile(r'/j/([0-9]{9})')
@@ -219,6 +221,13 @@ class FeishuCalendarValidator:
         if _is_master(match) and not _is_exception(match):
             raw_id = f'{_series_uid(raw_id)}_{int(start)}'
         event_id = raw_id if '/' in raw_id else f'{calendar_id}/{raw_id}'
+        # 2026-11-18 bug (supervisor not_invited): the events list API never
+        # returns attendees[]; the 小C invite-list admission path must fetch
+        # the per-occurrence attendee list itself (organizers never need it).
+        attendees = _attendee_ids(match)
+        if not organizer_ok and not attendees:
+            attendees = self._occurrence_attendees(calendar_id, raw_id,
+                                                   owner_open_id)
         # organizer_ok is returned, not raised: the admission decision
         # (A organizer path vs C grant+invite path) belongs to the caller
         # (STATE_MACHINES v2 §0 / CONTRACT_ADVISOR_API v2.0 §2).
@@ -228,7 +237,7 @@ class FeishuCalendarValidator:
                 'description': (match.get('description') or '')[:20000],
                 'organizer': _organizer_id(match),
                 'organizer_ok': organizer_ok,
-                'attendees': _attendee_ids(match),
+                'attendees': attendees,
                 'caller_ids': set(identities),
                 'start': start,
                 'end': end}
@@ -321,6 +330,47 @@ class FeishuCalendarValidator:
             item['_calendar_id'] = calendar_id
             events.append(item)
         return events
+
+    def _occurrence_attendees(self, calendar_id, event_id, owner_open_id):
+        """User ids on one occurrence's invite list (paged).
+
+        The events list API omits attendees[]; the dedicated endpoint carries
+        the id in ``user_id`` (type follows ``user_id_type``). Removed invitees
+        and non-user types (chat/room/third-party) carry no user id and are
+        skipped. Transport/provider failure -> auth_unavailable (fail-closed,
+        the caller is told to retry).
+        """
+        path = ATTENDEES_PATH.format(
+            calendar_id=parse.quote(str(calendar_id), safe=''),
+            event_id=parse.quote(str(event_id), safe=''))
+        ids: set[str] = set()
+        page_token = ''
+        for page in range(1, ATTENDEE_PAGE_CAP + 1):
+            query = {'user_id_type': 'open_id', 'page_size': 100}
+            if page_token:
+                query['page_token'] = page_token
+            data = self._get(path, query, owner_open_id).get('data')
+            items = data.get('items') if isinstance(data, dict) else None
+            if not isinstance(items, list):
+                raise CalendarError('auth_unavailable')
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                if item.get('rsvp_status') == 'removed':
+                    continue
+                for key in ('user_id', 'open_id', 'union_id'):
+                    candidate = item.get(key)
+                    if isinstance(candidate, str) and ID_TEXT.fullmatch(candidate):
+                        ids.add(candidate)
+            if not (isinstance(data, dict) and data.get('has_more')):
+                return ids
+            token = data.get('page_token')
+            if not isinstance(token, str) or not token:
+                return ids
+            page_token = token
+        LOG.warning('attendee list truncated at %d pages: calendar=%s event=%s',
+                    ATTENDEE_PAGE_CAP, calendar_id, event_id)
+        return ids
 
 
 def _meeting_no(event: dict) -> str | None:
