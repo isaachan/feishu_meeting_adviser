@@ -15,9 +15,11 @@ import math
 import struct
 import threading
 import time
+from pathlib import Path
 
 from .auth import AuthError, AuthValidate
-from .session import SessionConfigError, ServerSession
+from .session import (FireRedSession, ServerSession, SessionConfigError,
+                      fire_red_model)
 
 LOG = logging.getLogger(__name__)
 
@@ -67,18 +69,31 @@ class SttService:
 
     def __init__(self, *, model_dir, num_threads: int = 2,
                  max_sessions: int = 8, idle_timeout: float = 60.0,
-                 model_name: str = 'sherpa-zh-en-punct-int8-2026-06-05',
-                 recognizer_factory=None, auth: AuthValidate | None = None):
+                 model_name: str | None = None,
+                 recognizer_factory=None, vad_factory=None,
+                 auth: AuthValidate | None = None):
         self.model_dir = model_dir
         self.num_threads = num_threads
         self.idle_timeout = idle_timeout
-        self.model_name = model_name
+        self.model_name = model_name or Path(model_dir).name
         self._recognizer_factory = recognizer_factory
+        self._vad_factory = vad_factory
         self.auth = auth
         self.state = ServiceState(max_sessions=max_sessions)
         self._conn_seq = 0
         self._live: dict[int, dict] = {}
         self._live_lock = threading.Lock()
+
+    def _new_session(self):
+        """Pick the engine by model dir contents (fire-red AED vs streaming)."""
+        if fire_red_model(self.model_dir):
+            return FireRedSession(model_dir=self.model_dir,
+                                  num_threads=self.num_threads,
+                                  recognizer_factory=self._recognizer_factory,
+                                  vad_factory=self._vad_factory)
+        return ServerSession(model_dir=self.model_dir,
+                             num_threads=self.num_threads,
+                             recognizer_factory=self._recognizer_factory)
 
     def stats(self) -> list[dict]:
         with self._live_lock:
@@ -153,9 +168,7 @@ class SttService:
                                  f'more than {self.state.max_sessions} sessions')
                 return
             acquired = True
-            session = ServerSession(model_dir=self.model_dir,
-                                    num_threads=self.num_threads,
-                                    recognizer_factory=self._recognizer_factory)
+            session = self._new_session()
             try:
                 session.start()
             except SessionConfigError as exc:

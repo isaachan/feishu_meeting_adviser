@@ -218,5 +218,161 @@ class ServiceRoundTripTests(unittest.TestCase):
             time.sleep(0.05)
 
 
+class FakeOfflineStream:
+    def __init__(self):
+        self.samples = []
+        self.text = ''
+
+    def accept_waveform(self, rate, samples):
+        self.samples = samples
+
+    @property
+    def result(self):
+        class _Result:
+            pass
+
+        result = _Result()
+        result.text = self.text
+        return result
+
+
+class FakeOfflineRecognizer:
+    texts = ['第一句', '收尾句']
+
+    def create_stream(self):
+        return FakeOfflineStream()
+
+    def decode_stream(self, stream):
+        stream.text = self.texts.pop(0)
+
+
+class FakeSegment:
+    def __init__(self, start, length):
+        self.start = start
+        self.samples = [0.01] * length
+
+
+class FakeVad:
+    """Deterministic: first batch closes segment(0,1600); second opens one."""
+
+    def __init__(self):
+        self.closed = []
+        self.opened = None
+        self.accepted = 0
+
+    def accept_waveform(self, samples):
+        self.accepted += len(samples)
+        if self.accepted == 1600:
+            self.closed.append(FakeSegment(0, 1600))
+        elif self.accepted == 3200:
+            self.opened = FakeSegment(1600, 1600)
+
+    def empty(self):
+        return not self.closed
+
+    @property
+    def front(self):
+        return self.closed[0]
+
+    def pop(self):
+        self.closed.pop(0)
+
+    def flush(self):
+        if self.opened is not None:
+            self.closed.append(self.opened)
+            self.opened = None
+
+
+class FireRedRoundTripTests(unittest.TestCase):
+    """Fire-red AED engine selected by model dir contents: finals only."""
+
+    @classmethod
+    def setUpClass(cls):
+        import tempfile
+
+        cls.model_dir = Path(tempfile.mkdtemp(prefix='stt-fire-red-'))
+        for name in ('tokens.txt', 'encoder.int8.onnx', 'decoder.int8.onnx',
+                     'silero_vad.onnx'):
+            (cls.model_dir / name).write_bytes(b'x')
+        cls.service = SttService(model_dir=cls.model_dir,
+                                 recognizer_factory=FakeOfflineRecognizer,
+                                 vad_factory=FakeVad, max_sessions=2,
+                                 idle_timeout=10.0)
+        cls.loop = asyncio.new_event_loop()
+        cls._ready = threading.Event()
+        cls._port = 0
+        cls.thread = threading.Thread(target=cls._serve, daemon=True)
+        cls.thread.start()
+        cls._ready.wait(timeout=10)
+        if not cls._port:
+            raise RuntimeError('fire-red test server did not start')
+
+    @classmethod
+    def _serve(cls):
+        asyncio.set_event_loop(cls.loop)
+
+        async def main():
+            import websockets
+
+            async with websockets.serve(cls.service.handle, '127.0.0.1',
+                                        0) as ws:
+                cls._port = ws.sockets[0].getsockname()[1]
+                cls._ready.set()
+                await asyncio.Event().wait()
+
+        cls.loop.create_task(main())
+        cls.loop.run_forever()
+
+    @classmethod
+    def tearDownClass(cls):
+        async def shutdown():
+            current = asyncio.current_task()
+            for task in [t for t in asyncio.all_tasks() if t is not current]:
+                task.cancel()
+
+        future = asyncio.run_coroutine_threadsafe(shutdown(), cls.loop)
+        try:
+            future.result(timeout=5)
+        except Exception:  # noqa: BLE001 - best effort teardown
+            pass
+        cls.loop.call_soon_threadsafe(cls.loop.stop())
+        cls.thread.join(timeout=5)
+        cls.loop.close()
+        import shutil
+
+        shutil.rmtree(cls.model_dir, ignore_errors=True)
+
+    def connect(self):
+        from websockets.sync.client import connect
+
+        return connect(f'ws://127.0.0.1:{self._port}', open_timeout=5,
+                       proxy=None)
+
+    def recv_json(self, ws, timeout=5.0):
+        return json.loads(ws.recv(timeout=timeout))
+
+    def test_finals_only_round_trip(self):
+        with self.connect() as ws:
+            ws.send(json.dumps({'type': 'start', 'protocol': 1,
+                                'source_id': 'mic', 'rate': 16000,
+                                'channels': 1}))
+            started = self.recv_json(ws)
+            self.assertEqual(started['type'], 'started')
+            self.assertEqual(started['model'], self.model_dir.name)
+
+            ws.send(audio(1600))
+            event = self.recv_json(ws)
+            self.assertEqual(event, {'type': 'final', 'text': '第一句',
+                                     'start_offset': 0, 'end_offset': 1600})
+
+            ws.send(audio(1600))  # opens a second segment, no event yet
+            ws.send(json.dumps({'type': 'stop'}))
+            event = self.recv_json(ws)
+            self.assertEqual(event, {'type': 'final', 'text': '收尾句',
+                                     'start_offset': 1600, 'end_offset': 3200})
+            stopped = self.recv_json(ws)
+            self.assertEqual(stopped, {'type': 'stopped', 'finals': 2})
+
+
 if __name__ == '__main__':
     unittest.main()
