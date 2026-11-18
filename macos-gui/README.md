@@ -33,7 +33,7 @@ python3 -m venv .venv
 ## 开发
 
 ```sh
-.venv/bin/python -m unittest discover -s tests   # 26 项（核心 headless + Qt offscreen 冒烟）
+.venv/bin/python -m unittest discover -s tests   # 43 项（核心 headless + Qt offscreen 冒烟）
 .venv/bin/ruff check src tests
 .venv/bin/pyright
 ```
