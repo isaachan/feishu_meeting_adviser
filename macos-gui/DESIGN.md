@@ -10,7 +10,7 @@ GUI 客户端 = recorder 的图形分发形态：**同样的采集与上行能�
 用户流程（目标态）：
 
 1. 小A 在飞书里对会参谋 bot 说「入会 xxxxxxx」（既有链路，不变）；
-2. 打开 GUI（首次使用：一次性输入服务器地址 + 扫码登录飞书）；
+2. 打开 GUI（首次使用：默认服务器地址 `http://meeting-advisor.nioint.com` 免配置直连 + 扫码登录飞书；地址可从界面修改）；
 3. GUI 后台轮询云端，会话列表出现该活跃会话（标题/会议号/开始时间/phase）；
 4. 小A 从列表点选会话 →「开始采集」→ GUI 直接启动采集上行，**全程无参数输入**；
 5. 监控面板展示上行状态；「停止采集」走干净收尾；关窗隐藏窗口、采集继续。
@@ -135,9 +135,10 @@ macos-gui/
 ### 6.2 客户端状态机
 
 ```
-boot ──无 server_url──► settings ──保存──► login_qr
+boot ──无存储 server_url──► 用默认地址，同「有」分支
 boot ──有──┬─无 device_token─► login_qr ──poll completed──► listing
            └─有 token────────► listing
+login_qr/listing ──服务器设置──► settings ──保存──► 换址：清 token 重登录 / 同址：回原页
 listing ⇄ offline（网络失败：退避重试，不清 token；恢复自动回）
 listing ──点选会话+开始采集──► capturing ──停止/会话 ended──► listing
 任何 401 bad_token ──► login_qr（token 失效，重新扫码）

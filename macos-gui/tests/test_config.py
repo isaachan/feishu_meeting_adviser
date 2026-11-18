@@ -22,6 +22,10 @@ class MemoryStoreTests(unittest.TestCase):
             with self.assertRaises(ValueError, msg=repr(bad)):
                 config.save_server_url(store, bad)
 
+    def test_default_server_url_is_valid(self):
+        self.assertEqual(config.normalize_server_url(config.DEFAULT_SERVER_URL),
+                         config.DEFAULT_SERVER_URL)
+
     def test_device_token_validation(self):
         store = config.MemoryConfigStore()
         for bad in ('', None, 5):

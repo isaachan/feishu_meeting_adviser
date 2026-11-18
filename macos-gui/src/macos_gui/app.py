@@ -58,13 +58,11 @@ class Controller(QObject):
 
     @property
     def server_url(self):
-        return config_mod.load_state(self.store)['server_url']
+        stored = config_mod.load_state(self.store)['server_url']
+        return stored or config_mod.DEFAULT_SERVER_URL
 
     def do_boot(self):
         state = config_mod.load_state(self.store)
-        if state['server_url'] is None:
-            self._enter('settings')
-            return
         self._connect()
         if state['device_token'] is None:
             self._start_login()
@@ -254,8 +252,7 @@ class MainWindow(QMainWindow):
         for page in (self.settings_page, self.login_page, self.list_page,
                      self.monitor_page):
             self.stack.addWidget(page)
-        if controller.server_url:
-            self.settings_page.url_edit.setText(controller.server_url)
+        self.settings_page.url_edit.setText(controller.server_url)
 
         self._login_timer = QTimer(self)
         self._login_timer.setInterval(LOGIN_POLL_INTERVAL_MS)

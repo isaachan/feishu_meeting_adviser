@@ -22,7 +22,7 @@ from macos_gui.api import ApiError
 if PYSIDE_READY:
     from PySide6.QtWidgets import QApplication
     from macos_gui.app import Controller, MainWindow
-    from macos_gui.ui.pages import ListPage, LoginPage, SettingsPage, qr_pixmap
+    from macos_gui.ui.pages import ListPage, LoginPage, qr_pixmap
 
 
 @unittest.skipUnless(PYSIDE_READY, 'PySide6/segno not installed')
@@ -48,12 +48,18 @@ class AppSmokeTests(unittest.TestCase):
     def current_page(self):
         return self.window.stack.currentWidget()
 
-    def test_boot_without_server_lands_on_settings(self):
+    def test_boot_without_server_uses_default_and_lands_on_login(self):
         self.controller.do_boot()
-        self.assertIsInstance(self.current_page(), SettingsPage)
+        self.assertEqual(self.controller.state, 'login')
+        self.assertIsInstance(self.current_page(), LoginPage)
+        self.assertEqual(self.controller.server_url,
+                         config_mod.DEFAULT_SERVER_URL)
+        self.assertEqual(self.window.settings_page.url_edit.text(),
+                         config_mod.DEFAULT_SERVER_URL)
 
     def test_save_server_moves_to_login_and_qr_shows(self):
         self.controller.do_boot()
+        self.controller._enter('settings')
         self.controller.do_save_server('https://advisor.internal/')
         self.assertEqual(self.controller.state, 'login')
         self.assertIsInstance(self.current_page(), LoginPage)

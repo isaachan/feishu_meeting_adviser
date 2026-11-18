@@ -20,7 +20,7 @@ python3 -m venv .venv
 .venv/bin/python -m macos_gui        # 或 .venv/bin/macos-gui
 ```
 
-首次运行：设置页输入服务器地址（`https://<advisor 反代域名>`，一次性）→ 飞书扫码登录 → 之后每次启动直接进入会话列表。
+首次运行默认连接 `http://meeting-advisor.nioint.com`（免配置）→ 飞书扫码登录 → 之后每次启动直接进入会话列表。
 在 Mac 上勾选“采集本机麦克风”后，采集会跟随飞书会议静音状态；请按系统提示授权
 麦克风及屏幕录制权限。状态未知时不会打开本机麦克风。
 

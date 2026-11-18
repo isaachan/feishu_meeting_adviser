@@ -10,6 +10,9 @@ SERVICE = 'macos-gui'
 KEY_SERVER_URL = 'server_url'
 KEY_DEVICE_TOKEN = 'device_token'
 
+# 首开免配置：未显式保存过地址时使用的默认会参谋服务器（docs/DEPLOYMENT.md）。
+DEFAULT_SERVER_URL = 'http://meeting-advisor.nioint.com'
+
 
 class MemoryConfigStore:
     """In-memory store (tests and keyring-less environments)."""
