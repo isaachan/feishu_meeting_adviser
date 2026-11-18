@@ -20,7 +20,7 @@ from macos_gui import config as config_mod
 from macos_gui.api import ApiError
 
 if PYSIDE_READY:
-    from PySide6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication, QPushButton
     from macos_gui.app import Controller, MainWindow
     from macos_gui.ui.pages import ListPage, LoginPage, SettingsPage, qr_pixmap
 
@@ -183,6 +183,36 @@ class AppSmokeTests(unittest.TestCase):
         pixmap = qr_pixmap('https://accounts.feishu.cn/open-apis/authen/v1/authorize?x=1')
         self.assertFalse(pixmap.isNull())
         self.assertGreater(pixmap.width(), 100)
+
+    def test_login_qr_fits_window_and_buttons_visible(self):
+        long_url = ('https://accounts.feishu.cn/open-apis/authen/v1/authorize?'
+                    + '&'.join(f'p{i}={"x" * 40}' for i in range(9)))
+        self.controller.do_boot()
+        self.window.resize(560, 640)
+        self.window.show()
+        self.controller.login_started.emit(
+            {'login_url': long_url, 'device_code': 'dc-xyz-123456',
+             'expires_at': 1.0})
+        pixmap = self.window.login_page.qr_label.pixmap()
+        self.assertLessEqual(max(pixmap.width(), pixmap.height()), 400)
+        for page in (self.window.login_page,):
+            for button in page.findChildren(QPushButton):
+                point = button.mapTo(self.window, button.rect().center())
+                self.assertTrue(
+                    self.window.rect().contains(point),
+                    f'{button.text()} out of the visible window')
+
+    def test_expired_device_code_regenerates_qr_with_notice(self):
+        config_mod.save_server_url(self.store, 'https://advisor.internal')
+        self.controller.do_boot()
+        self.client.poll_result = {'status': 'pending'}
+        self.controller.do_login_tick()
+        self.client.poll_result = ApiError(410, 'expired', 'x')
+        self.controller.do_login_tick()
+        self.assertEqual(self.controller.state, 'login')
+        self.assertFalse(self.window.login_page.qr_label.pixmap().isNull())
+        self.assertEqual(self.window.login_page.status_label.text(),
+                         '二维码已过期，已自动换新，请重新扫码')
 
     def test_windows_mic_selection_is_explicit_and_preserves_server_args(self):
         with patch('macos_gui.ui.pages.sys.platform', 'win32'):

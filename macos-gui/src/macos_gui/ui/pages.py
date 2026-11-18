@@ -13,12 +13,18 @@ from PySide6.QtWidgets import (QCheckBox, QHBoxLayout, QLabel, QLineEdit, QListW
                                QListWidgetItem, QPushButton, QVBoxLayout, QWidget)
 
 
-def qr_pixmap(url, *, scale=8):
+def qr_pixmap(url, *, scale=12, max_size=400):
+    """Render a QR pixmap capped at ``max_size`` (login URLs yield ~750px
+    at native scale, which pushed the buttons below out of the window)."""
     import segno
     buffer = io.BytesIO()
     segno.make(url, error='m').save(buffer, kind='png', scale=scale, border=2)
     pixmap = QPixmap()
     pixmap.loadFromData(buffer.getvalue())
+    if pixmap.width() > max_size or pixmap.height() > max_size:
+        pixmap = pixmap.scaled(max_size, max_size,
+                               Qt.AspectRatioMode.KeepAspectRatio,
+                               Qt.TransformationMode.SmoothTransformation)
     return pixmap
 
 
