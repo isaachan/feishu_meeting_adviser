@@ -1,5 +1,7 @@
 # Advisor 内部 API 契约（bot ↔ advisor）
 
+> **v2.5（2026-11-18）**：§2 小C 邀请名单数据源修正——飞书 events 列表 API 不返回 `attendees[]`，advisor 在非组织者路径按场经 attendees 专用接口拉取（`GET /calendars/{id}/events/{event_id}/attendees`，实例 id、分页、removed/非 user 类型剔除；失败 fail-closed 为 `auth_unavailable`）；组织者路径不增加调用。修复 supervisor 明明在参会人列表却报 `not_invited`。响应结构不变（additive）。
+>
 > **v2.4（2026-11-18）**：§2/§3.0 occurrence 解析支持循环日程——飞书 events 列表返回系列 master（时间=第一场）与例外场而非展开场次，advisor 本地展开 RRULE 并按场次归并/绑定（实例 id `<uid>_<start>`）；同系列条目不再触发 `meeting_ambiguous`，循环会不再从会议列表消失。语义见 §2 新条目，响应结构不变（additive）。
 >
 > **v2.3（2026-11-18）**：§9.6 新增会话文字记录导出 `GET /admin/sessions/{id}/transcript`（human + LLM 回答合并时间线，additive，仅 admin-site 使用）。
@@ -67,6 +69,7 @@
 
 - 语义（v2 准入链，顺序固定）：凭据门（同 v1.6）→ 解析目标 occurrence（按 `meeting_no` 匹配并展开循环系列，见下条；0 个可解析场次 → `meeting_not_found`，多个独立场次覆盖当前窗 → `meeting_ambiguous`）→ 时间窗（±30min，`outside_window`）→ 准入（组织者身份命中走 A 路径；否则须在 supervisor 名单且命中该场邀请名单或本人组织者，见 §9.3；失败 → `not_organizer` / `not_supervisor` / `not_invited`）→ 实例与占位唯一（STATE_MACHINES §0：非 ended 同事件绑定会话 → 本人幂等 `existing:true` / 他人 `session_claimed`；精确 instance key 已有 ended/draining 会话 → `instance_ended`；本人已有其他非 ended 归属 → `claim_conflict`）→ 建会（phase=`running`，写 controller claim，材料 = 日历事件描述）→ 铸流令牌 → 监督器启动。命令文本由 bot 按模板渲染（附录见 CONTRACT_RECORDER_STREAM）；**响应中不得含任何用户凭据**。
 - 循环日程解析（v2.4，2026-11-18 小A daily 会 bug）：飞书 events 列表 API 返回系列 master（`<uid>_0`，start/end=**第一场**）与例外场（`<uid>_<original_time>`，`is_exception`/`recurring_event_id`），不展开场次且不限查询窗（anchor 语义）。advisor 本地展开 RRULE 子集（FREQ=DAILY/WEEKLY/MONTHLY/YEARLY + INTERVAL/COUNT/UNTIL/BYDAY(周)/BYMONTHDAY(月)），同系列条目归并：例外场按原槽位覆盖、取消的例外场=删除该场；"此日程及后续"拆分出的同号系列各自展开。绑定 occurrence 实例 id `<uid>_<start>`（对齐 legacy 方案 B materials.py 的实例规则）——同系列每场各占独立 `meeting_instance_key`，与 STATE_MACHINES §0 每场一会对齐。不支持的 RRULE（如 `FREQ=MONTHLY;BYDAY=2TU`）回退按第一场绑定（修复前行为）。
+- 小C 邀请名单数据源（v2.5，2026-11-18 supervisor 误报 not_invited bug）：events 列表 API **不返回** `attendees[]`；准入需命中邀请名单（非组织者）时，advisor 按绑定场次实例 id 调用 attendees 专用接口拉取真实名单（removed 与非 user 类型不参与匹配），组织者路径不发起该调用；拉取失败 fail-closed 为 `auth_unavailable`。
 - v2 提醒义务（bot 话术层，SM-12 落实）：建会成功回复须提示「建会后 900 秒内需开始采集，超时本场失效且不可重建」。
 - 凭据缺失/失效（409）：
 
@@ -395,4 +398,4 @@ v1 中「revoked 终态再申请 → 409」作废（已定 2026-11-16）；旧 `
 
 ## 10. 版本
 
-API v1（响应体保留 `"api": 1` 字段位，首版不强制）；v1.1 NSDP 门；v1.2 GUI 面（§8）；v1.3 运维面（§9）；v1.4 §9.1 身份目录与订阅列表（依赖 CONTRACT_AUTH v1.3）；**v2.0（2026-11-16）状态机 v2**：phase 更名/新增 `paused`、实例唯一建会、单人单占位、订阅新状态与重申/撤回、§9.3/§9.4 supervisor 名单面、GUI §8.3 paused 展示；v2.1（2026-11-17）§9.4 bare login 优先按飞书 `user_id`（CONTRACT_AUTH v1.7）解析，email 兜底保留；**v2.2（2026-11-17）§9.5 运行时配置面：`idle_timeout_s` 运维可配（仅新会话生效）**（additive）；**v2.3（2026-11-18）§9.6 会话文字记录导出面：`GET /admin/sessions/{id}/transcript`（human STT final + LLM 回答，additive）**；**v2.4（2026-11-18）§2/§3.0 循环日程 occurrence 解析：RRULE 本地展开、同系列归并、实例 id `<uid>_<start>` 绑定（additive，响应结构不变）**。不兼容变更递增版本号并同步 bot/advisor/macos-gui/admin-site 侧实现、测试与 `integrations/` 用例；v2.0 为同仓整体切换（单机 `local-up` 一次拉起全部节点），无 v1/v2 双轨窗口。
+API v1（响应体保留 `"api": 1` 字段位，首版不强制）；v1.1 NSDP 门；v1.2 GUI 面（§8）；v1.3 运维面（§9）；v1.4 §9.1 身份目录与订阅列表（依赖 CONTRACT_AUTH v1.3）；**v2.0（2026-11-16）状态机 v2**：phase 更名/新增 `paused`、实例唯一建会、单人单占位、订阅新状态与重申/撤回、§9.3/§9.4 supervisor 名单面、GUI §8.3 paused 展示；v2.1（2026-11-17）§9.4 bare login 优先按飞书 `user_id`（CONTRACT_AUTH v1.7）解析，email 兜底保留；**v2.2（2026-11-17）§9.5 运行时配置面：`idle_timeout_s` 运维可配（仅新会话生效）**（additive）；**v2.3（2026-11-18）§9.6 会话文字记录导出面：`GET /admin/sessions/{id}/transcript`（human STT final + LLM 回答，additive）**；**v2.4（2026-11-18）§2/§3.0 循环日程 occurrence 解析：RRULE 本地展开、同系列归并、实例 id `<uid>_<start>` 绑定（additive，响应结构不变）**；**v2.5（2026-11-18）§2 小C 邀请名单按场经 attendees 接口拉取（additive）**。不兼容变更递增版本号并同步 bot/advisor/macos-gui/admin-site 侧实现、测试与 `integrations/` 用例；v2.0 为同仓整体切换（单机 `local-up` 一次拉起全部节点），无 v1/v2 双轨窗口。
