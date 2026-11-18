@@ -59,3 +59,14 @@ pip install -e '.[dev]'
 ruff check src tests && pyright
 python -m unittest discover -s tests -v   # 约 48s（含重连退避计时）
 ```
+
+Mac 飞书会议窗口若不暴露辅助功能按钮，可在会议中用以下诊断程序各采集一份
+“静音”和“开麦”状态。它只保存麦克风按钮附近的小图，不保存整个会议窗口：
+
+```sh
+swiftc -O -parse-as-library tools/probe_macos_mute.swift -o /tmp/probe_macos_mute
+# 在飞书会议中静音时：
+/tmp/probe_macos_mute /tmp/feishu-mute-probe/muted
+# 手动取消静音后：
+/tmp/probe_macos_mute /tmp/feishu-mute-probe/unmuted
+```
