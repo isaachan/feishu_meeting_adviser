@@ -31,7 +31,8 @@ def caption_fingerprint(caption: dict) -> str:
 
 def _window_fresh(end_time_ms: int, *, now: float, joined_at: float, window: int) -> bool:
     seconds = end_time_ms / 1000
-    return joined_at <= seconds <= now + 5 and seconds >= now - window
+    return (int(joined_at * 1000) <= end_time_ms
+            and seconds <= now + 5 and seconds >= now - window)
 
 
 class MeetingSession:
