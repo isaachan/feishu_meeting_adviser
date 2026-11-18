@@ -10,6 +10,7 @@ from urllib import error, parse, request
 
 from advisor.api import AdvisorApi, CalendarError, StubCalendarValidator, build_api_server
 from advisor.auth_client import AuthorizationRequired, AuthUnavailable
+from advisor.models import Caption
 from advisor.store import SessionStore
 
 OPENER = request.build_opener(request.ProxyHandler({}))
@@ -88,6 +89,13 @@ class ApiBase(unittest.TestCase):
     def get(self, path):
         with OPENER.open(request.Request(self.url(path), method='GET'), timeout=5) as response:
             return response.status, json.loads(response.read())
+
+    def get_error(self, path):
+        try:
+            self.get(path)
+            self.fail('expected HTTPError')
+        except error.HTTPError as exc:
+            return exc.code, json.loads(exc.read())
 
     def post(self, path, body, key=None):
         self.counter += 1
@@ -367,6 +375,62 @@ class AdminFaceTests(ApiBase):
 
     def test_admin_end_unknown_404(self):
         status, body = self.post_error('/admin/sessions/s-nope/end', {}, key=None)
+        self.assertEqual((status, body['error']['code']), (404, 'not_found'))
+
+    def test_admin_transcript_merges_captions_and_replies(self):
+        session = self.created()
+        sid = session['session_id']
+        self.store.ingest_caption(sid, Caption(
+            meeting_id=sid, sentence_key='loopback:t1:0-100', text='我们过一下预算',
+            received_at='2033-05-14T22:42:10+00:00',
+            event_time=2000000010000, start_time=2000000007000,
+            end_time=2000000010000), now=2_000_000_010.0)
+        self.store.ingest_caption(sid, Caption(
+            meeting_id=sid, sentence_key='mic:t2:0-100', text='好的，我补充',
+            received_at='2033-05-14T22:42:20+00:00',
+            event_time=2000000020000, start_time=2000000017000,
+            end_time=2000000020000, speaker_name='本机'), now=2_000_000_020.0)
+        with self.store.unit_of_work() as tx:
+            tx.outbox.save_reply(message_uuid='uuid-1', session_id=sid,
+                                 content='建议补充预算数据', evidence='{}', generation=3,
+                                 created_ns=2_000_000_015_000_000_000,
+                                 context_version=None, recipients=('ou_A',),
+                                 now=2_000_000_015.0)
+        status, transcript = self.get(f'/admin/sessions/{sid}/transcript')
+        self.assertEqual(status, 200)
+        self.assertEqual(transcript['session_id'], sid)
+        self.assertEqual(transcript['meeting_no'], '123456789')
+        self.assertEqual(transcript['title'], '会议 123456789')
+        self.assertEqual([r['type'] for r in transcript['records']],
+                         ['human', 'llm', 'human'])  # by ascending time
+        first, reply, second = transcript['records']
+        self.assertEqual((first['time'], first['speaker'], first['text']),
+                         (2000000010.0, None, '我们过一下预算'))
+        self.assertEqual((reply['time'], reply['speaker'], reply['text']),
+                         (2000000015.0, 'LLM', '建议补充预算数据'))
+        self.assertEqual((second['time'], second['speaker'], second['text']),
+                         (2000000020.0, '本机', '好的，我补充'))
+
+    def test_admin_transcript_dedupes_im_fanout_rows(self):
+        session = self.created()
+        sid = session['session_id']
+        with self.store.unit_of_work() as tx:
+            tx.outbox.save_reply(message_uuid='uuid-2', session_id=sid,
+                                 content='回答', evidence='{}', generation=1,
+                                 created_ns=2_000_000_010_000_000_000,
+                                 context_version=None,
+                                 recipients=('ou_A', 'ou_B', 'ou_C'),
+                                 now=2_000_000_010.0)
+        _, transcript = self.get(f'/admin/sessions/{sid}/transcript')
+        self.assertEqual(len(transcript['records']), 1)  # local fact row only
+        # owner notices ride channel=im and never enter the transcript
+        self.store.insert_owner_notice(sid, 'ou_A', '请重新提交 NSDP token',
+                                       now=2_000_000_011.0)
+        _, transcript = self.get(f'/admin/sessions/{sid}/transcript')
+        self.assertEqual(len(transcript['records']), 1)
+
+    def test_admin_transcript_unknown_404(self):
+        status, body = self.get_error('/admin/sessions/s-nope/transcript')
         self.assertEqual((status, body['error']['code']), (404, 'not_found'))
 
 

@@ -16,7 +16,7 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from .errors import StateError, StorageError
 from .models import (Caption, JobState, MaterialState, ReplyState, SourceState,
-                     caption_from_json, caption_to_dict, digest)
+                     caption_from_json, caption_to_dict, digest, epoch_ns)
 from .persistence import (DEFAULT_DRAIN_DEADLINE_S, SCHEMA, SCHEMA_VERSION,
                           SESSION_PHASES, SESSION_TRANSITIONS,
                           UnitOfWork, decode_mapping, encode, meeting_instance_key)
@@ -875,6 +875,31 @@ class SessionStore:
     def context_count(self, session_id):
         return self.db.execute(
             'SELECT count(*) FROM context WHERE session_id=?', (session_id,)).fetchone()[0]
+
+    @_locked
+    def session_transcript(self, session_id):
+        """Admin face (CONTRACT_ADVISOR_API §9.6): merged human caption +
+        LLM reply timeline, oldest first; time is unix seconds or None."""
+        records = []
+        for row in self.db.execute(
+                'SELECT body FROM context WHERE session_id=? ORDER BY generation',
+                (session_id,)):
+            caption = caption_from_json(row['body'])
+            stamp = (epoch_ns(caption.end_time, numeric_milliseconds=True)
+                     or epoch_ns(caption.event_time, numeric_milliseconds=True)
+                     or epoch_ns(caption.received_at))
+            records.append({'type': 'human',
+                            'time': stamp / 1e9 if stamp is not None else None,
+                            'speaker': caption.speaker_name or caption.speaker_id,
+                            'text': caption.text})
+        for row in self.db.execute(
+                "SELECT content,created_ns FROM outbox WHERE session_id=? "
+                "AND kind='reply' AND channel='local' ORDER BY created_ns", (session_id,)):
+            records.append({'type': 'llm', 'time': row['created_ns'] / 1e9,
+                            'speaker': 'LLM', 'text': row['content']})
+        records.sort(key=lambda record: (record['time'] is None, record['time'] or 0.0))
+        return records
+
 
     @_locked
     def context_row(self, session_id, sentence_key):

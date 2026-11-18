@@ -539,6 +539,16 @@ class AdvisorApi:
         LOG.info('admin ending: session=%s -> draining', session_id)
         return {'session_id': session_id, 'phase': updated['phase']}
 
+    def admin_session_transcript(self, session_id):
+        """Ops export (§9.6): merged caption + LLM reply text timeline."""
+        try:
+            session = self.store.require_session(session_id)
+        except StorageError:
+            raise ApiError(404, 'not_found', 'unknown session') from None
+        return {'session_id': session_id, 'meeting_no': session['meeting_no'],
+                'title': session['title'],
+                'records': self.store.session_transcript(session_id)}
+
     # -- subscriptions --------------------------------------------------------
 
     def create_subscription(self, body):
@@ -824,6 +834,9 @@ def build_api_server(api: AdvisorApi, host='127.0.0.1', port=8380):
             elif parsed.path.startswith('/sessions/') and parsed.path.endswith('/status'):
                 session_id = parsed.path[len('/sessions/'):-len('/status')]
                 self._run(lambda: (api.session_status(session_id), False))
+            elif parsed.path.startswith('/admin/sessions/') and parsed.path.endswith('/transcript'):
+                session_id = parsed.path[len('/admin/sessions/'):-len('/transcript')]
+                self._run(lambda: (api.admin_session_transcript(session_id), False))
             elif parsed.path == '/subscriptions':
                 subscriber = query.get('subscriber_open_id', [None])[0]
                 self._run(lambda: (api.list_subscriptions(subscriber), False))
