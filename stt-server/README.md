@@ -30,6 +30,23 @@ tar xjf /tmp/stt-model.tar.bz2 -C models
 - CPU 参考：int8 模型每会话 RTF ≈ 0.1（2 线程）；8 会话 ≈ 需要约 2–4 核富余。
 - 首版无认证（内部部署基线，见契约第 1 节）；绑定内网或用防火墙限制来源。
 
+### CPU/解码耗时测量
+
+在运行 stt-server 的机器、仓库根目录执行（生产环境使用该模块的 venv）：
+
+```bash
+# 会议进行中：被动观察 30 秒
+.venv-prod/stt-server/bin/python scripts/measure-stt.py live --seconds 30
+
+# 会后：用保存的录音按实时速度回放最多 60 秒
+.venv-prod/stt-server/bin/python scripts/measure-stt.py replay --wav /path/to/loopback.wav
+
+# 暂无录音文件：只测 60 秒静音基线，不能代表真实语音负载
+.venv-prod/stt-server/bin/python scripts/measure-stt.py replay
+```
+
+本地栈可将上述 Python 路径换成 `.venv-local/bin/python`。录音须为 16 kHz、单声道、16-bit PCM WAV（recorder 保存的 `loopback.wav` 符合此格式），且文件须位于运行脚本的机器上。回放直接连本机 STT，不经过 advisor；检测到已有 STT 会话时会拒绝回放。输出只含会话数、进程 CPU、音频秒数、解码耗时及 RTF，不显示识别文本。自动找不到唯一进程时可在 `live`/`replay` 前加 `--pid <PID>`。CPU 平均占用按 100% = 一个逻辑核计算；解码 RTF 是解码耗时 / 音频时长，不包含模型加载及全部音频处理开销。
+
 ## systemd 示例
 
 `/etc/systemd/system/stt-server.service`：
