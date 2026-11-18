@@ -149,7 +149,11 @@ def run_recording(args, sources, out_root):
 def sources_for_real(args, out_root):
     sources: list = [SwiftLoopbackSource('loopback')]
     if args.mic:
-        sources.append(MicSource('mic'))
+        if sys.platform == 'darwin':
+            from .audio.macos_mic import MacFeishuMicSource
+            sources.append(MacFeishuMicSource('mic'))
+        else:
+            sources.append(MicSource('mic'))
     return sources
 
 

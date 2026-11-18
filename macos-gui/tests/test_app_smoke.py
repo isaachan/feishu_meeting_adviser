@@ -155,6 +155,18 @@ class AppSmokeTests(unittest.TestCase):
             self.assertTrue(selected[0]['recorder_command_args']['mic'])
             self.assertFalse(snapshot['sessions'][0]['recorder_command_args']['mic'])
 
+    def test_mac_mic_selection_is_explicit(self):
+        with patch('macos_gui.ui.pages.sys.platform', 'darwin'):
+            page = ListPage()
+            page.update_sessions(self.client.sessions_payload)
+            page.session_list.setCurrentRow(0)
+            selected = []
+            page.start_capture.connect(selected.append)
+            self.assertTrue(page.mic_checkbox.isVisibleTo(page))
+            page.mic_checkbox.setChecked(True)
+            page._emit_start()
+            self.assertTrue(selected[0]['recorder_command_args']['mic'])
+
 
 class ScriptedClient:
     def __init__(self):

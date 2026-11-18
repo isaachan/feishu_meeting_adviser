@@ -174,6 +174,13 @@ class CaptureJobTests(unittest.TestCase):
         self.assertEqual([type(source).__name__ for source in sources],
                          ['WindowsLoopbackSource', 'WindowsMicSource'])
 
+    def test_mac_selects_mute_gated_microphone(self):
+        from macos_gui.capture import default_source_factory
+        with patch('macos_gui.capture.sys.platform', 'darwin'):
+            sources = default_source_factory(True)
+        self.assertEqual([type(source).__name__ for source in sources],
+                         ['SwiftLoopbackSource', 'MacFeishuMicSource'])
+
     def test_source_final_frame_is_drained_before_stream_end(self):
         class FinalFrameSource(FakeSource):
             def stop(self):

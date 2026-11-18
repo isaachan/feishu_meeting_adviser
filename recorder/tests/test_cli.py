@@ -10,6 +10,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from recorder.__main__ import build_parser, validate_args, EXIT_ARGS, EXIT_INTERRUPT
+from recorder.__main__ import sources_for_real
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[0]))
 from test_uplink import FakeIngest  # noqa: E402
@@ -47,6 +49,13 @@ class ValidateArgsTests(unittest.TestCase):
                 flags |= {a.dest for a in subparser._actions}
         self.assertNotIn('user_access_token', flags)
         self.assertNotIn('access_token', flags)
+
+    def test_mac_real_source_uses_feishu_mute_gate(self):
+        args = type('Args', (), {'mic': True})
+        with patch('recorder.__main__.sys.platform', 'darwin'):
+            sources = sources_for_real(args, Path('/tmp'))
+        self.assertEqual([type(source).__name__ for source in sources],
+                         ['SwiftLoopbackSource', 'MacFeishuMicSource'])
 
 
 class ReplayCliTests(unittest.TestCase):

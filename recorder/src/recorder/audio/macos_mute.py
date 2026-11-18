@@ -94,29 +94,45 @@ class MacFeishuMuteDetector:
         self.apply(None, 'stopped', '检测已停止', False)
 
     def _loop(self):
+        proc = None
         try:
             binary = self.binary or ensure_helper_binary()
             if self._stop.is_set():
                 return
-            with subprocess.Popen([str(binary)], stdout=subprocess.PIPE,
-                                  stderr=subprocess.DEVNULL, text=True, bufsize=1) as proc:
-                self._proc = proc
-                assert proc.stdout is not None
-                for line in proc.stdout:
-                    if self._stop.is_set():
-                        break
-                    try:
-                        row = json.loads(line)
-                        muted = row.get('muted')
-                        if muted is not None and type(muted) is not bool:
-                            raise ValueError('invalid mute reading')
-                        self.apply(muted, str(row.get('source', 'unknown')),
-                                   str(row.get('detail', '')), bool(row.get('in_meeting', False)))
-                    except (ValueError, TypeError) as exc:
-                        self.apply(None, 'error', str(exc), False)
+            proc = subprocess.Popen([str(binary)], stdout=subprocess.PIPE,
+                                    stderr=subprocess.DEVNULL, text=True, bufsize=1)
+            self._proc = proc
+            if self._stop.is_set():
+                return
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                if self._stop.is_set():
+                    break
+                try:
+                    row = json.loads(line)
+                    muted = row.get('muted')
+                    if muted is not None and type(muted) is not bool:
+                        raise ValueError('invalid mute reading')
+                    self.apply(muted, str(row.get('source', 'unknown')),
+                               str(row.get('detail', '')), bool(row.get('in_meeting', False)))
+                except (ValueError, TypeError) as exc:
+                    self.apply(None, 'error', str(exc), False)
         except Exception as exc:
             self.apply(None, 'error', str(exc), False)
         finally:
+            if proc is not None:
+                if proc.poll() is None:
+                    try:
+                        proc.terminate()
+                    except ProcessLookupError:
+                        pass
+                try:
+                    proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+                if proc.stdout is not None:
+                    proc.stdout.close()
             self._proc = None
             if not self._stop.is_set():
                 self.apply(None, 'error', '检测进程已退出', False)

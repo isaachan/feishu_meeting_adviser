@@ -101,7 +101,7 @@ class ListPage(QWidget):
         self.session_list.itemSelectionChanged.connect(self._update_buttons)
         layout.addWidget(self.session_list)
         self.mic_checkbox = QCheckBox('采集本机麦克风（跟随飞书静音状态）')
-        self.mic_checkbox.setVisible(sys.platform == 'win32')
+        self.mic_checkbox.setVisible(sys.platform in ('win32', 'darwin'))
         layout.addWidget(self.mic_checkbox)
         footer = QHBoxLayout()
         self.status_label = QLabel('')
@@ -120,7 +120,7 @@ class ListPage(QWidget):
     def _emit_start(self):
         session = self._selected_session()
         if session is not None:
-            if sys.platform == 'win32':
+            if sys.platform in ('win32', 'darwin'):
                 session = dict(session)
                 session['recorder_command_args'] = dict(session['recorder_command_args'])
                 session['recorder_command_args']['mic'] = self.mic_checkbox.isChecked()

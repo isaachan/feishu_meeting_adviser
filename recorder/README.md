@@ -21,7 +21,9 @@ python3 -m venv ~/.huicanmou-recorder
 
 macOS Gatekeeper：whl 是纯 Python 包，不走公证流程；若 SCK helper 二进制被拦截，
 在"系统设置 → 隐私与安全性"允许，或预先设置 `RECORDER_SCK_BIN` 指向受信二进制。
-麦克风（可选）需在"隐私与安全性 → 麦克风"授权终端 App。
+麦克风（可选）需在“隐私与安全性 → 麦克风”授权运行 recorder 的 App；跟随飞书静音
+还需在“隐私与安全性 → 辅助功能”按首次运行提示授权检测程序。
+未授权、未找到飞书会议窗口或状态无法确认时，本机麦克风保持关闭。
 
 ## 使用
 
@@ -32,7 +34,8 @@ macOS Gatekeeper：whl 是纯 Python 包，不走公证流程；若 SCK helper �
   --url ws://<server>:8400/ingest --token 'st-xxxx' [--mic]
 ```
 
-- 远端回路常开；`--mic` 仅在明确开麦时出现（隐私默认关）。
+- 远端回路常开；`--mic` 仅在明确选择采集本机麦克风时出现（默认关）。
+  Mac 上开启后仅在飞书会议麦克风状态确认“开麦”时采集；静音时释放输入设备。
 - Ctrl-C 中断不会伪造干净收尾（缓冲保留待重连）；`--duration N` 到时干净停止。
 - 退出码：0 干净；2 参数/令牌非法；3 连接不可恢复；130 Ctrl-C。
 - 整场音频留存于 `--data-root（默认 ./data）/recorder/audio/<session>/`，手动清理。

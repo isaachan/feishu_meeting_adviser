@@ -31,7 +31,11 @@ def default_source_factory(mic_enabled: bool):
     from recorder.audio.sck_capture import SwiftLoopbackSource
     sources = [SwiftLoopbackSource('loopback')]
     if mic_enabled:
-        sources.append(MicSource('mic'))
+        if sys.platform == 'darwin':
+            from recorder.audio.macos_mic import MacFeishuMicSource
+            sources.append(MacFeishuMicSource('mic'))
+        else:
+            sources.append(MicSource('mic'))
     return sources
 
 
