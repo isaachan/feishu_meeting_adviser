@@ -245,7 +245,7 @@ class FireRedSessionTests(unittest.TestCase):
         session.feed_samples(pcm16(1600))
         session.feed_samples(pcm16(800))
         self.assertEqual(self.vad.chunks, [512, 512, 512, 64,
-                                           512, 512, 256])
+                                           512, 288])
 
     def test_decode_ms_accumulates(self):
         ticks = iter([0.0, 0.25, 0.0, 0.75])
