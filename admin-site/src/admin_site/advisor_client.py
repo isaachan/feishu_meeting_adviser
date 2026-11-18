@@ -54,6 +54,10 @@ class AdvisorAdminClient:
     def admin_end_session(self, session_id):
         return self._call('POST', f'/admin/sessions/{session_id}/end')
 
+    def admin_session_transcript(self, session_id):
+        # §9.6: merged caption + LLM reply timeline for record export.
+        return self._call('GET', f'/admin/sessions/{session_id}/transcript')
+
     def admin_supervisors(self):
         return self._call('GET', '/admin/supervisors')
 

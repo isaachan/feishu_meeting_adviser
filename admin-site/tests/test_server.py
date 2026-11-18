@@ -29,6 +29,13 @@ class StubAdvisorHandler(BaseHTTPRequestHandler):
                                   'phase': 'running', 'started_at': 1762800000.0,
                                   'ended_at': None, 'nsdp_hold': False}]}
             self._reply(body)
+        elif self.path == '/admin/sessions/s-1/transcript':
+            self._reply({'session_id': 's-1', 'meeting_no': '123', 'title': '周会',
+                         'records': [
+                             {'type': 'human', 'time': 1762800010.0, 'speaker': None,
+                              'text': '我们过一下预算'},
+                             {'type': 'llm', 'time': 1762800015.0, 'speaker': 'LLM',
+                              'text': '建议补充预算数据'}]})
         elif self.path == '/admin/supervisors':
             self._reply({'supervisors': [{'login_name': 'kai.han', 'open_id': 'ou_C',
                                           'enabled': True, 'updated_at': 1762800000.0,
@@ -102,6 +109,13 @@ class AdminSiteBase(unittest.TestCase):
         with OPENER.open(request.Request(self.url(path), method='GET'), timeout=5) as response:
             return response.status, json.loads(response.read()), response.headers
 
+    def get_error(self, path):
+        try:
+            self.get(path)
+            self.fail('expected HTTPError')
+        except error.HTTPError as exc:
+            return exc.code, json.loads(exc.read())
+
     def post(self, path, body=b''):
         req = request.Request(self.url(path), data=body, method='POST')
         with OPENER.open(req, timeout=5) as response:
@@ -157,6 +171,18 @@ class SessionProxyTests(AdminSiteBase):
 
     def test_advisor_error_status_passthrough(self):
         status, body = self.post_error('/api/sessions/s-unknown/end')
+        self.assertEqual(status, 404)
+        self.assertEqual(body['error']['code'], 'not_found')
+
+    def test_transcript_proxied(self):
+        status, body, _ = self.get('/api/sessions/s-1/transcript')
+        self.assertEqual(status, 200)
+        self.assertEqual(body['session_id'], 's-1')
+        self.assertEqual([r['type'] for r in body['records']], ['human', 'llm'])
+        self.assertEqual(body['records'][0]['speaker'], None)
+
+    def test_transcript_unknown_session_passthrough(self):
+        status, body = self.get_error('/api/sessions/s-nope/transcript')
         self.assertEqual(status, 404)
         self.assertEqual(body['error']['code'], 'not_found')
 
