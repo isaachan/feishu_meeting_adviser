@@ -74,6 +74,14 @@
   #log-box pre { margin: 0; font-family: var(--mono); font-size: 12px; line-height: 1.55;
                  white-space: pre-wrap; word-break: break-all; color: #b7c4d4; }
   #empty { color: var(--dim); font-size: 13px; padding: 30px; text-align: center; }
+  td.ops { display: flex; gap: 6px; align-items: center; }
+  #export-menu { position: fixed; z-index: 30; display: flex; flex-direction: column;
+                  background: var(--panel); border: 1px solid var(--border);
+                  border-radius: 8px; padding: 4px; box-shadow: 0 6px 24px #0009; }
+  #export-menu button { background: none; border: none; color: var(--fg); cursor: pointer;
+                        text-align: left; padding: 6px 14px; border-radius: 6px;
+                        font-size: 13px; font-family: var(--mono); }
+  #export-menu button:hover { background: var(--bg); color: var(--accent); }
   .hidden { display: none !important; }
 </style>
 </head>
@@ -155,6 +163,11 @@
   </section>
 </main>
 
+<div id="export-menu" class="hidden">
+  <button data-format="json">导出 JSON</button>
+  <button data-format="txt">导出 TXT</button>
+</div>
+
 <script>
 'use strict';
 const $ = (id) => document.getElementById(id);
@@ -206,13 +219,17 @@ async function loadSessions(manual) {
       subsCell(s) +
       `<td>${fmtTs(s.started_at)}</td>` +
       `<td>${endText}</td>` +
-      `<td>${endable ? `<button class="btn danger" data-end="${s.session_id}" ` +
-        `data-title="${escapeHtml(s.title || s.session_id)}">结束</button>` : '—'}</td>`;
+      `<td class="ops"><button class="btn" data-export="${s.session_id}">导出文字记录</button>` +
+      (endable ? `<button class="btn danger" data-end="${s.session_id}" ` +
+        `data-title="${escapeHtml(s.title || s.session_id)}">结束</button>` : '') + '</td>';
     tbody.appendChild(tr);
   }
   $('empty').classList.toggle('hidden', rows.length > 0);
   for (const btn of tbody.querySelectorAll('button[data-end]')) {
     btn.onclick = () => endSession(btn.dataset.end, btn.dataset.title);
+  }
+  for (const btn of tbody.querySelectorAll('button[data-export]')) {
+    btn.onclick = () => openExportMenu(btn);
   }
 }
 
@@ -227,6 +244,64 @@ async function endSession(id, title) {
     banner('err', '停止失败：' + err.message);
   }
   loadSessions(false);
+}
+
+/* ---------------- transcript export ---------------- */
+let exportSessionId = null;
+
+function openExportMenu(btn) {
+  exportSessionId = btn.dataset.export;
+  const menu = $('export-menu');
+  const rect = btn.getBoundingClientRect();
+  menu.style.top = rect.bottom + 4 + 'px';
+  menu.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - 140)) + 'px';
+  menu.classList.remove('hidden');
+}
+
+function hideExportMenu() { $('export-menu').classList.add('hidden'); }
+
+async function exportTranscript(id, format) {
+  let data = null;
+  try {
+    const resp = await fetch(`api/sessions/${encodeURIComponent(id)}/transcript`);
+    data = await resp.json();
+    if (!resp.ok) throw new Error((data.error && data.error.message) || resp.status);
+  } catch (err) {
+    banner('err', '获取文字记录失败：' + err.message);
+    return;
+  }
+  const records = (data.records || []).map((r) => ({
+    time: r.time,
+    time_text: r.time == null ? null : new Date(r.time * 1000)
+      .toLocaleString('zh-CN', { hour12: false }),
+    speaker: r.type === 'llm' ? 'LLM' : (r.speaker || '未识别'),
+    text: r.text,
+  }));
+  let content, mime;
+  if (format === 'json') {
+    content = JSON.stringify({
+      session_id: data.session_id, meeting_no: data.meeting_no, title: data.title,
+      exported_at: new Date().toLocaleString('zh-CN', { hour12: false }),
+      records,
+    }, null, 2);
+    mime = 'application/json';
+  } else {
+    const head = [
+      `会参谋 · 文字记录`,
+      `会话 ${data.session_id} · 会议 ${data.meeting_no || '—'} · ${data.title || '无标题'}`,
+      `导出时间 ${new Date().toLocaleString('zh-CN', { hour12: false })} · 共 ${records.length} 条`,
+      '',
+    ];
+    content = head.concat(records.map((r) =>
+      `[${r.time_text || '时间未知'}] ${r.speaker}: ${r.text}`)).join('\n');
+    mime = 'text/plain';
+  }
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(new Blob([content], { type: mime + ';charset=utf-8' }));
+  link.download = `transcript-${id}.${format}`;
+  link.click();
+  URL.revokeObjectURL(link.href);
+  banner('ok', `已导出 ${id} 文字记录（${records.length} 条，${format.toUpperCase()}）`);
 }
 
 function setAdvisor(ok) {
@@ -469,6 +544,19 @@ $('pause').onclick = () => {
   if (!paused) flushPending();
 };
 $('clear').onclick = () => { $('log-pane').textContent = ''; pending = []; };
+for (const btn of document.querySelectorAll('#export-menu button')) {
+  btn.onclick = () => {
+    const id = exportSessionId;
+    const format = btn.dataset.format;
+    hideExportMenu();
+    if (id) exportTranscript(id, format);
+  };
+}
+document.addEventListener('click', (ev) => {
+  if (!$('export-menu').classList.contains('hidden')
+      && !ev.target.closest('#export-menu')
+      && !ev.target.closest('button[data-export]')) hideExportMenu();
+});
 
 buildLogTabs();
 showView('sessions');

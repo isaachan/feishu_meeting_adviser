@@ -342,3 +342,10 @@ class ConfigProxyTests(AdminSiteBase):
             html = response.read().decode('utf-8')
         for marker in ('tab-settings', 'view-settings', 'api/config', 'idle-save'):
             self.assertIn(marker, html)
+
+    def test_index_has_export_button_and_menu(self):
+        with OPENER.open(self.url('/'), timeout=5) as response:
+            html = response.read().decode('utf-8')
+        for marker in ('导出文字记录', 'export-menu', 'data-format="json"',
+                       'data-format="txt"', '/transcript', '未识别'):
+            self.assertIn(marker, html)
