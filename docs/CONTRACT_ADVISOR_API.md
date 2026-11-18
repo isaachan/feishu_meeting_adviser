@@ -1,5 +1,7 @@
 # Advisor 内部 API 契约（bot ↔ advisor）
 
+> **v2.3（2026-11-18）**：§9.6 新增会话文字记录导出 `GET /admin/sessions/{id}/transcript`（human + LLM 回答合并时间线，additive，仅 admin-site 使用）。
+>
 > **v2.0（2026-11-16，SM-01）**：状态机 v2 落契约——会话 phase `recording→running` 更名并新增 `paused`（语义见 [STATE_MACHINES](STATE_MACHINES.md) v2）；会话按**会议实例唯一**（`meeting_instance_key`），新增单人单占位；订阅新增 `expired`/`subscriber_cancelled`/`owner_revoked`、`requested` 可撤回、`owner_revoked` 后可重申；新增 §9.3/§9.4 supervisor（小C）名单配置面；§1.1 新增错误码；§8.3 GUI 面新增 `paused` 展示。不兼容变更（phase 更名、订阅语义）， advisor/bot/admin-site/macos-gui 同仓同步切换（§10）。
 >
 > **v1.6（2026-11-14）**：`POST /sessions` 入会前检查组织者飞书 OAuth、NSDP token、Jira PAT；缺失时一次返回所有缺失项及链接，bot 转发组织者，完成后重发入会。仅入会设此门，NSDP/Jira 在会中查询失败不暂停其他判断；不在建会时预取数据。飞书 token 可复用 GUI 授权；NSDP/Jira 在入会时仅检查是否已提交，使用时才验证。凭据服务不可用则拒绝入会。以下早期版本中相反的入会规则以本条为准。
@@ -370,6 +372,24 @@ v1 中「revoked 终态再申请 → 409」作废（已定 2026-11-16）；旧 `
 - 生效范围与 §9.4 同口径**不追溯**：仅对此后**新建**的会话生效（建会时把当时值持久化进会话行）；已建 running/paused/draining 会话保持建会时的值。bot 建会提醒话术中的「900 秒」为默认业务口径文案，修改本配置不改话术（已知差异）。
 - 与 §9 同端口、同无认证、同 localhost/受信网络边界；仅 admin-site 使用。
 
+### 9.6 `GET /admin/sessions/{id}/transcript` —— 文字记录导出（v2.3 新增）
+
+→ 200：
+
+```json
+{"session_id": "s-3f9c", "meeting_no": "123456789", "title": "周会",
+ "records": [
+   {"type": "human", "time": 1762800123.4, "speaker": "本机", "text": "我们过一下预算"},
+   {"type": "human", "time": 1762800130.0, "speaker": null, "text": "好的"},
+   {"type": "llm", "time": 1762800135.2, "speaker": "LLM", "text": "建议补充预算数据…"}]}
+```
+
+- `records` 按 `time` 升序合并两类条目（`time` 为 Unix 秒，无法解析时为 `null`，排末尾）：
+  - `type=human`：会话 context 表中的 STT final（人说的话）。`time` 取 caption `end_time`（Unix 毫秒）折秒，缺失依次回退 `event_time` / `received_at`；`speaker` 取 `speaker_name`，缺失回退 `speaker_id`，均无为 `null`（admin-site 渲染为「未识别」；mic 源在 ingest 固定写 speaker_name）。
+  - `type=llm`：outbox 中 `kind=reply` 且 `channel=local` 的回答事实行（每条 answer 一行，天然去重 im 投递；owner notice 走 `channel=im` 不在此列）。`speaker` 恒为 `"LLM"`；`time` 取 `created_ns` 折秒。
+- 只读运维面：无 NSDP 门、无 owner 校验、无需幂等键；不存在的 session → 404 `not_found`。
+- 与 §9 同端口、同无认证、同 localhost/受信网络边界；仅 admin-site 使用（导出 JSON/TXT 文件）。
+
 ## 10. 版本
 
-API v1（响应体保留 `"api": 1` 字段位，首版不强制）；v1.1 NSDP 门；v1.2 GUI 面（§8）；v1.3 运维面（§9）；v1.4 §9.1 身份目录与订阅列表（依赖 CONTRACT_AUTH v1.3）；**v2.0（2026-11-16）状态机 v2**：phase 更名/新增 `paused`、实例唯一建会、单人单占位、订阅新状态与重申/撤回、§9.3/§9.4 supervisor 名单面、GUI §8.3 paused 展示；v2.1（2026-11-17）§9.4 bare login 优先按飞书 `user_id`（CONTRACT_AUTH v1.7）解析，email 兜底保留；**v2.2（2026-11-17）§9.5 运行时配置面：`idle_timeout_s` 运维可配（仅新会话生效）**（additive）。不兼容变更递增版本号并同步 bot/advisor/macos-gui/admin-site 侧实现、测试与 `integrations/` 用例；v2.0 为同仓整体切换（单机 `local-up` 一次拉起全部节点），无 v1/v2 双轨窗口。
+API v1（响应体保留 `"api": 1` 字段位，首版不强制）；v1.1 NSDP 门；v1.2 GUI 面（§8）；v1.3 运维面（§9）；v1.4 §9.1 身份目录与订阅列表（依赖 CONTRACT_AUTH v1.3）；**v2.0（2026-11-16）状态机 v2**：phase 更名/新增 `paused`、实例唯一建会、单人单占位、订阅新状态与重申/撤回、§9.3/§9.4 supervisor 名单面、GUI §8.3 paused 展示；v2.1（2026-11-17）§9.4 bare login 优先按飞书 `user_id`（CONTRACT_AUTH v1.7）解析，email 兜底保留；**v2.2（2026-11-17）§9.5 运行时配置面：`idle_timeout_s` 运维可配（仅新会话生效）**（additive）；**v2.3（2026-11-18）§9.6 会话文字记录导出面：`GET /admin/sessions/{id}/transcript`（human STT final + LLM 回答，additive）**。不兼容变更递增版本号并同步 bot/advisor/macos-gui/admin-site 侧实现、测试与 `integrations/` 用例；v2.0 为同仓整体切换（单机 `local-up` 一次拉起全部节点），无 v1/v2 双轨窗口。
