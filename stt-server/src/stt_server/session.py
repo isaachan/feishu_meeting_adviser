@@ -289,6 +289,13 @@ class FireRedSession:
         self._decode_ms += (self._clock() - started) * 1000
         return getattr(stream.result, 'text', '').strip()
 
+    def _feed_vad(self, samples) -> None:
+        # sherpa's silero VAD loses frames when fed chunks bigger than its
+        # window: feed it window_size slices regardless of batch size.
+        window = 512
+        for i in range(0, len(samples), window):
+            self._vad.accept_waveform(samples[i:i + window])
+
     def _drain(self) -> list[SttEvent]:
         events: list[SttEvent] = []
         vad = self._vad
@@ -307,7 +314,7 @@ class FireRedSession:
             raise RuntimeError('session not started')
         if not pcm or len(pcm) % 2:
             raise ValueError('pcm must be non-empty int16 frames')
-        self._vad.accept_waveform(self._samples(pcm))
+        self._feed_vad(self._samples(pcm))
         self._fed += len(pcm) // 2
         return self._drain()
 

@@ -92,9 +92,11 @@ class FakeVad:
         self.closed = []
         self.opened = None
         self.accepted = 0
+        self.chunks = []
 
     def accept_waveform(self, samples):
         self.accepted += len(samples)
+        self.chunks.append(len(samples))
 
     def empty(self):
         return not self.closed
@@ -237,6 +239,13 @@ class FireRedSessionTests(unittest.TestCase):
         session.feed_samples(pcm16(1600))
         session.feed_samples(pcm16(800))
         self.assertEqual(session.fed, 2400)
+
+    def test_vad_fed_in_window_slices(self):
+        session = self.make()
+        session.feed_samples(pcm16(1600))
+        session.feed_samples(pcm16(800))
+        self.assertEqual(self.vad.chunks, [512, 512, 512, 64,
+                                           512, 512, 256])
 
     def test_decode_ms_accumulates(self):
         ticks = iter([0.0, 0.25, 0.0, 0.75])
