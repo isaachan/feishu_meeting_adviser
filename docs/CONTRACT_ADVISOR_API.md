@@ -1,5 +1,7 @@
 # Advisor 内部 API 契约（bot ↔ advisor）
 
+> **v2.4（2026-11-18）**：§2/§3.0 occurrence 解析支持循环日程——飞书 events 列表返回系列 master（时间=第一场）与例外场而非展开场次，advisor 本地展开 RRULE 并按场次归并/绑定（实例 id `<uid>_<start>`）；同系列条目不再触发 `meeting_ambiguous`，循环会不再从会议列表消失。语义见 §2 新条目，响应结构不变（additive）。
+>
 > **v2.3（2026-11-18）**：§9.6 新增会话文字记录导出 `GET /admin/sessions/{id}/transcript`（human + LLM 回答合并时间线，additive，仅 admin-site 使用）。
 >
 > **v2.0（2026-11-16，SM-01）**：状态机 v2 落契约——会话 phase `recording→running` 更名并新增 `paused`（语义见 [STATE_MACHINES](STATE_MACHINES.md) v2）；会话按**会议实例唯一**（`meeting_instance_key`），新增单人单占位；订阅新增 `expired`/`subscriber_cancelled`/`owner_revoked`、`requested` 可撤回、`owner_revoked` 后可重申；新增 §9.3/§9.4 supervisor（小C）名单配置面；§1.1 新增错误码；§8.3 GUI 面新增 `paused` 展示。不兼容变更（phase 更名、订阅语义）， advisor/bot/admin-site/macos-gui 同仓同步切换（§10）。
@@ -24,7 +26,7 @@
 | `bad_message` | 字段非法/缺失 | 回用户"指令格式有误" |
 | `not_found` | 会话/订阅请求不存在；或订阅目标会议未命中 | 回用户"未找到该会议或会议已结束" |
 | `authorization_required` | 组织者凭据缺失/失效。飞书变体附 `authorize_url`；NSDP 变体（v1.1）附 `provider:"nsdp"` + `submit_url`（一次性提交链接，见 CONTRACT_AUTH §8） | 把授权链接/提交链接转发给小A（NSDP 变体用 NSDP 话术） |
-| `meeting_not_found` | 日历中无此会议 | 告知原因 |
+| `meeting_not_found` | 日历中无此会议，或该会议号无可解析场次（循环系列已结束/该场被删除） | 告知原因 |
 | `not_organizer` | 小A 非该日历事件组织者 | 告知原因 |
 | `outside_window` | 当前不在会议时间窗内 | 告知原因 |
 | `auth_unavailable` | 飞书/凭据服务不可达（fail-closed） | 提示稍后重试 |
@@ -32,7 +34,7 @@
 | `session_ended` / `session_draining` | 会话已结束/排空中，操作被拒 | 告知原因 |
 | `session_paused` | 会话 paused（owner 离会）暂停辅助中；仅 ingest 面使用（CONTRACT_RECORDER_STREAM v1.1），API 面以 `phase` 字段表达 | 告知原因（暂停中，owner 回会后恢复） |
 | `not_owner` | 操作者不是该会话/订阅的 owner | 回答"只有会话 owner 可以…" |
-| `meeting_ambiguous`（v2） | 同会议号在时间窗内命中多个候选场次，无法消歧 | 请用户稍后在目标场次时间窗内重试 |
+| `meeting_ambiguous`（v2） | 同会议号有多个**独立**场次同时覆盖当前时间窗（循环系列已按 occurrence 归并解析，同系列 master+例外场不算多场次），无法消歧 | 请用户稍后在目标场次时间窗内重试 |
 | `session_claimed`（v2） | 该实例已有**他人**的非 ended 会话（先到先得，归属不可转移） | 告知"该会议已由他人启动会参谋" |
 | `instance_ended`（v2） | 该实例已有会话且已 ended/draining（每实例一生一个 session，不可复建） | 告知"该场会议的辅助已结束，不可重新开始" |
 | `claim_conflict`（v2） | 申请人在其他非 ended 会话已有归属（owner 或订阅，requested 也算占位）；或 owner 申请订阅自己的会话 | 告知"你已归属另一场未结束的会议，先结束/退出后再试" |
@@ -63,7 +65,8 @@
     "url": "ws://server:8400/ingest", "token": "st-xxx", "mic": false}}
 ```
 
-- 语义（v2 准入链，顺序固定）：凭据门（同 v1.6）→ 解析目标 occurrence（owner 日历 ±12h 窗口内按 `meeting_no` 匹配；0 个 → `meeting_not_found`，>1 个 → `meeting_ambiguous`）→ 时间窗（±30min，`outside_window`）→ 准入（组织者身份命中走 A 路径；否则须在 supervisor 名单且命中该场邀请名单或本人组织者，见 §9.3；失败 → `not_organizer` / `not_supervisor` / `not_invited`）→ 实例与占位唯一（STATE_MACHINES §0：非 ended 同事件绑定会话 → 本人幂等 `existing:true` / 他人 `session_claimed`；精确 instance key 已有 ended/draining 会话 → `instance_ended`；本人已有其他非 ended 归属 → `claim_conflict`）→ 建会（phase=`running`，写 controller claim，材料 = 日历事件描述）→ 铸流令牌 → 监督器启动。命令文本由 bot 按模板渲染（附录见 CONTRACT_RECORDER_STREAM）；**响应中不得含任何用户凭据**。
+- 语义（v2 准入链，顺序固定）：凭据门（同 v1.6）→ 解析目标 occurrence（按 `meeting_no` 匹配并展开循环系列，见下条；0 个可解析场次 → `meeting_not_found`，多个独立场次覆盖当前窗 → `meeting_ambiguous`）→ 时间窗（±30min，`outside_window`）→ 准入（组织者身份命中走 A 路径；否则须在 supervisor 名单且命中该场邀请名单或本人组织者，见 §9.3；失败 → `not_organizer` / `not_supervisor` / `not_invited`）→ 实例与占位唯一（STATE_MACHINES §0：非 ended 同事件绑定会话 → 本人幂等 `existing:true` / 他人 `session_claimed`；精确 instance key 已有 ended/draining 会话 → `instance_ended`；本人已有其他非 ended 归属 → `claim_conflict`）→ 建会（phase=`running`，写 controller claim，材料 = 日历事件描述）→ 铸流令牌 → 监督器启动。命令文本由 bot 按模板渲染（附录见 CONTRACT_RECORDER_STREAM）；**响应中不得含任何用户凭据**。
+- 循环日程解析（v2.4，2026-11-18 小A daily 会 bug）：飞书 events 列表 API 返回系列 master（`<uid>_0`，start/end=**第一场**）与例外场（`<uid>_<original_time>`，`is_exception`/`recurring_event_id`），不展开场次且不限查询窗（anchor 语义）。advisor 本地展开 RRULE 子集（FREQ=DAILY/WEEKLY/MONTHLY/YEARLY + INTERVAL/COUNT/UNTIL/BYDAY(周)/BYMONTHDAY(月)），同系列条目归并：例外场按原槽位覆盖、取消的例外场=删除该场；"此日程及后续"拆分出的同号系列各自展开。绑定 occurrence 实例 id `<uid>_<start>`（对齐 legacy 方案 B materials.py 的实例规则）——同系列每场各占独立 `meeting_instance_key`，与 STATE_MACHINES §0 每场一会对齐。不支持的 RRULE（如 `FREQ=MONTHLY;BYDAY=2TU`）回退按第一场绑定（修复前行为）。
 - v2 提醒义务（bot 话术层，SM-12 落实）：建会成功回复须提示「建会后 900 秒内需开始采集，超时本场失效且不可重建」。
 - 凭据缺失/失效（409）：
 
@@ -86,7 +89,7 @@
   "is_organizer": true, "in_progress": false}]}
 ```
 
-- 时间窗：[now−30min, now+7d]，按 start 升序，至多 10 条；`meeting_no` 取自事件 `vchat.meeting_url`，无视频链接的事件为 `null`。
+- 时间窗：[now−30min, now+7d]，按 start 升序，至多 10 条；`meeting_no` 取自事件 `vchat.meeting_url`，无视频链接的事件为 `null`。循环日程按展开后的 occurrence 列出（v2.4，master 的第一场时间不再直接作为列表时间）。
 - 凭据缺失/失效 → 409 `authorization_required`（附 `authorize_url`，intent=`list:meetings`），与入会同门。
 - 只读，不建会话、不进模型上下文。
 
@@ -392,4 +395,4 @@ v1 中「revoked 终态再申请 → 409」作废（已定 2026-11-16）；旧 `
 
 ## 10. 版本
 
-API v1（响应体保留 `"api": 1` 字段位，首版不强制）；v1.1 NSDP 门；v1.2 GUI 面（§8）；v1.3 运维面（§9）；v1.4 §9.1 身份目录与订阅列表（依赖 CONTRACT_AUTH v1.3）；**v2.0（2026-11-16）状态机 v2**：phase 更名/新增 `paused`、实例唯一建会、单人单占位、订阅新状态与重申/撤回、§9.3/§9.4 supervisor 名单面、GUI §8.3 paused 展示；v2.1（2026-11-17）§9.4 bare login 优先按飞书 `user_id`（CONTRACT_AUTH v1.7）解析，email 兜底保留；**v2.2（2026-11-17）§9.5 运行时配置面：`idle_timeout_s` 运维可配（仅新会话生效）**（additive）；**v2.3（2026-11-18）§9.6 会话文字记录导出面：`GET /admin/sessions/{id}/transcript`（human STT final + LLM 回答，additive）**。不兼容变更递增版本号并同步 bot/advisor/macos-gui/admin-site 侧实现、测试与 `integrations/` 用例；v2.0 为同仓整体切换（单机 `local-up` 一次拉起全部节点），无 v1/v2 双轨窗口。
+API v1（响应体保留 `"api": 1` 字段位，首版不强制）；v1.1 NSDP 门；v1.2 GUI 面（§8）；v1.3 运维面（§9）；v1.4 §9.1 身份目录与订阅列表（依赖 CONTRACT_AUTH v1.3）；**v2.0（2026-11-16）状态机 v2**：phase 更名/新增 `paused`、实例唯一建会、单人单占位、订阅新状态与重申/撤回、§9.3/§9.4 supervisor 名单面、GUI §8.3 paused 展示；v2.1（2026-11-17）§9.4 bare login 优先按飞书 `user_id`（CONTRACT_AUTH v1.7）解析，email 兜底保留；**v2.2（2026-11-17）§9.5 运行时配置面：`idle_timeout_s` 运维可配（仅新会话生效）**（additive）；**v2.3（2026-11-18）§9.6 会话文字记录导出面：`GET /admin/sessions/{id}/transcript`（human STT final + LLM 回答，additive）**；**v2.4（2026-11-18）§2/§3.0 循环日程 occurrence 解析：RRULE 本地展开、同系列归并、实例 id `<uid>_<start>` 绑定（additive，响应结构不变）**。不兼容变更递增版本号并同步 bot/advisor/macos-gui/admin-site 侧实现、测试与 `integrations/` 用例；v2.0 为同仓整体切换（单机 `local-up` 一次拉起全部节点），无 v1/v2 双轨窗口。
