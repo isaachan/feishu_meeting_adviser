@@ -22,7 +22,7 @@ from macos_gui.api import ApiError
 if PYSIDE_READY:
     from PySide6.QtWidgets import QApplication
     from macos_gui.app import Controller, MainWindow
-    from macos_gui.ui.pages import ListPage, LoginPage, qr_pixmap
+    from macos_gui.ui.pages import ListPage, LoginPage, SettingsPage, qr_pixmap
 
 
 @unittest.skipUnless(PYSIDE_READY, 'PySide6/segno not installed')
@@ -59,11 +59,47 @@ class AppSmokeTests(unittest.TestCase):
 
     def test_save_server_moves_to_login_and_qr_shows(self):
         self.controller.do_boot()
-        self.controller._enter('settings')
+        self.controller.do_edit_server()
         self.controller.do_save_server('https://advisor.internal/')
         self.assertEqual(self.controller.state, 'login')
         self.assertIsInstance(self.current_page(), LoginPage)
         self.assertFalse(self.window.login_page.qr_label.pixmap().isNull())
+
+    def test_login_page_settings_entry(self):
+        self.controller.do_boot()
+        self.window.login_page.settings_clicked.emit()
+        self.assertIsInstance(self.current_page(), SettingsPage)
+
+    def test_list_settings_entry_keeps_token_when_url_unchanged(self):
+        config_mod.save_server_url(self.store, 'https://advisor.internal')
+        config_mod.save_device_token(self.store, 'dt-x')
+        self.controller.do_boot()
+        self.window.list_page.settings_clicked.emit()
+        self.assertIsInstance(self.current_page(), SettingsPage)
+        self.assertEqual(self.window.settings_page.url_edit.text(),
+                         'https://advisor.internal')
+        self.controller.do_save_server('https://advisor.internal/')
+        self.assertEqual(self.controller.state, 'listing')
+        self.assertEqual(config_mod.load_state(self.store)['device_token'],
+                         'dt-x')
+
+    def test_save_changed_server_url_clears_token_and_relogins(self):
+        config_mod.save_server_url(self.store, 'https://old.internal')
+        config_mod.save_device_token(self.store, 'dt-x')
+        self.controller.do_boot()
+        self.controller.do_edit_server()
+        self.controller.do_save_server('https://new.internal/')
+        self.assertEqual(self.controller.state, 'login')
+        self.assertEqual(self.controller.server_url, 'https://new.internal')
+        self.assertIsNone(config_mod.load_state(self.store)['device_token'])
+
+    def test_save_invalid_url_keeps_settings_page(self):
+        self.controller.do_boot()
+        self.controller.do_edit_server()
+        with self.assertRaises(ValueError):
+            self.controller.do_save_server('ftp://x')
+        self.assertEqual(self.controller.state, 'settings')
+        self.assertIsNone(config_mod.load_state(self.store)['server_url'])
 
     def test_full_state_machine_to_listing(self):
         config_mod.save_server_url(self.store, 'https://advisor.internal/')

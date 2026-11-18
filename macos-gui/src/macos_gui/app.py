@@ -24,7 +24,7 @@ CAPTURE_STATS_INTERVAL_MS = 1_000
 
 
 class Controller(QObject):
-    """Page state machine: settings -> login -> listing -> capturing."""
+    """Page state machine: settings (edit entry) / login -> listing -> capturing."""
 
     page_changed = Signal(str)          # settings|login|listing|capturing
     login_started = Signal(dict)        # {login_url, device_code, expires_at}
@@ -70,13 +70,24 @@ class Controller(QObject):
             self.token = state['device_token']
             self._enter('listing')
 
+    def do_edit_server(self):
+        """服务器设置入口（登录页/列表页）：采集中不可进入。"""
+        if self.capturing:
+            return
+        self._enter('settings')
+
     def do_save_server(self, url):
-        try:
-            config_mod.save_server_url(self.store, url)
-        except ValueError as exc:
-            raise ValueError(str(exc)) from None
+        """保存服务器地址：换址清除设备凭据并重新扫码；同址直接回列表。"""
+        previous = self.server_url
+        value = config_mod.save_server_url(self.store, url)
         self._connect()
+        if value == previous and self.token is not None:
+            self._enter('listing')
+            return value
+        config_mod.clear_device_token(self.store)
+        self.token = None
         self._start_login()
+        return value
 
     def do_start_login(self):
         self._connect()
@@ -277,6 +288,8 @@ class MainWindow(QMainWindow):
         controller.capture_stats.connect(self.monitor_page.update_stats)
         controller.capture_finished.connect(self._on_capture_finished)
         self.settings_page.saved.connect(self._save_server)
+        self.login_page.settings_clicked.connect(controller.do_edit_server)
+        self.list_page.settings_clicked.connect(controller.do_edit_server)
         self.login_page.regenerate.connect(
             lambda: controller.run_async(controller.do_start_login))
         self.list_page.refresh_clicked.connect(self._poll_sessions)
@@ -308,6 +321,9 @@ class MainWindow(QMainWindow):
         pages = {'settings': self.settings_page, 'login': self.login_page,
                  'listing': self.list_page, 'capturing': self.monitor_page}
         self.stack.setCurrentWidget(pages[state])
+        if state == 'settings':
+            self.settings_page.url_edit.setText(self.controller.server_url)
+            self.settings_page.show_error('')
         if state == 'login':
             self._login_timer.start()
         else:

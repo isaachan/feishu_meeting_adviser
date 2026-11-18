@@ -28,9 +28,9 @@ class SettingsPage(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel('会参谋服务器地址（一次性设置）'))
+        layout.addWidget(QLabel('会参谋服务器地址'))
         self.url_edit = QLineEdit()
-        self.url_edit.setPlaceholderText('https://adviser.example.internal')
+        self.url_edit.setPlaceholderText('http://meeting-advisor.nioint.com')
         layout.addWidget(self.url_edit)
         self.error_label = QLabel('')
         self.error_label.setStyleSheet('color: #b00')
@@ -49,6 +49,7 @@ class SettingsPage(QWidget):
 
 class LoginPage(QWidget):
     regenerate = Signal()
+    settings_clicked = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -62,9 +63,14 @@ class LoginPage(QWidget):
         layout.addWidget(self.link_label)
         self.status_label = QLabel('等待扫码…')
         layout.addWidget(self.status_label)
+        buttons = QHBoxLayout()
         refresh = QPushButton('刷新二维码')
         refresh.clicked.connect(self.regenerate.emit)
-        layout.addWidget(refresh)
+        buttons.addWidget(refresh)
+        settings = QPushButton('服务器设置')
+        settings.clicked.connect(self.settings_clicked.emit)
+        buttons.addWidget(settings)
+        layout.addLayout(buttons)
         layout.addStretch(1)
 
     def show_login(self, login_url, device_code):
@@ -82,6 +88,7 @@ class ListPage(QWidget):
     refresh_clicked = Signal()
     start_capture = Signal(dict)
     logout_clicked = Signal()
+    settings_clicked = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -90,6 +97,9 @@ class ListPage(QWidget):
         self.user_label = QLabel('')
         header.addWidget(self.user_label)
         header.addStretch(1)
+        settings = QPushButton('服务器设置')
+        settings.clicked.connect(self.settings_clicked.emit)
+        header.addWidget(settings)
         refresh = QPushButton('刷新')
         refresh.clicked.connect(self.refresh_clicked.emit)
         header.addWidget(refresh)
