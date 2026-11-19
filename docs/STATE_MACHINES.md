@@ -6,7 +6,7 @@
 
 - **会议实例（meeting instance）**：一场具体会议 = 会议号 + 权威日历 occurrence。`meeting_instance_key = "{meeting_no}|{event_calendar_id}|{event_id}|{occurrence_start_unix}"`，四段全部取自**同一权威 occurrence**（经 owner 用户 OAuth 读到的日历事件实例）；`occurrence_start_unix` 为该场次固定排期开始时刻。同号跨天、同日两场、跨时区均产生不同 key。
 - **每实例至多 1 个 session（含 ended）**；draining/ended 实例不可复建（含 900 秒无音频报废，业务已接受）。
-- **session owner**：合资格小A（该 occurrence 的日历组织者）或合资格小C（admin 名单 enabled + 该场日历邀请名单命中或本人组织者），先到先得、创建后固定不变。日历组织者不是 owner 时，对该 session 无任何权限（不能接管、不能订阅、其离会不影响 phase）。
+- **session owner**：合资格小A（该 occurrence 的日历组织者）或合资格小C（admin 名单 enabled + 该场日历邀请名单命中——直接受邀或为受邀群组成员（CONTRACT_ADVISOR_API v2.6）——或本人组织者），先到先得、创建后固定不变。日历组织者不是 owner 时，对该 session 无任何权限（不能接管、不能订阅、其离会不影响 phase）。
 - **单人单占位（SessionClaim）**：任一用户在**非 ended** 会话上至多 1 条 active claim（kind=controller 或 subscriber）；订阅 `requested` 即占位。denied / subscriber_cancelled / expired / owner_revoked / ended 释放；paused / draining 不释放。
 - **所有时限为配置项**（§5），除无音频 **900 秒**为业务定值外，其余默认值为工程初始值，不构成业务定值。
 - `uncertain` 不伪装已送达；`sent` 不可撤回；迟到结果不复活任何终态。

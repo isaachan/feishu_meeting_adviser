@@ -152,7 +152,7 @@ class BotService:
         if exc.code == 'not_supervisor':
             return '仅会议组织者或管理员授权的参会者可以启动会参谋'
         if exc.code == 'not_invited':
-            return '你不在该场会议的日历邀请名单中，无法启动会参谋'
+            return '你不在该场会议的日历邀请名单（直接或所在受邀群组）中，无法启动会参谋'
         if exc.code == 'outside_window':
             return '当前不在会议时间窗内'
         if exc.code == 'not_found':
