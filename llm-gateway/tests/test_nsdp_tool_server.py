@@ -35,6 +35,21 @@ class ToolServerTests(unittest.TestCase):
         self.assertTrue(result['isError'])
         self.assertEqual(result['content'][0]['text'], 'NSDP query failed: authorization_required')
 
+    def test_tool_duration_is_recorded_with_name_and_status(self):
+        recorded = []
+        msg = {'id': 1, 'method': 'tools/call', 'params': {
+            'name': 'lookup_release', 'arguments': {'release': 'BL1.5.0'}}}
+        handle(msg, owner='ou_a', query=Query(),
+               record=lambda tool, status, elapsed: recorded.append((tool, status, elapsed)))
+        self.assertEqual(recorded[0][0], 'meeting_nsdp_lookup_release')
+        self.assertEqual(recorded[0][1], 'ok')
+        self.assertGreaterEqual(recorded[0][2], 0)
+        failing = {'id': 2, 'method': 'tools/call', 'params': {
+            'name': 'lookup_release', 'arguments': {'release': 'missing'}}}
+        handle(failing, owner='ou_a', query=Query(),
+               record=lambda tool, status, elapsed: recorded.append((tool, status, elapsed)))
+        self.assertEqual(recorded[1][:2], ('meeting_nsdp_lookup_release', 'error'))
+
 
 if __name__ == '__main__':
     unittest.main()

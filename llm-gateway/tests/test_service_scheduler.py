@@ -203,6 +203,29 @@ class SchedulerTests(unittest.TestCase):
         self.assertIn('queued_ms', body['result']['timings'])
         self.assertIn('execution_ms', body['result']['timings'])
 
+    def test_stage_timings_and_tools_are_merged_into_task_timings(self):
+        class MeasuredBackend(FakeBackend):
+            def decide(self, *args, **kwargs):
+                self.stage_timings = {'process_start_ms': 50, 'decision_wait_ms': 900}
+                self.failed_stage = None
+                self.attempts = 1
+                self.tool_timings = [{'tool': 'meeting_jira_get_issue', 'status': 'ok',
+                                      'ms': 120, 'source': 'mcp'}]
+                self.resource_stats = {'peak_rss_kb': 12345, 'process_count': 3}
+                return super().decide(*args, **kwargs)
+
+        self.scheduler(lambda backend: MeasuredBackend())
+        self.service.submit(payload(metadata={'fake': {'behavior': 'ok', 'reply': 'x',
+                                                       'keys': ['s:1']}}))
+        row = self.wait_state('req-0001', 'succeeded')
+        timings = self.service.represent(row)['result']['timings']
+        self.assertEqual(timings['process_start_ms'], 50)
+        self.assertEqual(timings['decision_wait_ms'], 900)
+        self.assertNotIn('attempts', timings)
+        self.assertEqual(timings['tool_calls'][0]['tool'], 'meeting_jira_get_issue')
+        self.assertEqual(timings['peak_rss_kb'], 12345)
+        self.assertIn('finished_at', self.service.represent(row))
+
     def test_invalid_output_is_recorded_as_output_invalid(self):
         self.scheduler(lambda backend: FakeBackend())
         self.service.submit(payload(metadata={'fake': {'behavior': 'invalid'}}))

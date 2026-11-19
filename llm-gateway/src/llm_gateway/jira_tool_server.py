@@ -7,10 +7,11 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from urllib.parse import urlsplit
 
 from .nsdp_query import QueryError
-from .nsdp_tool_server import _OWNER, credential_provider
+from .nsdp_tool_server import _OWNER, credential_provider, timing_recorder
 
 _KEY = re.compile(r'[A-Za-z][A-Za-z0-9_]{0,63}-[0-9]{1,12}\Z')
 
@@ -90,7 +91,7 @@ _TOOLS = [
 ]
 
 
-def handle(message, *, owner, query):
+def handle(message, *, owner, query, record=None):
     if not isinstance(message, dict) or 'id' not in message:
         return None
     request_id, method = message['id'], message.get('method')
@@ -109,12 +110,17 @@ def handle(message, *, owner, query):
         if not isinstance(params, dict) or params.get('name') not in {t[0] for t in _TOOLS}:
             return {'jsonrpc': '2.0', 'id': request_id,
                     'error': {'code': -32602, 'message': 'unknown tool'}}
+        started = time.monotonic()
         try:
             text = query.execute(owner, params['name'], params.get('arguments', {}))
             result = {'content': [{'type': 'text', 'text': text}], 'isError': False}
+            if record is not None:
+                record('meeting_jira_' + params['name'], 'ok', time.monotonic() - started)
         except QueryError as exc:
             result = {'content': [{'type': 'text', 'text': 'Jira query failed: ' + exc.code}],
                       'isError': True}
+            if record is not None:
+                record('meeting_jira_' + params['name'], 'error', time.monotonic() - started)
     else:
         return {'jsonrpc': '2.0', 'id': request_id,
                 'error': {'code': -32601, 'message': 'method not found'}}
@@ -127,14 +133,17 @@ def main():
     parser.add_argument('--auth-url', required=True)
     parser.add_argument('--noam-bin', default='noam')
     parser.add_argument('--jira-url', default='')
+    parser.add_argument('--timing-file', default=None)
     args = parser.parse_args()
     if not _OWNER.fullmatch(args.owner):
         parser.error('invalid owner')
     query = JiraQuery(credential_provider(args.auth_url, 'jira'), url=args.jira_url,
                       noam_bin=args.noam_bin)
+    record = timing_recorder(args.timing_file)
     for line in sys.stdin:
         try:
-            response = handle(json.loads(line), owner=args.owner, query=query)
+            response = handle(json.loads(line), owner=args.owner, query=query,
+                              record=record)
             if response is not None:
                 print(json.dumps(response, ensure_ascii=False), flush=True)
         except (ValueError, TypeError):

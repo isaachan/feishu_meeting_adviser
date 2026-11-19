@@ -102,6 +102,40 @@ class OpenCodeBackendTests(unittest.TestCase):
         runs = list((self.root / 'runtime' / 'opencode').glob('run-*'))
         self.assertEqual(runs, [])
 
+    def test_stage_timings_are_recorded_for_the_sequential_chain(self):
+        backend = self.backend('reply')
+        self.decide(backend)
+        stages = backend.stage_timings
+        for name in ('process_start', 'verify_config', 'verify_agent', 'verify_mcp',
+                     'verify_provider', 'verify_tool', 'session_prepare',
+                     'prompt_submit', 'prompt_visible', 'decision_wait',
+                     'reply_validate'):
+            self.assertIn(name + '_ms', stages)
+            self.assertIsInstance(stages[name + '_ms'], int)
+        self.assertIsNone(backend.failed_stage)
+        self.assertEqual(backend.attempts, 1)
+
+    def test_skill_call_is_observed_through_polling(self):
+        backend = self.backend('skill-tool')
+        backend.decide('role', {'fresh_input_keys': ['s:1']}, deadline_seconds=8,
+                       stop_event=threading.Event(),
+                       metadata={'owner_open_id': 'ou_A'})
+        skill = [item for item in backend.tool_timings if item['tool'] == 'skill']
+        self.assertEqual(len(skill), 1)
+        self.assertEqual(skill[0]['status'], 'ok')
+        self.assertEqual(skill[0]['source'], 'poll')
+
+    def test_timeout_keeps_completed_stages_and_failed_stage(self):
+        backend = self.backend('timeout')
+        with self.assertRaises(BackendError) as caught:
+            self.decide(backend, deadline=1)
+        self.assertEqual(caught.exception.code, 'execution_timeout')
+        for name in ('process_start_ms', 'verify_config_ms', 'verify_agent_ms',
+                     'verify_mcp_ms', 'verify_provider_ms', 'verify_tool_ms',
+                     'session_prepare_ms', 'prompt_submit_ms', 'decision_wait_ms'):
+            self.assertIn(name, backend.stage_timings)
+        self.assertEqual(backend.failed_stage, 'decision_wait')
+
 
 if __name__ == '__main__':
     unittest.main()

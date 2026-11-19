@@ -2,12 +2,14 @@
 
 Port of the adviser-side execution invariants (deny-all config, private XDG
 stores, per-decision instance, guardian EOF kill) with gateway error codes.
+Stage timings follow docs/LLM_GATEWAY_PERFORMANCE_MEASUREMENT.md.
 """
 import base64
 import fnmatch
 import json
 import logging
 import os
+from contextlib import contextmanager
 from pathlib import Path
 import queue
 import re
@@ -54,6 +56,80 @@ class _TransportDisconnected(Exception):
 class _NoRedirect(request.HTTPRedirectHandler):
     def redirect_request(self, *args, **kwargs):
         return None
+
+
+def _parse_cputime(text: str) -> float:
+    days = 0
+    if '-' in text:
+        days_text, text = text.split('-', 1)
+        days = int(days_text)
+    parts = text.split(':')
+    if len(parts) == 2:
+        hours, minutes, seconds = 0, parts[0], parts[1]
+    elif len(parts) == 3:
+        hours, minutes, seconds = parts
+    else:
+        raise ValueError(text)
+    return days * 86400 + int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+
+
+class _ResourceSampler:
+    """Best-effort ps polling of the guardian process group (RSS/CPU/count)."""
+
+    INTERVAL_S = 0.25
+
+    def __init__(self, pgid: int):
+        self.pgid = pgid
+        self.stop_event = threading.Event()
+        self.peak_rss_kb = 0
+        self.max_processes = 0
+        self.cpu_seconds = None
+        self.failed = False
+        self.thread = threading.Thread(target=self._run, name='opencode-rss-sample',
+                                       daemon=True)
+
+    def _run(self):
+        while not self.stop_event.wait(self.INTERVAL_S):
+            try:
+                result = subprocess.run(['ps', '-eo', 'pgid=,rss=,time='],
+                                        capture_output=True, text=True, timeout=2)
+                if result.returncode != 0:
+                    raise OSError('ps failed')
+            except (OSError, ValueError, subprocess.SubprocessError):
+                self.failed = True
+                return
+            rss_sum = count = 0
+            cpu = 0.0
+            for line in result.stdout.splitlines():
+                fields = line.split()
+                if len(fields) < 3:
+                    continue
+                try:
+                    if int(fields[0]) != self.pgid:
+                        continue
+                    rss_sum += int(fields[1])
+                    cpu += _parse_cputime(fields[2])
+                except ValueError:
+                    continue
+                count += 1
+            if count:
+                self.peak_rss_kb = max(self.peak_rss_kb, rss_sum)
+                self.max_processes = max(self.max_processes, count)
+                self.cpu_seconds = cpu
+
+    def start(self):
+        self.thread.start()
+
+    def finish(self) -> dict:
+        self.stop_event.set()
+        self.thread.join(timeout=2)
+        if self.failed or not self.max_processes:
+            return {}
+        stats = {'peak_rss_kb': self.peak_rss_kb, 'process_count': self.max_processes,
+                 'rss_sample_interval_ms': int(self.INTERVAL_S * 1000)}
+        if self.cpu_seconds is not None:
+            stats['cpu_seconds'] = round(self.cpu_seconds, 3)
+        return stats
 
 
 def _clean_runtime(root, *, strict=False):
@@ -103,6 +179,91 @@ class OpenCodeBackend:
         self.tools: dict = {}
         self.tool_events: set[str] = set()
         self.logged_tools: set[str] = set()
+        self.stage_timings: dict[str, int] = {}
+        self.failed_stage: str | None = None
+        self.tool_timings: list[dict] = []
+        self.resource_stats: dict = {}
+        self.attempts = 0
+        self.timing_request_id: str | None = None
+        self._log_session_id: str | None = None
+        self._tool_obs: dict[str, dict] = {}
+        self._sampler: _ResourceSampler | None = None
+
+    # ---- measurement ----
+
+    @contextmanager
+    def _stage(self, name: str):
+        """Record one sequential stage; partial duration kept on failure."""
+        start = time.monotonic()
+        failed = False
+        try:
+            yield
+        except BaseException:
+            failed = True
+            self.failed_stage = name
+            raise
+        finally:
+            self.stage_timings[name + '_ms'] = int((time.monotonic() - start) * 1000)
+            event = {'event': 'stage', 'stage': name,
+                     'ms': self.stage_timings[name + '_ms']}
+            if self.timing_request_id is not None:
+                event['request_id'] = self.timing_request_id
+            if self._log_session_id is not None:
+                event['session_id'] = self._log_session_id
+            if failed:
+                event['failed'] = True
+            LOG.info('timing_event: %s', json.dumps(event, ensure_ascii=False))
+
+    def _reset_measurements(self):
+        self.stage_timings = {}
+        self.failed_stage = None
+        self.tool_timings = []
+        self.resource_stats = {}
+        self._tool_obs = {}
+        self._sampler = None
+
+    def _observe_tool_part(self, part):
+        """Poll-observed skill bounds; precision is the 0.2s message poll."""
+        if part.get('tool') != 'skill':
+            return
+        call_id = part.get('callID') or part.get('id')
+        state = part.get('state')
+        if not isinstance(call_id, str) or not isinstance(state, dict):
+            return
+        now = time.monotonic()
+        entry = self._tool_obs.setdefault(call_id, {'started': now, 'ended': None,
+                                                    'error': False})
+        if entry['ended'] is None and state.get('status') in ('completed', 'error'):
+            entry['ended'] = now
+            entry['error'] = state.get('status') == 'error'
+
+    def _read_tool_timing_file(self):
+        if self.runtime is None:
+            return
+        try:
+            lines = (self.runtime / 'tool-timings.jsonl').read_text().splitlines()
+        except OSError:
+            return
+        for line in lines:
+            try:
+                item = json.loads(line)
+            except ValueError:
+                continue
+            if (isinstance(item, dict) and isinstance(item.get('tool'), str)
+                    and isinstance(item.get('ms'), int)
+                    and item.get('status') in ('ok', 'error')
+                    and len(self.tool_timings) < 128):
+                self.tool_timings.append({'tool': item['tool'], 'status': item['status'],
+                                          'ms': item['ms'], 'source': 'mcp'})
+
+    def _finalize_measurements(self):
+        for entry in self._tool_obs.values():
+            if entry['ended'] is None or len(self.tool_timings) >= 128:
+                continue
+            self.tool_timings.append({'tool': 'skill',
+                                      'status': 'error' if entry['error'] else 'ok',
+                                      'ms': int((entry['ended'] - entry['started']) * 1000),
+                                      'source': 'poll'})
 
     # ---- lifecycle ----
 
@@ -157,15 +318,17 @@ class OpenCodeBackend:
         permission = {'*': 'deny'}
         mcp = {}
         if self.owner_open_id:
+            timing_file = str(self.runtime / 'tool-timings.jsonl')
             permission.update({'skill': 'allow', 'meeting_nsdp_*': 'allow', 'meeting_jira_*': 'allow'})
             mcp = {'meeting_nsdp': {'type': 'local', 'enabled': True,
                    'command': [sys.executable, '-m', 'llm_gateway.nsdp_tool_server',
                                '--owner', self.owner_open_id, '--auth-url', self.auth_url,
-                                '--noam-bin', self.noam_bin]},
+                               '--noam-bin', self.noam_bin, '--timing-file', timing_file]},
                    'meeting_jira': {'type': 'local', 'enabled': True,
                     'command': [sys.executable, '-m', 'llm_gateway.jira_tool_server',
                                 '--owner', self.owner_open_id, '--auth-url', self.auth_url,
-                                '--noam-bin', self.noam_bin, '--jira-url', self.jira_url]}}
+                                '--noam-bin', self.noam_bin, '--jira-url', self.jira_url,
+                                '--timing-file', timing_file]}}
         config = {
             'model': f'{self.provider}/{self.model_name}',
             'enabled_providers': [self.provider],
@@ -197,6 +360,8 @@ class OpenCodeBackend:
                                             env=env, bufsize=0, start_new_session=True)
         except OSError:
             raise BackendError('backend_unavailable') from None
+        self._sampler = _ResourceSampler(self.process.pid)
+        self._sampler.start()
         origins = queue.Queue(maxsize=1)
         stream = self.process.stdout
         if stream is None:
@@ -248,6 +413,9 @@ class OpenCodeBackend:
         if self.watcher:
             self.watcher.join(timeout=1)
             self.watcher = None
+        if self._sampler is not None:
+            self.resource_stats.update(self._sampler.finish() or {})
+            self._sampler = None
         process, self.process = self.process, None
         if process:
             if process.stdin:
@@ -265,6 +433,8 @@ class OpenCodeBackend:
             stdout = process.stdout
             if stdout:
                 stdout.close()
+        self._read_tool_timing_file()
+        self._finalize_measurements()
         if self.runtime and self.runtime.exists():
             _clean_runtime(self.workdir)
         self.runtime = self.origin = self.session_id = self.reader = None
@@ -305,66 +475,74 @@ class OpenCodeBackend:
     # ---- verification ----
 
     def _verify(self):
-        config = self._request('GET', '/config')
-        agents = self._request('GET', '/agent')
-        mcp = self._request('GET', '/mcp')
-        expected_permission = {'*': 'deny'}
-        if self.owner_open_id:
-            expected_permission.update({'skill': 'allow', 'meeting_nsdp_*': 'allow', 'meeting_jira_*': 'allow'})
-        if (not isinstance(config, dict) or config.get('permission') != expected_permission
-                or config.get('plugin') != [] or config.get('instructions') != []
-                or config.get('enabled_providers') != [self.provider]):
-            raise BackendError('backend_unavailable')
-        if self.owner_open_id:
-            if (not isinstance(mcp, dict) or set(mcp) != {'meeting_nsdp', 'meeting_jira'}
-                    or any(mcp.get(name, {}).get('status') != 'connected'
-                           for name in ('meeting_nsdp', 'meeting_jira'))):
+        with self._stage('verify_config'):
+            config = self._request('GET', '/config')
+            expected_permission = {'*': 'deny'}
+            if self.owner_open_id:
+                expected_permission.update({'skill': 'allow', 'meeting_nsdp_*': 'allow',
+                                            'meeting_jira_*': 'allow'})
+            if (not isinstance(config, dict) or config.get('permission') != expected_permission
+                    or config.get('plugin') != [] or config.get('instructions') != []
+                    or config.get('enabled_providers') != [self.provider]):
                 raise BackendError('backend_unavailable')
-        elif mcp != {}:
-            raise BackendError('backend_unavailable')
-        if not isinstance(agents, list):
-            raise BackendError('backend_unavailable')
-        agent = next((a for a in agents if isinstance(a, dict)
-                      and a.get('name') == AGENT), {})
-        rules = agent.get('permission')
-        if not isinstance(rules, list) or not rules:
-            raise BackendError('backend_unavailable')
-        catch_all = next((i for i in range(len(rules) - 1, -1, -1) if rules[i] ==
-                          {'permission': '*', 'pattern': '*', 'action': 'deny'}), None)
-        allowed_permissions = {'external_directory', 'skill', 'meeting_nsdp_*', 'meeting_jira_*'} if self.owner_open_id else {'external_directory'}
-        if catch_all is None or any(rule.get('permission') not in allowed_permissions
-                                    for rule in rules[catch_all + 1:]):
-            raise BackendError('backend_unavailable')
-        providers = self._request('GET', '/provider')
-        if not isinstance(providers, dict) or not isinstance(providers.get('all'), list):
-            raise BackendError('backend_unavailable')
-        provider = next((p for p in providers['all']
-                         if isinstance(p, dict) and p.get('id') == self.provider), {})
-        if self.model_name not in provider.get('models', {}):
-            raise BackendError('backend_unavailable')
-        if self.provider not in providers.get('connected', []):
-            raise BackendError('backend_unavailable')
-        tools = self._request('GET', '/experimental/tool/ids')
-        if not isinstance(tools, list) or any(not isinstance(tool, str) for tool in tools):
-            raise BackendError('backend_unavailable')
-        for tool in tools:
-            matching = [rule for rule in rules if isinstance(rule, dict)
-                        and fnmatch.fnmatchcase(tool, rule.get('permission', ''))]
-            expected = ('allow' if self.owner_open_id and
-                        (tool == 'skill' or fnmatch.fnmatchcase(tool, 'meeting_nsdp_*')
-                         or fnmatch.fnmatchcase(tool, 'meeting_jira_*')) else 'deny')
-            if not matching or matching[-1].get('action') != expected:
+        with self._stage('verify_agent'):
+            agents = self._request('GET', '/agent')
+            if not isinstance(agents, list):
                 raise BackendError('backend_unavailable')
-        self.tools = {tool: bool(self.owner_open_id and
-                      (tool == 'skill' or fnmatch.fnmatchcase(tool, 'meeting_nsdp_*')
-                       or fnmatch.fnmatchcase(tool, 'meeting_jira_*')))
-                      for tool in tools}
-        # OpenCode's tool/ids endpoint lists built-ins, not the connected MCP
-        # tools. The MCP server exposes exactly this one configured tool.
-        if self.owner_open_id:
-            self.tools['meeting_nsdp_lookup_release'] = True
-            for name in ('get_issue', 'search_issues', 'fields', 'projects'):
-                self.tools['meeting_jira_' + name] = True
+            agent = next((a for a in agents if isinstance(a, dict)
+                          and a.get('name') == AGENT), {})
+            rules = agent.get('permission')
+            if not isinstance(rules, list) or not rules:
+                raise BackendError('backend_unavailable')
+            catch_all = next((i for i in range(len(rules) - 1, -1, -1) if rules[i] ==
+                              {'permission': '*', 'pattern': '*', 'action': 'deny'}), None)
+            allowed_permissions = ({'external_directory', 'skill', 'meeting_nsdp_*',
+                                    'meeting_jira_*'} if self.owner_open_id
+                                   else {'external_directory'})
+            if catch_all is None or any(rule.get('permission') not in allowed_permissions
+                                        for rule in rules[catch_all + 1:]):
+                raise BackendError('backend_unavailable')
+        with self._stage('verify_mcp'):
+            mcp = self._request('GET', '/mcp')
+            if self.owner_open_id:
+                if (not isinstance(mcp, dict) or set(mcp) != {'meeting_nsdp', 'meeting_jira'}
+                        or any(mcp.get(name, {}).get('status') != 'connected'
+                               for name in ('meeting_nsdp', 'meeting_jira'))):
+                    raise BackendError('backend_unavailable')
+            elif mcp != {}:
+                raise BackendError('backend_unavailable')
+        with self._stage('verify_provider'):
+            providers = self._request('GET', '/provider')
+            if not isinstance(providers, dict) or not isinstance(providers.get('all'), list):
+                raise BackendError('backend_unavailable')
+            provider = next((p for p in providers['all']
+                             if isinstance(p, dict) and p.get('id') == self.provider), {})
+            if self.model_name not in provider.get('models', {}):
+                raise BackendError('backend_unavailable')
+            if self.provider not in providers.get('connected', []):
+                raise BackendError('backend_unavailable')
+        with self._stage('verify_tool'):
+            tools = self._request('GET', '/experimental/tool/ids')
+            if not isinstance(tools, list) or any(not isinstance(tool, str) for tool in tools):
+                raise BackendError('backend_unavailable')
+            for tool in tools:
+                matching = [rule for rule in rules if isinstance(rule, dict)
+                            and fnmatch.fnmatchcase(tool, rule.get('permission', ''))]
+                expected = ('allow' if self.owner_open_id and
+                            (tool == 'skill' or fnmatch.fnmatchcase(tool, 'meeting_nsdp_*')
+                             or fnmatch.fnmatchcase(tool, 'meeting_jira_*')) else 'deny')
+                if not matching or matching[-1].get('action') != expected:
+                    raise BackendError('backend_unavailable')
+            self.tools = {tool: bool(self.owner_open_id and
+                          (tool == 'skill' or fnmatch.fnmatchcase(tool, 'meeting_nsdp_*')
+                           or fnmatch.fnmatchcase(tool, 'meeting_jira_*')))
+                          for tool in tools}
+            # OpenCode's tool/ids endpoint lists built-ins, not the connected MCP
+            # tools. The MCP server exposes exactly this one configured tool.
+            if self.owner_open_id:
+                self.tools['meeting_nsdp_lookup_release'] = True
+                for name in ('get_issue', 'search_issues', 'fields', 'projects'):
+                    self.tools['meeting_jira_' + name] = True
 
     # ---- one decision ----
 
@@ -388,6 +566,7 @@ class OpenCodeBackend:
             if part.get('type') == 'tool' and self.owner_open_id:
                 if not self.tools.get(part.get('tool'), False):
                     raise BackendError('output_invalid')
+                self._observe_tool_part(part)
                 state = part.get('state')
                 if isinstance(state, dict) and state.get('status') in ('completed', 'error'):
                     call_id = part.get('callID') or part.get('id')
@@ -427,56 +606,70 @@ class OpenCodeBackend:
 
     def _decide_once(self, system, input_value):
         try:
-            self._start()
+            with self._stage('process_start'):
+                self._start()
             self._verify()
             permissions = [{'permission': '*', 'pattern': '*', 'action': 'deny'}]
             if self.owner_open_id:
                 permissions.extend([{'permission': 'skill', 'pattern': '*', 'action': 'allow'},
                                     {'permission': 'meeting_nsdp_*', 'pattern': '*', 'action': 'allow'},
                                     {'permission': 'meeting_jira_*', 'pattern': '*', 'action': 'allow'}])
-            session = self._request('POST', '/session', {
-                'title': 'Meeting decision',
-                'permission': permissions})
-            self.session_id = session.get('id') if isinstance(session, dict) else None
-            if (not isinstance(self.session_id, str)
-                    or not re.fullmatch(r'ses[A-Za-z0-9_-]{1,160}', self.session_id)):
-                raise BackendError('backend_unavailable')
+            with self._stage('session_prepare'):
+                session = self._request('POST', '/session', {
+                    'title': 'Meeting decision',
+                    'permission': permissions})
+                self.session_id = session.get('id') if isinstance(session, dict) else None
+                if (not isinstance(self.session_id, str)
+                        or not re.fullmatch(r'ses[A-Za-z0-9_-]{1,160}', self.session_id)):
+                    raise BackendError('backend_unavailable')
             message_id = None
-            self._request('POST', f'/session/{self.session_id}/prompt_async', {
-                'agent': AGENT,
-                'model': {'providerID': self.provider, 'modelID': self.model_name},
-                'system': system, 'tools': self.tools,
-                'parts': [{'type': 'text',
-                           'text': json.dumps(input_value, ensure_ascii=False)}]})
-            while True:
-                messages = self._request('GET', f'/session/{self.session_id}/message')
-                if not isinstance(messages, list):
-                    raise BackendError('output_invalid')
-                user_ids = {item['info'].get('id') for item in messages
-                            if isinstance(item, dict) and isinstance(item.get('info'), dict)
-                            and item['info'].get('role') == 'user'
-                            and item['info'].get('sessionID') == self.session_id}
-                if (len(user_ids) > 1 or any(not isinstance(value, str)
-                                             or not value.startswith('msg')
-                                             for value in user_ids)):
-                    raise BackendError('output_invalid')
-                if user_ids:
-                    current_id = next(iter(user_ids))
-                    if message_id is not None and current_id != message_id:
+            with self._stage('prompt_submit'):
+                self._request('POST', f'/session/{self.session_id}/prompt_async', {
+                    'agent': AGENT,
+                    'model': {'providerID': self.provider, 'modelID': self.model_name},
+                    'system': system, 'tools': self.tools,
+                    'parts': [{'type': 'text',
+                               'text': json.dumps(input_value, ensure_ascii=False)}]})
+            posted_at = time.monotonic()
+            decision = None
+            with self._stage('decision_wait'):
+                while decision is None:
+                    messages = self._request('GET', f'/session/{self.session_id}/message')
+                    if not isinstance(messages, list):
                         raise BackendError('output_invalid')
-                    message_id = current_id
-                decisions = [decision for message in messages
-                             if (decision := self._result(message, message_id)) is not None]
-                if len(decisions) > 1:
-                    raise BackendError('output_invalid')
-                if decisions:
-                    if self._request('DELETE', f'/session/{self.session_id}') is not True:
-                        raise BackendError('backend_unavailable')
-                    self.session_id = None
-                    return decisions[0]
-                assert self.stop_event is not None
-                deadline = self.deadline or time.monotonic()
-                self.stop_event.wait(min(0.2, max(0.0, deadline - time.monotonic())))
+                    user_ids = {item['info'].get('id') for item in messages
+                                if isinstance(item, dict) and isinstance(item.get('info'), dict)
+                                and item['info'].get('role') == 'user'
+                                and item['info'].get('sessionID') == self.session_id}
+                    if (len(user_ids) > 1 or any(not isinstance(value, str)
+                                                 or not value.startswith('msg')
+                                                 for value in user_ids)):
+                        raise BackendError('output_invalid')
+                    if user_ids:
+                        current_id = next(iter(user_ids))
+                        if message_id is not None and current_id != message_id:
+                            raise BackendError('output_invalid')
+                        message_id = current_id
+                        if 'prompt_visible_ms' not in self.stage_timings:
+                            self.stage_timings['prompt_visible_ms'] = int(
+                                (time.monotonic() - posted_at) * 1000)
+                    scan_started = time.monotonic()
+                    decisions = [item for message in messages
+                                 if (item := self._result(message, message_id)) is not None]
+                    if len(decisions) > 1:
+                        raise BackendError('output_invalid')
+                    if decisions:
+                        self.stage_timings['reply_validate_ms'] = int(
+                            (time.monotonic() - scan_started) * 1000)
+                        decision = decisions[0]
+                        continue
+                    assert self.stop_event is not None
+                    deadline = self.deadline or time.monotonic()
+                    self.stop_event.wait(min(0.2, max(0.0, deadline - time.monotonic())))
+            if self._request('DELETE', f'/session/{self.session_id}') is not True:
+                raise BackendError('backend_unavailable')
+            self.session_id = None
+            return decision
         except (TypeError, KeyError, AttributeError, ValueError):
             raise BackendError('output_invalid') from None
 
@@ -487,9 +680,11 @@ class OpenCodeBackend:
         self.logged_tools.clear()
         owner = metadata.get('owner_open_id')
         if owner is not None and (not isinstance(owner, str)
-                                  or not re.fullmatch(r'ou_[A-Za-z0-9_-]{1,128}', owner)):
+                                   or not re.fullmatch(r'ou_[A-Za-z0-9_-]{1,128}', owner)):
             raise BackendError('backend_unavailable')
         self.owner_open_id = owner
+        session_id = metadata.get('session_id')
+        self._log_session_id = session_id if isinstance(session_id, str) else None
         context = metadata.get('_gateway_context')
         if context is not None:
             input_value = dict(input_value)
@@ -497,6 +692,8 @@ class OpenCodeBackend:
         self.deadline = time.monotonic() + deadline_seconds
         try:
             for attempt in range(2):
+                self.attempts = attempt + 1
+                self._reset_measurements()
                 try:
                     return self._decide_once(system, input_value)
                 except _TransportDisconnected:

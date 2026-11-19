@@ -178,6 +178,8 @@ class GatewayService:
                         'model': row['model'],
                         'metadata': metadata},
         }
+        if row.get('finished_ns'):
+            value['finished_at'] = _iso(row['finished_ns'])
         if row['state'] == 'succeeded' and row['result']:
             value['result'] = {
                 'output': 'decision-v1',

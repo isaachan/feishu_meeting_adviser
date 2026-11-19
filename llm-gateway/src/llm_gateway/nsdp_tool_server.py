@@ -2,16 +2,37 @@
 
 The owner is supplied by the gateway, never by tool arguments. Credentials are
 fetched only on tool invocation and passed directly to the noam subprocess.
+Tool durations are appended to the gateway-provided timing file (name, status,
+ms only; never arguments or results).
 """
 import argparse
 import json
 import re
 import sys
+import time
+from pathlib import Path
 from urllib import error, parse, request
 
 from .nsdp_query import NsdpQuery, QueryError
 
 _OWNER = re.compile(r'ou_[A-Za-z0-9_-]{1,128}\Z')
+
+
+def timing_recorder(path: str | None):
+    """Append {'tool','status','ms'} JSON lines; failures never break serving."""
+    if not path:
+        return lambda tool, status, elapsed: None
+    target = Path(path)
+
+    def record(tool, status, elapsed):
+        try:
+            with target.open('a') as out:
+                out.write(json.dumps({'tool': tool, 'status': status,
+                                      'ms': int(elapsed * 1000)}) + '\n')
+        except OSError:
+            pass
+
+    return record
 
 
 def credential_provider(base_url, provider='nsdp'):
@@ -44,7 +65,7 @@ def credential_provider(base_url, provider='nsdp'):
     return get
 
 
-def handle(message, *, owner, query):
+def handle(message, *, owner, query, record=None):
     """Handle one MCP JSON-RPC request; notifications have no response."""
     if not isinstance(message, dict) or 'id' not in message:
         return None
@@ -71,12 +92,17 @@ def handle(message, *, owner, query):
         if not isinstance(args, dict) or set(args) != {'release'}:
             return {'jsonrpc': '2.0', 'id': request_id,
                     'error': {'code': -32602, 'message': 'invalid arguments'}}
+        started = time.monotonic()
         try:
             text = query.releases(owner, args['release'])
             result = {'content': [{'type': 'text', 'text': text}], 'isError': False}
+            if record is not None:
+                record('meeting_nsdp_lookup_release', 'ok', time.monotonic() - started)
         except QueryError as exc:
             result = {'content': [{'type': 'text', 'text': 'NSDP query failed: ' + exc.code}],
                       'isError': True}
+            if record is not None:
+                record('meeting_nsdp_lookup_release', 'error', time.monotonic() - started)
     else:
         return {'jsonrpc': '2.0', 'id': request_id,
                 'error': {'code': -32601, 'message': 'method not found'}}
@@ -88,13 +114,16 @@ def main():
     parser.add_argument('--owner', required=True)
     parser.add_argument('--auth-url', required=True)
     parser.add_argument('--noam-bin', default='noam')
+    parser.add_argument('--timing-file', default=None)
     args = parser.parse_args()
     if not _OWNER.fullmatch(args.owner):
         parser.error('invalid owner')
     query = NsdpQuery(credential_provider(args.auth_url), noam_bin=args.noam_bin)
+    record = timing_recorder(args.timing_file)
     for line in sys.stdin:
         try:
-            response = handle(json.loads(line), owner=args.owner, query=query)
+            response = handle(json.loads(line), owner=args.owner, query=query,
+                              record=record)
             if response is not None:
                 print(json.dumps(response, ensure_ascii=False), flush=True)
         except (ValueError, TypeError):
