@@ -44,6 +44,7 @@ app=$gui/dist/MeetingAdvisor.app
     "$app/Contents/Info.plist"
 
 arch=$(uname -m)
+rm -rf "$gui/dist/MeetingAdvisor"  # raw onedir COLLECT output; the .app is self-contained
 zip=$gui/dist/MeetingAdvisor-macos-$arch.zip
 rm -f "$zip"
 ditto -c -k --keepParent "$app" "$zip"
