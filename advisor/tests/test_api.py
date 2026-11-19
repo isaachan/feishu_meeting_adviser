@@ -180,6 +180,55 @@ class CAdmissionTests(ApiBase):
                                  key='c-organizer')
         self.assertEqual(status, 200)
 
+    # -- v2.6 (2026-11-19 bug): invite proof via an invited chat group --------
+
+    def group_occurrence(self, *, members=frozenset()):
+        self.calendar.occurrences['123456789'] = [
+            {'start_ts': 1762800000, 'organizer_open_id': 'ou_O',
+             'attendees': ['ou_X'],
+             'chat_attendee_ids': ['chat_1'],
+             'chat_members': {'chat_1': set(members)}}]
+
+    def test_group_member_supervisor_admitted(self):
+        # 小C 不在直接邀请名单，而是受邀群组成员：经群成员展开命中
+        self.group_occurrence(members={'ou_C', 'ou_OTHER'})
+        self.grant('ou_C')
+        status, body = self.join(owner='ou_C', key='c-group')
+        self.assertEqual(status, 200)
+        self.assertEqual(body['phase'], 'running')
+        row = self.store.require_session(body['session_id'])
+        self.assertEqual(row['owner_open_id'], 'ou_C')
+
+    def test_group_member_without_grant_rejected(self):
+        self.group_occurrence(members={'ou_B'})
+        status, body = self.post_error('/sessions',
+                                       {'owner_open_id': 'ou_B',
+                                        'meeting_ref': {'no': '123456789'}},
+                                       key='c-group-nogrant')
+        self.assertEqual((status, body['error']['code']), (409, 'not_supervisor'))
+
+    def test_granted_outside_invited_group_rejected(self):
+        self.group_occurrence(members={'ou_OTHER'})
+        self.grant('ou_C')
+        status, body = self.post_error('/sessions',
+                                       {'owner_open_id': 'ou_C',
+                                        'meeting_ref': {'no': '123456789'}},
+                                       key='c-outside-group')
+        self.assertEqual((status, body['error']['code']), (409, 'not_invited'))
+
+    def test_chat_expansion_failure_fails_closed(self):
+        self.group_occurrence(members={'ou_OTHER'})
+        self.grant('ou_C')
+
+        def boom(owner, binding, caller_ids):
+            raise CalendarError('auth_unavailable')
+        self.calendar.chat_member_hit = boom
+        status, body = self.post_error('/sessions',
+                                       {'owner_open_id': 'ou_C',
+                                        'meeting_ref': {'no': '123456789'}},
+                                       key='c-group-down')
+        self.assertEqual((status, body['error']['code']), (409, 'auth_unavailable'))
+
 
 class CreateSessionTests(ApiBase):
     def test_all_missing_credentials_are_reported_before_reusing_or_creating_session(self):

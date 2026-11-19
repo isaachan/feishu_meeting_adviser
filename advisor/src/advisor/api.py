@@ -35,14 +35,21 @@ class CalendarValidator:
         """Returns dict(event_calendar_id, event_id, title, description)."""
         raise NotImplementedError
 
+    def chat_member_hit(self, owner_open_id, binding, caller_ids) -> bool:
+        """v2.6: caller invited via a chat attendee (lazy expansion)."""
+        raise NotImplementedError
+
 
 class StubCalendarValidator(CalendarValidator):
     """Deterministic occurrence model for tests and the integration bed.
 
     ``occurrences`` maps meeting_no -> list of occurrence dicts
-    ({start_ts, organizer_open_id?, attendees?, title?, description?, event_id?}).
-    Default (no registry): one implicit occurrence per meeting_no that anyone
-    can organize (stub-first stages; preserves the pre-v2 stub behavior).
+    ({start_ts, organizer_open_id?, attendees?, chat_attendee_ids?,
+    chat_members?, title?, description?, event_id?}). ``chat_members`` maps
+    chat attendee_id -> member id collection for the v2.6 group-invite
+    admission path. Default (no registry): one implicit occurrence per
+    meeting_no that anyone can organize (stub-first stages; preserves the
+    pre-v2 stub behavior).
     """
 
     DEFAULT_START_TS = 1762800000
@@ -74,9 +81,19 @@ class StubCalendarValidator(CalendarValidator):
                 'organizer': organizer if organizer is not None else owner_open_id,
                 'organizer_ok': organizer_ok,
                 'attendees': attendees,
+                'chat_attendee_ids': list(occurrence.get('chat_attendee_ids') or ()),
+                'chat_members': {chat_id: set(members) for chat_id, members
+                                 in (occurrence.get('chat_members') or {}).items()},
                 'caller_ids': {owner_open_id},
                 'start': occurrence.get('start_ts', self.DEFAULT_START_TS),
                 'end': occurrence.get('start_ts', self.DEFAULT_START_TS) + 3600}
+
+    def chat_member_hit(self, owner_open_id, binding, caller_ids):
+        members_map = binding.get('chat_members') or {}
+        for attendee_id in binding.get('chat_attendee_ids') or ():
+            if set(members_map.get(attendee_id) or ()) & set(caller_ids):
+                return True
+        return False
 
     def list_meetings(self, owner_open_id, *, days=7, limit=10):
         now = int(time.time())
@@ -209,14 +226,16 @@ class AdvisorApi:
             raise ApiError(409, exc.code, 'calendar validation failed') from None
 
         # Admission (STATE_MACHINES v2 §0): A organizer path first, then the
-        # C path (enabled grant + invite-list hit on the same occurrence).
+        # C path (enabled grant + invite-list hit on the same occurrence,
+        # directly or via an invited chat group — v2.6).
         if not binding.get('organizer_ok', True):
             if owner not in self.store.enabled_supervisor_open_ids():
                 raise ApiError(409, 'not_supervisor',
                                'caller is neither the organizer nor a supervisor')
             attendees = binding.get('attendees') or set()
             caller_ids = binding.get('caller_ids') or {owner}
-            if not (attendees & caller_ids):
+            if not (attendees & caller_ids) \
+                    and not self._chat_invite_hit(owner, binding, caller_ids):
                 raise ApiError(409, 'not_invited',
                                'supervisor is not on this occurrence invite list')
 
@@ -258,6 +277,20 @@ class AdvisorApi:
                  session['session_id'], meeting_no, owner,
                  session['meeting_instance_key'], existing)
         return self._session_response(session, existing=existing)
+
+    def _chat_invite_hit(self, owner, binding, caller_ids):
+        """v2.6: invite proof via an invited chat group (lazy expansion).
+
+        Only reached when the organizer and direct-invite checks missed;
+        validators without chat attendees (empty chat_attendee_ids, the
+        pre-v2.6 shape) never trigger the expansion calls.
+        """
+        if not binding.get('chat_attendee_ids'):
+            return False
+        try:
+            return bool(self.calendar.chat_member_hit(owner, binding, caller_ids))
+        except CalendarError as exc:
+            raise ApiError(409, exc.code, 'calendar validation failed') from None
 
     def _session_response(self, session, existing=False):
         token_row = self.store.session_token(session['session_id'])
