@@ -36,6 +36,16 @@ class StubAdvisorHandler(BaseHTTPRequestHandler):
                               'text': '我们过一下预算'},
                              {'type': 'llm', 'time': 1762800015.0, 'speaker': 'LLM',
                               'text': '建议补充预算数据'}]})
+        elif self.path == '/admin/sessions/s-1/timings':
+            self._reply({'session_id': 's-1', 'meeting_no': '123', 'title': '周会',
+                         'jobs': [
+                             {'job_id': 'job-1', 'generation': 1, 'state': 'succeeded',
+                              'created_ns': 1762800010000000000,
+                              'timings': {'execution_ms': 900, 'process_start_ms': 300,
+                                          'decision_wait_ms': 500, 'request_id': 'req-1',
+                                          'end_to_end_ms': 1200}},
+                             {'job_id': 'job-2', 'generation': 2, 'state': 'pending',
+                              'created_ns': 1762800020000000000, 'timings': None}]})
         elif self.path == '/admin/supervisors':
             self._reply({'supervisors': [{'login_name': 'kai.han', 'open_id': 'ou_C',
                                           'enabled': True, 'updated_at': 1762800000.0,
@@ -183,6 +193,18 @@ class SessionProxyTests(AdminSiteBase):
 
     def test_transcript_unknown_session_passthrough(self):
         status, body = self.get_error('/api/sessions/s-nope/transcript')
+        self.assertEqual(status, 404)
+        self.assertEqual(body['error']['code'], 'not_found')
+
+    def test_timings_proxied(self):
+        status, body, _ = self.get('/api/sessions/s-1/timings')
+        self.assertEqual(status, 200)
+        self.assertEqual(len(body['jobs']), 2)
+        self.assertEqual(body['jobs'][0]['timings']['decision_wait_ms'], 500)
+        self.assertIsNone(body['jobs'][1]['timings'])
+
+    def test_timings_unknown_session_passthrough(self):
+        status, body = self.get_error('/api/sessions/s-nope/timings')
         self.assertEqual(status, 404)
         self.assertEqual(body['error']['code'], 'not_found')
 

@@ -220,6 +220,7 @@ async function loadSessions(manual) {
       `<td>${fmtTs(s.started_at)}</td>` +
       `<td>${endText}</td>` +
       `<td class="ops"><button class="btn" data-export="${s.session_id}">导出文字记录</button>` +
+      `<button class="btn" data-timings="${s.session_id}">耗时</button>` +
       (endable ? `<button class="btn danger" data-end="${s.session_id}" ` +
         `data-title="${escapeHtml(s.title || s.session_id)}">结束</button>` : '') + '</td>';
     tbody.appendChild(tr);
@@ -230,6 +231,9 @@ async function loadSessions(manual) {
   }
   for (const btn of tbody.querySelectorAll('button[data-export]')) {
     btn.onclick = () => openExportMenu(btn);
+  }
+  for (const btn of tbody.querySelectorAll('button[data-timings]')) {
+    btn.onclick = () => exportTimings(btn.dataset.timings);
   }
 }
 
@@ -302,6 +306,32 @@ async function exportTranscript(id, format) {
   link.click();
   URL.revokeObjectURL(link.href);
   banner('ok', `已导出 ${id} 文字记录（${records.length} 条，${format.toUpperCase()}）`);
+}
+
+async function exportTimings(id) {
+  let data = null;
+  try {
+    const resp = await fetch(`api/sessions/${encodeURIComponent(id)}/timings`);
+    data = await resp.json();
+    if (!resp.ok) throw new Error((data.error && data.error.message) || resp.status);
+  } catch (err) {
+    banner('err', '获取耗时数据失败：' + err.message);
+    return;
+  }
+  const measured = (data.jobs || []).filter((j) => j.timings);
+  const content = JSON.stringify({
+    session_id: data.session_id, meeting_no: data.meeting_no, title: data.title,
+    exported_at: new Date().toLocaleString('zh-CN', { hour12: false }),
+    jobs_total: (data.jobs || []).length, jobs_measured: measured.length,
+    jobs: data.jobs,
+  }, null, 2);
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(
+    new Blob([content], { type: 'application/json;charset=utf-8' }));
+  link.download = `timings-${id}.json`;
+  link.click();
+  URL.revokeObjectURL(link.href);
+  banner('ok', `已导出 ${id} 耗时数据（${measured.length}/${(data.jobs || []).length} 个任务）`);
 }
 
 function setAdvisor(ok) {

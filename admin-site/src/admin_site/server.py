@@ -99,6 +99,9 @@ def build_server(advisor: AdvisorAdminClient, logs_dir, *, host='127.0.0.1', por
             elif parsed.path.startswith('/api/sessions/') and parsed.path.endswith('/transcript'):
                 session_id = parsed.path[len('/api/sessions/'):-len('/transcript')]
                 self._proxy(lambda: advisor.admin_session_transcript(session_id))
+            elif parsed.path.startswith('/api/sessions/') and parsed.path.endswith('/timings'):
+                session_id = parsed.path[len('/api/sessions/'):-len('/timings')]
+                self._proxy(lambda: advisor.admin_session_timings(session_id))
             elif parsed.path == '/api/supervisors':
                 self._proxy(advisor.admin_supervisors)
             elif parsed.path == '/api/config':

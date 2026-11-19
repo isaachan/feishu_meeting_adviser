@@ -58,6 +58,10 @@ class AdvisorAdminClient:
         # §9.6: merged caption + LLM reply timeline for record export.
         return self._call('GET', f'/admin/sessions/{session_id}/transcript')
 
+    def admin_session_timings(self, session_id):
+        # §9.7: per-task stage timings for performance export.
+        return self._call('GET', f'/admin/sessions/{session_id}/timings')
+
     def admin_supervisors(self):
         return self._call('GET', '/admin/supervisors')
 
