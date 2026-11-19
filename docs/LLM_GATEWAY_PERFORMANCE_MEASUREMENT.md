@@ -1,48 +1,90 @@
-# LLM-Gateway 执行链性能测量方案
+# LLM-Gateway 任务耗时观测方案:advisor 提交 → 收到 reply
 
-状态：设计稿，待实现。目标是量化 OpenCode 冷启动、长期会话复用、skill/工具及模型推理各自的耗时，为是否自研轻量 agent 提供依据。本文没有实测结果，也不预设 OpenCode 一定是主要瓶颈。
+状态:设计稿,待实现。核心目标是把 advisor 从下发推理任务到收到 reply(或失败终态)的时间消耗拆解成可归因的阶段,量化 gateway 框架开销、模型推理、skill 与工具各自的占比,支撑后续优化决策(含是否自研轻量 agent)。本文没有实测结果,也不预设 OpenCode 一定是主要瓶颈。
 
-## 当前可观测性
+## 1. 端到端时间线(现状)
 
-gateway 的任务结果已有 `queued_ms` 与 `execution_ms`，advisor 日志记录提交至结果的总耗时。`execution_ms` 涵盖进程启动、配置核验、OpenCode session 创建、prompt 提交、skill/工具调用、模型推理及轮询，无法据此拆出瓶颈。现有本地日志没有足够的真实推理样本，不能给出可信的性能结论。
+一次决策的完整路径,即本文的分解对象:
 
-## 指标与计时边界
+```text
+advisor 决定调用模型
+  → POST /v1/inference-jobs            advisor 计时起点
+  → 任务持久化(SQLite,state=queued)
+  → worker 领取(next_queued)
+  → 启动 backend:guardian(python) → opencode(node),等待健康检查
+  → 配置核验(config/agent/mcp/provider/tool 五个 GET)
+  → 创建 session(POST /session)
+  → 提交 prompt(POST prompt_async)
+  → 模型推理 + skill/工具调用(gateway 每 0.2s 轮询 message)
+  → 输出校验 → 任务终态写入 store
+  → advisor 轮询发现终态(每 0.2s)→ 解析 Decision   advisor 计时终点
+```
 
-使用单调时钟记录阶段起止点，统一输出毫秒数；阶段可缺省，但不得用零值表示“没有测到”。至少记录：
+## 2. 现有可观测性与缺口
 
-| 指标 | 起点 → 终点 | 说明 |
+- gateway 已有 `queued_ms`(store 墙钟差)与 `execution_ms`(worker 单调钟);advisor 已记录 `elapsed_ms` 并把 gateway 的 timings 回传到 `metadata.remote_timings`。
+- 缺口:`execution_ms` 覆盖进程启动到终态的全部,无法拆分;工具调用无计时;日志非结构化,无法按任务重建时间线。
+
+## 3. 指标定义
+
+通用规则:同进程内一律单调时钟;阶段可缺省(省略字段),不得用零值表示"没测到";毫秒输出。每个指标须同时记录观测方法,凡靠轮询观测的边界须在报告标注量化精度(gateway 与 advisor 轮询周期均为 0.2s)。
+
+### 3.1 顺序段(之和应 ≤ execution_ms)
+
+| 指标 | 起点 → 终点 | 观测方法与说明 |
 |---|---|---|
-| `queue_ms` | 任务持久化 → worker 领取 | 与模型执行分开 |
-| `process_start_ms` | 请求启动 OpenCode → 健康检查通过 | 复用轮次标记 `process_reused=true`，此项不适用 |
-| `capability_verify_ms` | 首次配置/agent/MCP/provider/tool 核验开始 → 完成 | 保留失败阶段和错误码 |
-| `session_prepare_ms` | 创建或恢复 OpenCode session 开始 → 可提交 prompt | 标记 `session_reused`、`session_rebuilt` 与重建原因 |
-| `prompt_submit_ms` | 提交本轮 prompt 开始 → OpenCode 确认接收 | 不包含后续生成 |
-| `decision_wait_ms` | prompt 确认接收 → 本轮最终消息完成 | 包含模型生成和工具调用；不能直接命名为纯模型耗时 |
-| `tool_ms` | 单次受控工具调用开始 → 返回 | 按 `skill`、NSDP、Jira 分类；只记录名称、状态和耗时 |
-| `execution_ms` | worker 开始 → gateway 任务终态 | 与现有字段一致，校验分段之和不超出总耗时 |
-| `end_to_end_ms` | advisor 准备提交 → advisor 收到终态 | 含网络、排队、轮询和重试；与 gateway 内部时间区别展示 |
+| `end_to_end_ms` | advisor 发起提交 → 收到终态 | advisor 单调钟,对齐现有 `elapsed_ms`;含网络、排队、轮询、重试 |
+| `advisor_submit_ms` | 发起 POST → 收到响应 | advisor 侧;含网络 RTT |
+| `queue_ms` | 任务持久化 → worker 领取 | **墙钟例外**:store 的 `created_ns/started_ns` 即墙钟,任务可能跨 gateway 重启重新入队,单调钟无意义;保持现状并标注 |
+| `process_start_ms` | Popen guardian → `/global/health` 通过 | backend 内单调钟;含 guardian 启动与 stdout origin 解析(50ms 粒度) |
+| `verify_config_ms` / `verify_agent_ms` / `verify_mcp_ms` / `verify_provider_ms` / `verify_tool_ms` | 各 GET 发起 → 返回 | 五段分开;`/provider` 可能拉取远程模型目录,属网络开销而非框架开销,报告中单列 |
+| `session_prepare_ms` | POST /session → 拿到 session_id | backend 内 |
+| `prompt_submit_ms` | POST prompt_async 发起 → HTTP 返回 | backend 内。注意:OpenCode 无"确认接收"回执,POST 返回只代表请求被服务进程接受 |
+| `prompt_visible_ms` | prompt POST 返回 → 用户消息出现在 message 列表 | 轮询观测,±0.2s 量化;与 `prompt_submit_ms` 分开,不得合并解读 |
+| `decision_wait_ms` | prompt POST 返回 → 最终 assistant 消息 completed | 轮询观测,含 ≤0.2s 量化;包含模型生成与工具/skill 调用,不能当作纯模型耗时 |
+| `reply_validate_ms` | 拿到最终消息 → 决策 JSON 校验完成 | 通常可忽略,用于排除校验本身的开销 |
+| `finish_gap_ms` | 任务终态写库 → advisor 轮询发现 | advisor 与 gateway 时钟独立,用各自墙钟时间戳对齐;含 advisor 0.2s 轮询量化 |
 
-如 OpenCode 返回可验证的 token usage，另记本轮输入、输出及上下文 token；无法取得时标注 `unavailable`，不从字符数估算。记录进程峰值 RSS、CPU 时间、OpenCode 进程数和活跃会议数，以观察复用带来的资源成本。工具和模型耗时可能重叠，报告中不得把重叠段简单求和。
+顺序链校验:`process_start_ms + 五个 verify 段 + session_prepare_ms + prompt_submit_ms + decision_wait_ms + reply_validate_ms ≤ execution_ms`(容差取轮询粒度)。
 
-## 采集与隐私
+### 3.2 工具与 skill(与 decision_wait_ms 重叠,不参与顺序链校验,不得与模型耗时简单求和)
 
-任务结果 `timings` 保留低基数的阶段数字、布尔复用标记及失败阶段；原始观测事件进入 gateway 结构化日志，按任务 ID 与匿名会议关联键关联。日志不包含字幕、prompt、skill 正文、工具结果、组织者 token/PAT 或 OpenCode 凭据。会话 ID 与组织者 open_id 不作为高基数监控标签；按 backend、模型版本、冷/热启动、工具类型、成功/失败和输入规模分组汇总。
+| 指标 | 观测方法 | 精度 |
+|---|---|---|
+| `tool_ms`(NSDP/Jira) | 在 `nsdp_tool_server` / `jira_tool_server` 内部用单调钟记录每次调用;按工具名、状态分类 | 精确,不经轮询 |
+| `skill_ms` | skill 是 OpenCode 进程内行为,只能靠轮询 message 的 tool part 状态变迁观测 | ±0.2s 量化;调用本身 <1s 时相对误差大,报告中须注明 |
 
-对超时、取消、进程启动失败和工具授权失败也记录已完成阶段，避免只统计成功样本造成偏差。计时开销通过假后端和合成 OpenCode peer 验证，不能显著改变执行期限或结果语义。
+### 3.3 资源与 token
 
-## 对照实验
+- 进程树为 guardian(python) → opencode(node) → MCP server(python) → noam。macOS 无 /proc,峰值 RSS 与 CPU 用 `ps` 按固定间隔(建议 250ms)采样进程组;报告注明采样频率与峰值低估的可能;同时记录进程组存活进程数。
+- token usage:实现前先验证 OpenCode HTTP API 的 message/session 是否暴露可验证的 token 计数(独立小任务,半小时级)。可得则记每轮输入、输出及上下文 token;不可得标注 `unavailable`,禁止从字符数估算。
 
-在同一机器、同一 OpenCode/模型/skill 版本、同一权限和网络条件下，以脱敏的固定会议快照重复执行。每种场景至少 30 次有效样本，记录失败和重试数量；先预热网络与模型服务，再随机交错运行对照，避免时间段差异。
+## 4. 采集与隐私
 
-1. **冷启动基线**：现有每任务新进程、新 OpenCode session；分别测试无工具、加载 skill、NSDP 查询、Jira 查询。
-2. **会议内复用**：同一会议连续多轮，记录首轮与第 2、5、10 轮；对照相同轮次的冷启动执行。另测两个并发会议，确认串行等待与资源占用。
-3. **长会话**：增加字幕和工具历史至接近上下文预算，观察 token 增长、压缩/重建、延迟及输出有效率。
-4. **故障样本**：注入取消、超时、OpenCode 断连和 gateway 重启，记录恢复耗时及重复执行/重建次数。
+- 任务结果 `timings` 扩展为上述低基数阶段数字与失败阶段;`timings` 为 JSON 字段,向后兼容。advisor 经 `remote_timings` 自动透传,无需新契约。
+- 原始观测事件进入 gateway 结构化日志(JSON,带 `request_id`;会议关联用 metadata 中已有的 `session_id` 作为关联键,不作为监控标签)。advisor 侧对应记录 `end_to_end_ms` 及各衔接点。
+- 日志不包含字幕、prompt、skill 正文、工具结果、组织者 token/PAT 或 OpenCode 凭据。汇总分组仅用低基数维度:backend、模型版本、冷/热启动、工具类型、成功/失败、输入规模分桶。
+- 超时、取消、进程启动失败、工具授权失败同样记录已完成阶段,避免只统计成功样本。计时插桩先用 fake backend 与合成 OpenCode peer(`tests/helpers/fake_opencode_server.py` 已有)验证不改变执行期限与结果语义。
 
-报告每组的成功率、p50/p95 延迟、各阶段分布、token、峰值 RSS 与 CPU；同时列出样本数、环境版本和置信限制。只有相同输入与功能约束下的结果可以直接比较。真实 NSDP/Jira 后端波动大，报告中应把工具耗时单列。
+## 5. 分期实施
 
-## 决策与验收
+**一期:纯插桩,无行为变更(本方案主体)。** backend 阶段计时、verify 五段拆分、MCP server 工具计时、scheduler timings 扩展、gateway 结构化事件日志、advisor `elapsed_ms` 对齐命名、token 可得性验证。完成后每个任务可从结果与日志重建完整时间线,直接回答"时间花在哪里"。
 
-若复用后 `process_start_ms` 和 `capability_verify_ms` 消失，而 `decision_wait_ms` 仍占绝大部分，应优先优化 prompt、工具查询和上下文大小。若 OpenCode 的框架开销在热会话中仍稳定占显著比例，再为轻量 agent 做功能等价的原型对照；原型必须覆盖相同的 skill、工具权限、历史、取消及输出校验。决策以端到端 p95、成功率、资源消耗和维护复杂度共同判断，不只看单轮最快值。
+**二期:依赖会话/进程复用机制,另行立项。** `process_reused`、`session_reused`、`session_rebuilt` 标记,会议内多轮与长会话实验,均以前置的复用机制(见 `OPENCODE_MEETING_SESSION.md`,尚未实现)为前提,不在本方案范围内。注意:当前配置 `compaction.auto=false`,自动压缩不会触发,二期的上下文实验须先决定测手动重建还是调整配置。
 
-验收交付包括：可从任务结果及结构化日志重建阶段耗时、一次可复现的冷/热对照报告、异常样本清单，以及按上述指标写明是否值得启动轻量 agent 原型。报告应注明实际环境和日期，不用设计稿中的假设代替实测。
+## 6. 对照实验(一期)
+
+同一机器、同一 OpenCode/模型/skill/noam 版本、同一权限与网络条件;脱敏固定会议快照;先预热网络与模型服务,再随机交错运行对照。每组 ≥30 有效样本,记录失败与重试数量,并区分"被测系统失败"与"实验环境失败"(NSDP/Jira 限流、组织者授权过期)。预算:冷启动 4 场景 × 30 ≈ 120+ 次真实模型调用,实验前估算 token 成本。
+
+1. **冷启动基线**:现有每任务新进程;分别测无工具、加载 skill、NSDP 查询、Jira 查询。
+2. **并发**:两个并发会议,观察排队(`queue_ms`)与资源占用;现有 worker 池即可支持。
+3. **故障注入**:取消、超时、杀掉 opencode 进程(断连),记录已完成阶段与重试路径。
+
+报告每组成功率、p50/p95 延迟、各阶段分布、token(如可得)、峰值 RSS/CPU、样本数与环境版本;真实 NSDP/Jira 后端波动大,工具耗时单列;所有轮询观测指标注明量化精度。只有相同输入与功能约束下的结果可直接比较。
+
+## 7. 决策与验收
+
+- 若 `decision_wait_ms` 占 `end_to_end_ms` 绝大部分,应优先优化 prompt、上下文大小与工具查询,而非更换执行框架。
+- 若框架段(进程启动 + 核验)在全部样本中稳定占显著比例,再为轻量 agent 做功能等价原型对照;原型须覆盖相同 skill、工具权限、取消与输出校验。决策以端到端 p95、成功率、资源消耗和维护复杂度共同判断,不只看单轮最快值。
+
+验收交付:任务结果与结构化日志可重建阶段时间线;一次可复现的冷启动对照报告;异常样本清单;按上述指标写明优化优先级结论。报告注明实际环境与日期,不用设计稿假设代替实测。
