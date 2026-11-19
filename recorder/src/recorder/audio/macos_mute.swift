@@ -88,11 +88,11 @@ func accessibilitySample() -> (Bool?, String, Bool) {
     return (nil, foundMeeting ? "未找到可用的麦克风按钮" : "未找到飞书会议窗口", foundMeeting)
 }
 
-// If the accessibility label and the visible control disagree, close the mic
-// gate. Both observations can be unavailable; neither should invent a state.
+// A visible mute signal always closes the gate. AX alone cannot open it: Feishu
+// may expose an unrelated participant control while hiding the local mic.
 func reconciledMute(_ ax: Bool?, _ icon: Bool?) -> Bool? {
     if ax == true || icon == true { return true }
-    if ax == false || icon == false { return false }
+    if icon == false { return false }
     return nil
 }
 

@@ -67,7 +67,8 @@ class MacMuteDetectorTests(unittest.TestCase):
         cases = [(('false', 'true'), 'true'),
                  (('true', 'false'), 'true'),
                  (('false', 'false'), 'false'),
-                 (('false', 'unknown'), 'false'),
+                 (('false', 'unknown'), 'unknown'),
+                 (('unknown', 'false'), 'false'),
                  (('unknown', 'unknown'), 'unknown')]
         for inputs, expected in cases:
             with self.subTest(inputs=inputs):
