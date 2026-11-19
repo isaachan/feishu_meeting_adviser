@@ -31,7 +31,7 @@ tar xjf /tmp/stt-model.tar.bz2 -C models
 # 健康检查: curl http://127.0.0.1:8393/healthz
 ```
 
-切换到 FireRedASR2 只需把 `--model-dir` 指向该模型目录（本地栈即改 `scripts/local.env` 的 `STT_MODEL_DIR`），服务自动选引擎。FireRedASR2 额外需要 `silero_vad.onnx` 放在同目录（官方 GitHub release `asr-models/silero_vad.onnx`；网络不通时可用 modelscope 镜像 `xnnehang/k2-fsa-silero-vad`，实测 sha256 `9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6`，2026-11-18 本机冒烟通过：22.8s 测试音频 5 个 final、文本与离线 demo 一致、RTF≈0.17 @2 线程笔记本 CPU、sherpa-onnx 1.13.8 兼容）。注意 sherpa 的 silero VAD 必须按 512 样本窗口喂（session 内已处理），大块直喂会丢帧。
+切换到 FireRedASR2 只需把 `--model-dir` 指向该模型目录（本地栈即改 `scripts/local.env` 的 `STT_MODEL_DIR`），服务自动选引擎。FireRedASR2 额外需要 `silero_vad.onnx` 放在同目录（官方 GitHub release `asr-models/silero_vad.onnx`；网络不通时可用 modelscope 镜像 `xnnehang/k2-fsa-silero-vad`，实测 sha256 `9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6`，2026-11-18 本机冒烟通过：22.8s 测试音频 5 个 final、文本与离线 demo 一致、sherpa-onnx 1.13.8 兼容）。注意 sherpa 的 silero VAD 必须按 512 样本窗口喂（session 内已处理），大块直喂会丢帧。RTF 实测对比（同机同音频、2 线程笔记本 CPU，2026-11-19）：流式 transducer ≈0.043（输出带标点、英文小写），FireRedASR2 ≈0.17（无标点、英文全大写，慢约 4 倍），容量规划按此折算。
 
 - 每个音频源一条 WebSocket 连接（如 mic + loopback = 2 个会话）；`--max-sessions` 需 ≥ 同时在线客户端数 × 2。
 - CPU 参考：int8 模型每会话 RTF ≈ 0.1（2 线程）；8 会话 ≈ 需要约 2–4 核富余。
