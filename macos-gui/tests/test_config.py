@@ -1,6 +1,21 @@
+import sys
 import unittest
+from unittest import mock
 
 from macos_gui import config
+
+
+class _BrokenKeyring:
+    """Simulates keyring failures (e.g. packaged app rejected by Keychain ACL)."""
+
+    def get_password(self, service, key):
+        raise RuntimeError('keychain refused')
+
+    def set_password(self, service, key, value):
+        raise RuntimeError('keychain refused')
+
+    def delete_password(self, service, key):
+        raise RuntimeError('keychain refused')
 
 
 class MemoryStoreTests(unittest.TestCase):
@@ -43,6 +58,18 @@ class MemoryStoreTests(unittest.TestCase):
         self.assertEqual(store.get('server_url'), 'https://x')
         store.delete('server_url')
         self.assertIsNone(store.get('server_url'))
+
+    def test_keyring_failure_falls_back_without_crash(self):
+        store = config.KeyringConfigStore()
+        with mock.patch.dict(sys.modules, {'keyring': _BrokenKeyring()}):
+            self.assertIsNone(store.get('server_url'))  # used to AttributeError
+            store.set('device_token', 'dt-abc')
+            self.assertEqual(store.get('device_token'), 'dt-abc')
+            store.delete('device_token')
+            self.assertIsNone(store.get('device_token'))
+        # fallback is sticky after the first failure
+        store.set('server_url', 'https://y')
+        self.assertEqual(store.get('server_url'), 'https://y')
 
 
 if __name__ == '__main__':

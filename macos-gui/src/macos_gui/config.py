@@ -34,19 +34,23 @@ class MemoryConfigStore:
 class KeyringConfigStore:
     """OS keychain-backed store; falls back to memory when no backend exists."""
 
+    # keyring operation -> MemoryConfigStore method (APIs differ).
+    _FALLBACK_OPS = {'get_password': 'get', 'set_password': 'set',
+                     'delete_password': 'delete'}
+
     def __init__(self):
         self._fallback = MemoryConfigStore()
         self._use_keyring = True
 
     def _call(self, operation, key, *args):
         if not self._use_keyring:
-            return getattr(self._fallback, operation)(key, *args)
+            return getattr(self._fallback, self._FALLBACK_OPS[operation])(key, *args)
         import keyring
         try:
             return getattr(keyring, operation)(SERVICE, key, *args)
         except Exception:
             self._use_keyring = False
-            return getattr(self._fallback, operation)(key, *args)
+            return getattr(self._fallback, self._FALLBACK_OPS[operation])(key, *args)
 
     def get(self, key):
         return self._call('get_password', key)
