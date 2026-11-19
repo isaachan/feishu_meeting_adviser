@@ -28,7 +28,7 @@ def main() -> None:
     source = MacFeishuMicSource()
     source.start(sink)
     try:
-        for _ in range(40):
+        for _ in range(400):
             time.sleep(1)
             state = source.detector.get_state()
             with lock:
