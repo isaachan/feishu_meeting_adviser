@@ -37,6 +37,7 @@ func actionState(_ label: String) -> Bool? {
 func inspect(_ window: AXUIElement) -> (Bool, String)? {
     var queue: [(AXUIElement, Int)] = [(window, 0)]
     var index = 0
+    var liveLabel: String? = nil
     while index < queue.count && index < 600 {
         let (element, depth) = queue[index]
         index += 1
@@ -45,7 +46,10 @@ func inspect(_ window: AXUIElement) -> (Bool, String)? {
             for key in [kAXTitleAttribute, kAXDescriptionAttribute, kAXHelpAttribute] {
                 let label = stringAttribute(element, key)
                 if let muted = actionState(label) {
-                    return (muted, label)
+                    // Several controls may be exposed in one window. An
+                    // explicit mute action wins over an unrelated live one.
+                    if muted { return (true, label) }
+                    liveLabel = label
                 }
             }
         }
@@ -53,12 +57,13 @@ func inspect(_ window: AXUIElement) -> (Bool, String)? {
             queue.append(contentsOf: elements(element, kAXChildrenAttribute).map { ($0, depth + 1) })
         }
     }
-    return nil
+    return liveLabel.map { (false, $0) }
 }
 
 func accessibilitySample() -> (Bool?, String, Bool) {
     guard AXIsProcessTrusted() else { return (nil, "辅助功能未授权", false) }
     var foundMeeting = false
+    var liveLabel: String? = nil
     for bundle in meetingBundles {
         for app in NSRunningApplication.runningApplications(withBundleIdentifier: bundle) {
             let root = AXUIElementCreateApplication(app.processIdentifier)
@@ -73,12 +78,22 @@ func accessibilitySample() -> (Bool?, String, Bool) {
                 }
                 foundMeeting = true
                 if let (muted, label) = inspect(window) {
-                    return (muted, label, true)
+                    if muted { return (true, label, true) }
+                    liveLabel = label
                 }
             }
         }
     }
+    if let label = liveLabel { return (false, label, true) }
     return (nil, foundMeeting ? "未找到可用的麦克风按钮" : "未找到飞书会议窗口", foundMeeting)
+}
+
+// If the accessibility label and the visible control disagree, close the mic
+// gate. Both observations can be unavailable; neither should invent a state.
+func reconciledMute(_ ax: Bool?, _ icon: Bool?) -> Bool? {
+    if ax == true || icon == true { return true }
+    if ax == false || icon == false { return false }
+    return nil
 }
 
 struct IconStats {
@@ -165,12 +180,15 @@ func visualSample() async -> (Bool?, String, Bool) {
 
 func sample() async -> [String: Any] {
     let (axMuted, axDetail, axMeeting) = accessibilitySample()
-    if let muted = axMuted {
-        return ["muted": muted, "source": "meeting_button", "detail": axDetail, "in_meeting": true]
-    }
-    let (iconMuted, iconDetail, iconMeeting) = await visualSample()
-    if let muted = iconMuted {
-        return ["muted": muted, "source": "window_icon", "detail": iconDetail, "in_meeting": true]
+    // A confirmed mute needs no screenshot. An apparent unmute does: the AX
+    // tree can expose another meeting control before the currently visible one.
+    let (iconMuted, iconDetail, iconMeeting): (Bool?, String, Bool) = axMuted == true
+        ? (nil, "skipped", false) : await visualSample()
+    if let muted = reconciledMute(axMuted, iconMuted) {
+        return ["muted": muted, "source": "meeting_state",
+                "detail": "AX: \(axDetail); icon: \(iconDetail)", "in_meeting": true,
+                "ax_muted": axMuted as Any? ?? NSNull(),
+                "icon_muted": iconMuted as Any? ?? NSNull()]
     }
     let inMeeting = axMeeting || iconMeeting
     return ["muted": NSNull(), "source": inMeeting ? "unknown" : "none",
@@ -181,6 +199,17 @@ func sample() async -> [String: Any] {
 @main
 struct HelperMain {
     static func main() async {
+        if CommandLine.arguments.count == 4 && CommandLine.arguments[1] == "--check-decision" {
+            func parse(_ value: String) -> Bool? {
+                if value == "true" { return true }
+                if value == "false" { return false }
+                return nil
+            }
+            let result = reconciledMute(parse(CommandLine.arguments[2]),
+                                        parse(CommandLine.arguments[3]))
+            print(result.map(String.init) ?? "unknown")
+            return
+        }
         if CommandLine.arguments.count == 6 && CommandLine.arguments[1] == "--check-icon" {
             let url = URL(fileURLWithPath: CommandLine.arguments[2])
             if let source = CGImageSourceCreateWithURL(url as CFURL, nil),

@@ -18,7 +18,8 @@ from macos_gui.api import ApiError
 if PYSIDE_READY:
     from PySide6.QtWidgets import QApplication, QLabel, QPushButton
     from macos_gui.app import Controller, MainWindow
-    from macos_gui.ui.pages import DashboardPage, LoginPage, SettingsPage, qr_pixmap
+    from macos_gui.ui.pages import (DashboardPage, LoginPage, SettingsPage,
+                                    StatusOrb, qr_pixmap)
 
 
 @unittest.skipUnless(PYSIDE_READY, 'PySide6/segno not installed')
@@ -215,6 +216,23 @@ class AppSmokeTests(unittest.TestCase):
         buttons = [w.text() for w in self.window.dashboard_page.findChildren(QPushButton)]
         self.assertNotIn('采集', ' '.join(labels + buttons))
         self.assertNotIn('声音', ' '.join(labels + buttons))
+
+    def test_mute_slash_is_drawn_only_for_muted_state(self):
+        orb = StatusOrb()
+        orb.show()
+        self.addCleanup(orb.close)
+
+        def red_pixels(state):
+            orb.set_state('#38a976', show_mic=True, mic_state=state)
+            self.app.processEvents()
+            image = orb.grab().toImage()
+            return sum(1 for y in range(91, 130) for x in range(91, 130)
+                       if (pixel := image.pixelColor(x, y)).red() > 170 and
+                       pixel.red() > pixel.green() * 1.4 and
+                       pixel.red() > pixel.blue() * 1.4)
+
+        self.assertGreater(red_pixels('muted'), 20)
+        self.assertEqual(red_pixels('open'), 0)
 
 
 class ScriptedClient:

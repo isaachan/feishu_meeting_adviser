@@ -1,11 +1,12 @@
 import os
+import subprocess
 import sys
 import tempfile
 import time
 import unittest
 from pathlib import Path
 
-from recorder.audio.macos_mute import MacFeishuMuteDetector
+from recorder.audio.macos_mute import MacFeishuMuteDetector, ensure_helper_binary
 
 
 class MacMuteDetectorTests(unittest.TestCase):
@@ -59,6 +60,20 @@ class MacMuteDetectorTests(unittest.TestCase):
                 detector.stop()
             self.assertIsNotNone(proc)
             self.assertIsNotNone(proc.poll())
+
+    @unittest.skipUnless(sys.platform == 'darwin', 'Swift helper requires macOS')
+    def test_helper_prefers_mute_when_observations_conflict(self):
+        binary = ensure_helper_binary()
+        cases = [(('false', 'true'), 'true'),
+                 (('true', 'false'), 'true'),
+                 (('false', 'false'), 'false'),
+                 (('false', 'unknown'), 'false'),
+                 (('unknown', 'unknown'), 'unknown')]
+        for inputs, expected in cases:
+            with self.subTest(inputs=inputs):
+                output = subprocess.check_output(
+                    [str(binary), '--check-decision', *inputs], text=True)
+                self.assertEqual(output.strip(), expected)
 
 
 if __name__ == '__main__':
