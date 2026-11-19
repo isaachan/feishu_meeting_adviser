@@ -54,6 +54,13 @@ class FakeResponse:
         return False
 
 
+class Rejected:
+    """Scripted provider rejection (non-zero Feishu API code)."""
+
+    def __init__(self, code, status=403):
+        self.code, self.status = code, status
+
+
 class FakeHTTP:
     """Serves scripted responses by path; can reject a token once."""
 
@@ -77,6 +84,9 @@ class FakeHTTP:
             payload = {'items': [], 'has_more': False}  # default: no invitees
         if callable(payload):
             payload = payload(req)
+        if isinstance(payload, Rejected):
+            return FakeResponse({'code': payload.code, 'msg': 'rejected'},
+                                status=payload.status)
         return FakeResponse({'code': 0, 'data': payload})
 
 
@@ -379,13 +389,15 @@ class AttendeeFetchTests(unittest.TestCase):
             {'type': 'user', 'user_id': 'ou_A', 'rsvp_status': 'accept'},
             {'type': 'user', 'user_id': 'ou_OTHER', 'rsvp_status': 'needs_action'},
             {'type': 'user', 'user_id': 'ou_GONE', 'rsvp_status': 'removed'},
-            {'type': 'chat', 'chat_id': 'oc_x'},
+            {'type': 'chat', 'attendee_id': 'chat_x', 'chat_id': 'oc_x'},
+            {'type': 'chat', 'attendee_id': 'chat_gone', 'rsvp_status': 'removed'},
             {'type': 'resource', 'room_id': 'omp_x'},
         ], 'has_more': False}
         validator, http = self.make([event(organizer='ou_ORGANIZER')], pages_payload)
         binding = validator.validate('ou_A', {'no': MEETING_NO})
         self.assertFalse(binding['organizer_ok'])
         self.assertEqual(binding['attendees'], {'ou_A', 'ou_OTHER'})
+        self.assertEqual(binding['chat_attendee_ids'], ['chat_x'])
         self.assertIn('/open-apis/calendar/v4/calendars/cal_x/events/evt_1/attendees',
                       http.calls)
 
@@ -425,6 +437,128 @@ class AttendeeFetchTests(unittest.TestCase):
         self.assertEqual(binding['event_id'], f'cal_x/evt_d_{t.today}')
         self.assertEqual(binding['attendees'], {'ou_A'})
         self.assertIn(instance_path, http.calls)
+
+
+ATTENDEES_PATH = '/open-apis/calendar/v4/calendars/cal_x/events/evt_1/attendees'
+
+
+def chat_path(attendee_id):
+    return f'{ATTENDEES_PATH}/{attendee_id}/chat_members'
+
+
+class ChatExpansionTests(unittest.TestCase):
+    """v2.6 (2026-11-19 bug): a supervisor whose only invite proof is
+    membership in an invited chat group must hit via the dedicated
+    chat_members endpoint instead of being rejected not_invited."""
+
+    def make(self, attendee_items, chat_pages=None):
+        auth = FakeAuth()
+        pages_ = pages([event(organizer='ou_ORGANIZER')])
+        pages_[ATTENDEES_PATH] = {'items': attendee_items, 'has_more': False}
+        for path, payload in (chat_pages or {}).items():
+            pages_[path] = payload
+        http = FakeHTTP(pages_)
+        validator = FeishuCalendarValidator(auth, opener=http, clock=lambda: NOW)
+        binding = validator.validate('ou_A', {'no': MEETING_NO})
+        self.assertFalse(binding['organizer_ok'])
+        return validator, binding, http
+
+    def test_group_member_hits_via_chat_members(self):
+        attendee_items = [
+            {'type': 'user', 'user_id': 'ou_ORGANIZER'},
+            {'type': 'chat', 'attendee_id': 'chat_x', 'chat_id': 'oc_x'}]
+        validator, binding, http = self.make(
+            attendee_items, {chat_path('chat_x'): {
+                'items': [{'open_id': 'ou_OTHER'}, {'union_id': 'un_A'}],
+                'has_more': False}})
+        self.assertEqual(binding['attendees'], {'ou_ORGANIZER'})
+        self.assertTrue(validator.chat_member_hit('ou_A', binding,
+                                                  {'ou_A', 'un_A', 'ou_A_user'}))
+        self.assertIn(chat_path('chat_x'), http.calls)
+
+    def test_no_hit_returns_false(self):
+        validator, binding, _http = self.make(
+            [{'type': 'chat', 'attendee_id': 'chat_x'}],
+            {chat_path('chat_x'): {
+                'items': [{'open_id': 'ou_OTHER'}], 'has_more': False}})
+        self.assertFalse(validator.chat_member_hit('ou_A', binding, {'ou_A'}))
+
+    def test_removed_chat_member_not_counted(self):
+        validator, binding, _http = self.make(
+            [{'type': 'chat', 'attendee_id': 'chat_x'}],
+            {chat_path('chat_x'): {
+                'items': [{'open_id': 'ou_A', 'rsvp_status': 'removed'}],
+                'has_more': False}})
+        self.assertFalse(validator.chat_member_hit('ou_A', binding, {'ou_A'}))
+
+    def test_pagination_follows_until_hit(self):
+        def serve(req):
+            if 'page_token' not in req.selector:
+                return {'items': [{'open_id': 'ou_OTHER'}], 'has_more': True,
+                        'page_token': 'p1'}
+            return {'items': [{'user_id': 'ou_A'}], 'has_more': False}
+        validator, binding, http = self.make(
+            [{'type': 'chat', 'attendee_id': 'chat_x'}],
+            {chat_path('chat_x'): serve})
+        self.assertTrue(validator.chat_member_hit('ou_A', binding, {'ou_A'}))
+        self.assertEqual(http.calls.count(chat_path('chat_x')), 2)
+
+    def test_provider_rejection_skips_chat_and_tries_next(self):
+        # caller outside the chat / attendee list hidden: deterministic
+        # "no proof from this chat", never a fail-closed denial
+        validator, binding, http = self.make(
+            [{'type': 'chat', 'attendee_id': 'chat_1'},
+             {'type': 'chat', 'attendee_id': 'chat_2'}],
+            {chat_path('chat_1'): Rejected(194001),
+             chat_path('chat_2'): {'items': [{'open_id': 'ou_A'}],
+                                   'has_more': False}})
+        self.assertTrue(validator.chat_member_hit('ou_A', binding, {'ou_A'}))
+        self.assertIn(chat_path('chat_1'), http.calls)
+
+    def test_transport_failure_fails_closed(self):
+        def boom(_req):
+            raise OSError('network down')
+        validator, binding, _http = self.make(
+            [{'type': 'chat', 'attendee_id': 'chat_x'}],
+            {chat_path('chat_x'): boom})
+        with self.assertRaises(CalendarError) as ctx:
+            validator.chat_member_hit('ou_A', binding, {'ou_A'})
+        self.assertEqual(ctx.exception.code, 'auth_unavailable')
+
+    def test_truncation_fails_closed(self):
+        counter = {'n': 0}
+
+        def serve(_req):
+            counter['n'] += 1
+            return {'items': [{'open_id': 'ou_OTHER'}], 'has_more': True,
+                    'page_token': f'p{counter["n"]}'}
+        validator, binding, _http = self.make(
+            [{'type': 'chat', 'attendee_id': 'chat_x'}],
+            {chat_path('chat_x'): serve})
+        with self.assertRaises(CalendarError) as ctx:
+            validator.chat_member_hit('ou_A', binding, {'ou_A'})
+        self.assertEqual(ctx.exception.code, 'auth_unavailable')
+        self.assertEqual(counter['n'], 20)
+
+    def test_series_instance_uses_instance_id_for_members(self):
+        t = RecurringSeriesTests()
+        t.setUp()
+        series = t.master('evt_d_0', t.local_ts(2033, 5, 11, 11, 0))
+        series['event_organizer'] = {'user_id': 'ou_ORGANIZER'}
+        auth = FakeAuth()
+        pages_ = pages([series])
+        instance_path = (f'/open-apis/calendar/v4/calendars/cal_x/events/'
+                         f'evt_d_{t.today}/attendees')
+        pages_[instance_path] = {'items': [
+            {'type': 'chat', 'attendee_id': 'chat_x'}], 'has_more': False}
+        pages_[f'{instance_path}/chat_x/chat_members'] = {
+            'items': [{'open_id': 'ou_A'}], 'has_more': False}
+        http = FakeHTTP(pages_)
+        validator = FeishuCalendarValidator(auth, opener=http,
+                                            clock=lambda: t.now)
+        binding = validator.validate('ou_A', {'no': MEETING_NO})
+        self.assertTrue(validator.chat_member_hit('ou_A', binding, {'ou_A'}))
+        self.assertIn(f'{instance_path}/chat_x/chat_members', http.calls)
 
 
 if __name__ == '__main__':

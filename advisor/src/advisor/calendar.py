@@ -38,6 +38,8 @@ USER_INFO_PATH = '/open-apis/authen/v1/user_info'
 CALENDARS_PATH = '/open-apis/calendar/v4/calendars'
 EVENTS_PATH = '/open-apis/calendar/v4/calendars/{calendar_id}/events'
 ATTENDEES_PATH = '/open-apis/calendar/v4/calendars/{calendar_id}/events/{event_id}/attendees'
+CHAT_MEMBERS_PATH = ('/open-apis/calendar/v4/calendars/{calendar_id}/events/'
+                     '{event_id}/attendees/{attendee_id}/chat_members')
 LIST_RANGE_SECONDS = 12 * 3600
 WINDOW_SECONDS = 30 * 60
 MAX_RESPONSE_BYTES = 1 << 18
@@ -162,9 +164,18 @@ class FeishuCalendarValidator:
                     path, status, code, result.get('msg'),
                     (result.get('error') or {}).get('log_id')
                     if isinstance(result.get('error'), dict) else None)
-        raise CalendarError('auth_unavailable')
+        raise _ProviderRejected(code)
 
-    def _get(self, path, query, owner_open_id):
+    def _get(self, path, query, owner_open_id, *, soft=False):
+        """GET one API page with the owner's token (one silent refresh).
+
+        ``soft=True`` (v2.6 chat-member expansion) returns None on a
+        provider rejection instead of failing: Feishu rejects the
+        chat_members call for callers outside the invited chat or when the
+        event hides its attendee list — deterministic "this chat proves no
+        invite", not a retryable outage. Transport/auth-node failures stay
+        fail-closed (CalendarError auth_unavailable) either way.
+        """
         try:
             token = self.auth.get_token(owner_open_id)['access_token']
             try:
@@ -173,6 +184,12 @@ class FeishuCalendarValidator:
                 token = self.auth.get_token(owner_open_id, rejected_token=token)[
                     'access_token']
                 return self._request(path, query, token)
+        except _ProviderRejected as exc:
+            if soft:
+                LOG.info('calendar api rejected (soft): path=%s code=%s', path,
+                         exc.code)
+                return None
+            raise CalendarError('auth_unavailable') from None
         except AuthorizationRequired:
             # credentials vanished between the API precheck and here; the
             # client retries and gets a fresh authorization link next round.
@@ -225,9 +242,10 @@ class FeishuCalendarValidator:
         # returns attendees[]; the 小C invite-list admission path must fetch
         # the per-occurrence attendee list itself (organizers never need it).
         attendees = _attendee_ids(match)
+        chats: list[str] = []
         if not organizer_ok and not attendees:
-            attendees = self._occurrence_attendees(calendar_id, raw_id,
-                                                   owner_open_id)
+            attendees, chats = self._occurrence_attendees(calendar_id, raw_id,
+                                                          owner_open_id)
         # organizer_ok is returned, not raised: the admission decision
         # (A organizer path vs C grant+invite path) belongs to the caller
         # (STATE_MACHINES v2 §0 / CONTRACT_ADVISOR_API v2.0 §2).
@@ -238,6 +256,7 @@ class FeishuCalendarValidator:
                 'organizer': _organizer_id(match),
                 'organizer_ok': organizer_ok,
                 'attendees': attendees,
+                'chat_attendee_ids': chats,
                 'caller_ids': set(identities),
                 'start': start,
                 'end': end}
@@ -332,11 +351,13 @@ class FeishuCalendarValidator:
         return events
 
     def _occurrence_attendees(self, calendar_id, event_id, owner_open_id):
-        """User ids on one occurrence's invite list (paged).
+        """(user ids, chat attendee ids) on one occurrence's invite list.
 
         The events list API omits attendees[]; the dedicated endpoint carries
-        the id in ``user_id`` (type follows ``user_id_type``). Removed invitees
-        and non-user types (chat/room/third-party) carry no user id and are
+        user ids in ``user_id`` (type follows ``user_id_type``) and chat-type
+        (group) attendees as ``attendee_id`` (``chat_*``, per-occurrence
+        identifier used to expand members on the v2.6 admission path).
+        Removed invitees and other non-user types (room/third-party) are
         skipped. Transport/provider failure -> auth_unavailable (fail-closed,
         the caller is told to retry).
         """
@@ -344,6 +365,7 @@ class FeishuCalendarValidator:
             calendar_id=parse.quote(str(calendar_id), safe=''),
             event_id=parse.quote(str(event_id), safe=''))
         ids: set[str] = set()
+        chats: list[str] = []
         page_token = ''
         for page in range(1, ATTENDEE_PAGE_CAP + 1):
             query = {'user_id_type': 'open_id', 'page_size': 100}
@@ -358,19 +380,81 @@ class FeishuCalendarValidator:
                     continue
                 if item.get('rsvp_status') == 'removed':
                     continue
+                attendee_id = item.get('attendee_id')
+                if item.get('type') == 'chat' or (
+                        isinstance(attendee_id, str) and attendee_id.startswith('chat_')):
+                    if isinstance(attendee_id, str) and attendee_id:
+                        chats.append(attendee_id)
+                    continue
                 for key in ('user_id', 'open_id', 'union_id'):
                     candidate = item.get(key)
                     if isinstance(candidate, str) and ID_TEXT.fullmatch(candidate):
                         ids.add(candidate)
             if not (isinstance(data, dict) and data.get('has_more')):
-                return ids
+                return ids, chats
             token = data.get('page_token')
             if not isinstance(token, str) or not token:
-                return ids
+                return ids, chats
             page_token = token
         LOG.warning('attendee list truncated at %d pages: calendar=%s event=%s',
                     ATTENDEE_PAGE_CAP, calendar_id, event_id)
-        return ids
+        return ids, chats
+
+    def chat_member_hit(self, owner_open_id, binding, caller_ids):
+        """True when an invited chat's member list hits caller_ids (v2.6).
+
+        Lazy admission step (CONTRACT_ADVISOR_API v2.6): only called after
+        the organizer and direct-invite checks missed. Chat-type attendees
+        are expanded page by page via the dedicated chat_members endpoint
+        with the caller's own token; Feishu restricts that endpoint to
+        callers inside the chat, which is exactly the 小C group-invite
+        scenario (2026-11-19 bug). Provider rejections — caller outside the
+        chat, attendee list hidden by attendee_ability — mean no invite
+        proof from that chat: the next chat is tried. Transport/auth-node
+        failures and page-cap truncation fail closed as auth_unavailable
+        (truncation can only hide a true hit, never justify admission).
+        """
+        calendar_id = binding['event_calendar_id']
+        event_id = binding['event_id']
+        if '/' in event_id:  # binding carries 'calendar/event'; path needs raw
+            event_id = event_id.partition('/')[2]
+        caller = frozenset(caller_ids)
+        for attendee_id in binding.get('chat_attendee_ids') or ():
+            path = CHAT_MEMBERS_PATH.format(
+                calendar_id=parse.quote(str(calendar_id), safe=''),
+                event_id=parse.quote(str(event_id), safe=''),
+                attendee_id=parse.quote(str(attendee_id), safe=''))
+            page_token = ''
+            for page in range(1, ATTENDEE_PAGE_CAP + 1):
+                query = {'user_id_type': 'open_id', 'page_size': 100}
+                if page_token:
+                    query['page_token'] = page_token
+                result = self._get(path, query, owner_open_id, soft=True)
+                if result is None:
+                    break  # this chat proves nothing; try the next one
+                data = result.get('data')
+                items = data.get('items') if isinstance(data, dict) else None
+                if not isinstance(items, list):
+                    raise CalendarError('auth_unavailable')
+                for item in items:
+                    if not isinstance(item, dict) \
+                            or item.get('rsvp_status') == 'removed':
+                        continue
+                    for key in ('user_id', 'open_id', 'union_id'):
+                        candidate = item.get(key)
+                        if isinstance(candidate, str) and candidate in caller:
+                            return True
+                if not (isinstance(data, dict) and data.get('has_more')):
+                    break
+                page_token = data.get('page_token')
+                if not isinstance(page_token, str) or not page_token:
+                    break
+            else:
+                LOG.warning('chat member list truncated at %d pages: '
+                            'calendar=%s event=%s attendee=%s',
+                            ATTENDEE_PAGE_CAP, calendar_id, event_id, attendee_id)
+                raise CalendarError('auth_unavailable')
+        return False
 
 
 def _meeting_no(event: dict) -> str | None:
@@ -694,6 +778,14 @@ def _candidate_occurrences(events, meeting_no, lo, hi):
 
 
 class _TokenRejected(Exception):
+    def __init__(self, code):
+        self.code = code
+        super().__init__(str(code))
+
+
+class _ProviderRejected(Exception):
+    """Feishu answered with a non-zero API code (not a token problem)."""
+
     def __init__(self, code):
         self.code = code
         super().__init__(str(code))
