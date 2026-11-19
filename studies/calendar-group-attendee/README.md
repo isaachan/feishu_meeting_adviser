@@ -1,4 +1,4 @@
-# 日历群组参与人 × 小C 邀请名单准入调研（2026-11-19，文档结论已定，待实测）
+# 日历群组参与人 × 小C 邀请名单准入调研（2026-11-19，已按文档结论实现，live 验证待补）
 
 目标：小C 想入会，但 ta **不在日程的直接邀请名单里**，而是日程邀请的某个**群组**的成员——advisor 目前会拒绝（`not_invited`）。本调研判断该场景能否处理、用什么接口、改哪些模块，并用探针核实关键 API 事实。
 
@@ -103,5 +103,10 @@ python3 studies/calendar-group-attendee/probe_group_attendee.py 123456789
 ## 状态
 
 - [x] 文档调研与修复方案（本文）
-- [ ] live probe 实测（上列 5 问）
-- [ ] 结论回填本文 + 实现任务拆分进 `TODO.md`（advisor calendar/api + 契约 v2.6 + bot 文案 + 测试）
+- [x] **实现落地（2026-11-19，未经 live 验证）**，按推荐方案分四个 commit：
+  - `34f6f30` advisor calendar.py：`_occurrence_attendees` 返回 (user ids, chat attendee ids)；新增 `chat_member_hit`（chat_members 分页展开、soft 拒绝语义、截断 fail-closed）；`_get` 增加 `soft` 通道（provider 拒绝可返回 None）。
+  - `004d71b` advisor api.py：`create_session` 直接命中失败后经 `_chat_invite_hit` 懒展开；StubCalendarValidator 支持 `chat_attendee_ids`/`chat_members`。
+  - `b24ddcc` 契约 v2.6（CONTRACT_ADVISOR_API §2 / STATE_MACHINES §0 / REQUIREMENTS S6）+ bot `not_invited` 文案。
+  - 本 commit 回填调研状态。
+  - 单测：advisor 237 项（`test_ingest` 因环境缺 `websockets` 无法导入，与本次改动无关、修复前即失败）、bot 40 项全绿。
+- [ ] live probe 实测（上列 5 问）——实现完全基于官方文档口径，`chat_members` 的**真实错误码语义**（不在群内/attendee_ability 关闭时返回什么 code）与 id 字段名仍需实测确认；若实测发现确定性拒绝被误判为传输故障（表现为反复 `auth_unavailable`）或反之（不在群内却反复 soft 跳过导致正常 `not_invited` 之外的静默），回填本节并按需调整 soft 判定。
