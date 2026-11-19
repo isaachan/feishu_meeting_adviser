@@ -36,6 +36,8 @@ POST /v1/inference-jobs/{request_id}/cancel
 GET  /healthz
 ```
 
+任务响应与结果中的 `timings` 携带阶段耗时观测(定义见 [性能观测方案](../docs/LLM_GATEWAY_PERFORMANCE_MEASUREMENT.md)):`execution_ms`、`process_start_ms`、`verify_{config,agent,mcp,provider,tool}_ms`、`session_prepare_ms`、`prompt_submit_ms`、`prompt_visible_ms`、`decision_wait_ms`、`reply_validate_ms`、`tool_calls[]`(名称/状态/耗时/来源)、资源采样(`peak_rss_kb` 等)与 `failed_stage`/`attempts`;终态响应另有 `finished_at`(ISO 时间)。gateway 日志按 `timing_event: {json}` 行输出阶段与任务汇总事件(带 `request_id`,可关联 `session_id`)。
+
 默认限额：全局并发 4、队列 64、期限上限 120s、载荷 2 MiB、保留 24h；均可由启动参数覆盖。
 
 ## 开发与测试

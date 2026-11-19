@@ -83,7 +83,7 @@ class _ResourceSampler:
         self.stop_event = threading.Event()
         self.peak_rss_kb = 0
         self.max_processes = 0
-        self.cpu_seconds = None
+        self.cpu_seconds: float | None = None
         self.failed = False
         self.thread = threading.Thread(target=self._run, name='opencode-rss-sample',
                                        daemon=True)
@@ -125,8 +125,9 @@ class _ResourceSampler:
         self.thread.join(timeout=2)
         if self.failed or not self.max_processes:
             return {}
-        stats = {'peak_rss_kb': self.peak_rss_kb, 'process_count': self.max_processes,
-                 'rss_sample_interval_ms': int(self.INTERVAL_S * 1000)}
+        stats: dict[str, int | float] = {'peak_rss_kb': self.peak_rss_kb,
+                                         'process_count': self.max_processes,
+                                         'rss_sample_interval_ms': int(self.INTERVAL_S * 1000)}
         if self.cpu_seconds is not None:
             stats['cpu_seconds'] = round(self.cpu_seconds, 3)
         return stats

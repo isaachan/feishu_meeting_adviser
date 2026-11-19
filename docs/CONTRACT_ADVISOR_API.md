@@ -1,5 +1,7 @@
 # Advisor 内部 API 契约（bot ↔ advisor）
 
+> **v2.7（2026-11-19）**：§9.7 新增会话任务耗时导出 `GET /admin/sessions/{id}/timings`（每任务阶段 timings 明细，gateway 阶段 + advisor 衔接点，additive，仅 admin-site 使用；指标定义见 [LLM_GATEWAY_PERFORMANCE_MEASUREMENT](LLM_GATEWAY_PERFORMANCE_MEASUREMENT.md)）。同批非契约变更：gateway 任务响应新增 `finished_at`、`timings` 字段扩展（advisor 侧消费，不经本契约面）。
+>
 > **v2.6（2026-11-19）**：§2 小C 邀请名单语义扩展——邀请名单 = user 直接参与人 ∪ **受邀 chat（群组）参与人的群成员**。直接命中失败后，advisor 按场经专用接口 `GET /calendars/{id}/events/{event_id}/attendees/{attendee_id}/chat_members`（ attendee_id 为 attendees 接口返回的 `chat_*`）分页展开群成员匹配调用者身份；组织者路径与直接命中路径不发起该调用（沿用 v2.5 懒调用）。修复小C 是受邀群组成员却报 `not_invited`。失败语义：飞书侧确定性拒绝（调用者不在群内/参与人列表不可见）视为该群不构成邀请证明；传输/认证故障与分页截断 fail-closed 为 `auth_unavailable`。响应结构不变（additive）。调研：studies/calendar-group-attendee（live 验证待补）。
 >
 > **v2.5（2026-11-18）**：§2 小C 邀请名单数据源修正——飞书 events 列表 API 不返回 `attendees[]`，advisor 在非组织者路径按场经 attendees 专用接口拉取（`GET /calendars/{id}/events/{event_id}/attendees`，实例 id、分页、removed/非 user 类型剔除；失败 fail-closed 为 `auth_unavailable`）；组织者路径不增加调用。修复 supervisor 明明在参会人列表却报 `not_invited`。响应结构不变（additive）。
@@ -399,6 +401,31 @@ v1 中「revoked 终态再申请 → 409」作废（已定 2026-11-16）；旧 `
 - 只读运维面：无 NSDP 门、无 owner 校验、无需幂等键；不存在的 session → 404 `not_found`。
 - 与 §9 同端口、同无认证、同 localhost/受信网络边界；仅 admin-site 使用（导出 JSON/TXT 文件）。
 
+### 9.7 `GET /admin/sessions/{id}/timings` —— 任务耗时导出（v2.7 新增）
+
+→ 200：
+
+```json
+{"session_id": "s-3f9c", "meeting_no": "123456789", "title": "周会",
+ "jobs": [
+   {"job_id": "j-8f2a", "generation": 3, "state": "succeeded",
+    "created_ns": 1762800135000000000,
+    "timings": {"request_id": "req-c1a2", "end_to_end_ms": 8123, "advisor_submit_ms": 41,
+                "finish_gap_ms": 235, "execution_ms": 7800, "process_start_ms": 950,
+                "verify_config_ms": 12, "verify_agent_ms": 8, "verify_mcp_ms": 190,
+                "verify_provider_ms": 310, "verify_tool_ms": 9, "session_prepare_ms": 55,
+                "prompt_submit_ms": 30, "prompt_visible_ms": 210, "decision_wait_ms": 6012,
+                "reply_validate_ms": 3, "tool_calls": [
+                  {"tool": "meeting_nsdp_lookup_release", "status": "ok", "ms": 830,
+                   "source": "mcp"}],
+                "peak_rss_kb": 118000, "process_count": 4}}]}
+```
+
+- `jobs` 为该会话全部模型任务行，按 `created_ns` 升序；未到终态或后端无观测（如规则后端）的任务 `timings` 为 `null`。
+- `timings` = gateway 阶段数字（`execution_ms`、顺序段、`tool_calls`、资源采样、`failed_stage`/`attempts` 等见 [LLM_GATEWAY_PERFORMANCE_MEASUREMENT](LLM_GATEWAY_PERFORMANCE_MEASUREMENT.md) §3）+ advisor 衔接点（`end_to_end_ms`、`advisor_submit_ms`、`finish_gap_ms`）+ `request_id`（对账 gateway 结构化日志）。字段可缺省，零值不表示"未测到"。
+- 只读运维面：无 NSDP 门、无 owner 校验、无需幂等键；不存在的 session → 404 `not_found`。进行中会话可重复拉取（任务行随执行更新）。
+- 隐私边界：仅低基数阶段数字、工具名、状态与终态；不含字幕、prompt、skill 正文、reply 正文或任何凭据。与 §9 同端口、同无认证、同 localhost/受信网络边界；仅 admin-site 使用（导出 JSON 文件）。
+
 ## 10. 版本
 
-API v1（响应体保留 `"api": 1` 字段位，首版不强制）；v1.1 NSDP 门；v1.2 GUI 面（§8）；v1.3 运维面（§9）；v1.4 §9.1 身份目录与订阅列表（依赖 CONTRACT_AUTH v1.3）；**v2.0（2026-11-16）状态机 v2**：phase 更名/新增 `paused`、实例唯一建会、单人单占位、订阅新状态与重申/撤回、§9.3/§9.4 supervisor 名单面、GUI §8.3 paused 展示；v2.1（2026-11-17）§9.4 bare login 优先按飞书 `user_id`（CONTRACT_AUTH v1.7）解析，email 兜底保留；**v2.2（2026-11-17）§9.5 运行时配置面：`idle_timeout_s` 运维可配（仅新会话生效）**（additive）；**v2.3（2026-11-18）§9.6 会话文字记录导出面：`GET /admin/sessions/{id}/transcript`（human STT final + LLM 回答，additive）**；**v2.4（2026-11-18）§2/§3.0 循环日程 occurrence 解析：RRULE 本地展开、同系列归并、实例 id `<uid>_<start>` 绑定（additive，响应结构不变）**；**v2.5（2026-11-18）§2 小C 邀请名单按场经 attendees 接口拉取（additive）**；**v2.6（2026-11-19）§2 邀请名单扩展为直接参与人 ∪ 受邀群组成员（chat_members 按场展开，additive）**。不兼容变更递增版本号并同步 bot/advisor/macos-gui/admin-site 侧实现、测试与 `integrations/` 用例；v2.0 为同仓整体切换（单机 `local-up` 一次拉起全部节点），无 v1/v2 双轨窗口。
+API v1（响应体保留 `"api": 1` 字段位，首版不强制）；v1.1 NSDP 门；v1.2 GUI 面（§8）；v1.3 运维面（§9）；v1.4 §9.1 身份目录与订阅列表（依赖 CONTRACT_AUTH v1.3）；**v2.0（2026-11-16）状态机 v2**：phase 更名/新增 `paused`、实例唯一建会、单人单占位、订阅新状态与重申/撤回、§9.3/§9.4 supervisor 名单面、GUI §8.3 paused 展示；v2.1（2026-11-17）§9.4 bare login 优先按飞书 `user_id`（CONTRACT_AUTH v1.7）解析，email 兜底保留；**v2.2（2026-11-17）§9.5 运行时配置面：`idle_timeout_s` 运维可配（仅新会话生效）**（additive）；**v2.3（2026-11-18）§9.6 会话文字记录导出面：`GET /admin/sessions/{id}/transcript`（human STT final + LLM 回答，additive）**；**v2.4（2026-11-18）§2/§3.0 循环日程 occurrence 解析：RRULE 本地展开、同系列归并、实例 id `<uid>_<start>` 绑定（additive，响应结构不变）**；**v2.5（2026-11-18）§2 小C 邀请名单按场经 attendees 接口拉取（additive）**；**v2.6（2026-11-19）§2 邀请名单扩展为直接参与人 ∪ 受邀群组成员（chat_members 按场展开，additive）**；**v2.7（2026-11-19）§9.7 会话任务耗时导出面：`GET /admin/sessions/{id}/timings`（gateway 阶段 + advisor 衔接点，additive）**。不兼容变更递增版本号并同步 bot/advisor/macos-gui/admin-site 侧实现、测试与 `integrations/` 用例；v2.0 为同仓整体切换（单机 `local-up` 一次拉起全部节点），无 v1/v2 双轨窗口。
