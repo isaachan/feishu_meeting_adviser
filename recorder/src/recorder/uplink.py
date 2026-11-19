@@ -71,6 +71,7 @@ class SourceUplink:
         self.exit_code = 0
         self.exit_reason = ''
         self.stopped = threading.Event()
+        self.connected = threading.Event()
         self._thread = None
 
     # -- capture side ----------------------------------------------------------
@@ -130,6 +131,8 @@ class SourceUplink:
             except (OSError, WebSocketException) as exc:
                 _log(self.source_id, 'connection_lost',
                      error=exc.__class__.__name__, attempt=attempts + 1)
+            finally:
+                self.connected.clear()
             attempts += 1
             self.reconnects += 1
             if attempts > self.reconnect_limit:
@@ -168,6 +171,7 @@ class SourceUplink:
             self._sent_upto = self.acked
             _log(self.source_id, 'started', stream_id=message.get('stream_id'),
                  server_acked=server_acked)
+            self.connected.set()
             while not self.stopped.is_set():
                 # Short control wait: a 0.1s block here throttled the whole
                 # loop to ~1 frame per 0.26s (≈25% realtime, 2026-11-13

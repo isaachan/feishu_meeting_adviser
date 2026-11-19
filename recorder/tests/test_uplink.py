@@ -194,6 +194,12 @@ class HappyPathTests(UplinkBase):
 
 
 class ReconnectTests(UplinkBase):
+    def test_connected_only_after_handshake_and_clears_on_stop(self):
+        uplink = self.make_uplink()
+        self.assertTrue(self.wait_for(uplink.connected.is_set))
+        uplink.stop_interrupt()
+        self.assertTrue(self.wait_for(lambda: not uplink.connected.is_set()))
+
     def test_paused_exits_without_retrying(self):
         self.server.paused = True
         uplink = self.make_uplink()

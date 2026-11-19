@@ -1,6 +1,6 @@
 # macos-gui（会参谋采集客户端）
 
-recorder 的图形分发形态：QR 扫码登录 → 会话列表自动发现 → 一键开始采集。设计依据：[DESIGN.md](DESIGN.md)；云端契约：CONTRACT_ADVISOR_API §8、CONTRACT_AUTH v1.2。
+recorder 的图形分发形态：QR 扫码登录 → 单会话连接监视器。界面以 [图 4](design/monitor-concept.png) 为准；云端契约：CONTRACT_ADVISOR_API §8、CONTRACT_AUTH v1.2。
 
 ## 安装（命令行形态）
 
@@ -12,7 +12,7 @@ python3 -m venv .venv
 .venv/bin/pip install -e ../recorder
 ```
 
-注意：`recorder` 不在 pyproject 依赖里（模块独立纪律的显式例外，见 DESIGN §3）——`capture.py` 延迟导入，未安装时登录/列表功能不受影响，仅无法采集。
+注意：`recorder` 不在 pyproject 依赖里（模块独立纪律的显式例外，见 DESIGN §3）——`capture.py` 延迟导入，未安装时登录与主页展示不受影响，仅无法连接。
 
 ## 运行
 
@@ -20,10 +20,9 @@ python3 -m venv .venv
 .venv/bin/python -m macos_gui        # 或 .venv/bin/macos-gui
 ```
 
-首次运行默认连接 `http://meeting-advisor.nioint.com`（免配置）→ 飞书扫码登录 → 之后每次启动直接进入会话列表。
-服务器地址可随时从登录页/列表页的「服务器设置」修改：换地址会清除本机设备凭据并要求重新扫码，保存同地址则直接回列表。
-在 Mac 上勾选“采集本机麦克风”后，采集会跟随飞书会议静音状态；请按系统提示授权
-麦克风及屏幕录制权限。状态未知时不会打开本机麦克风。
+首次运行默认连接 `http://meeting-advisor.nioint.com`（免配置）→ 飞书扫码登录 → 之后直接进入单会话监视器。主界面无会话选择：灰色为无会话，红色为会话存在但连接断开，绿色“已入会”为连接正常。飞书静音时图标加斜杠，界面不显示音频采集文案。
+设置中可修改服务器地址，并选择“发现会话后自动连接”（默认关闭）。手动模式显示“连接／断开”；自动模式隐藏这两个按钮。换服务器地址会清除设备凭据并要求重新扫码。自动连接每个会话只发起一次；暂停后不会自动重连。若服务返回多个会话，客户端拒绝任选一个连接。
+本机麦克风随连接固定启用，并跟随飞书会议静音状态；请按系统提示授权麦克风及屏幕录制权限。状态未知时不会打开本机麦克风。
 
 ## 本地凭据
 
@@ -33,7 +32,7 @@ python3 -m venv .venv
 ## 开发
 
 ```sh
-.venv/bin/python -m unittest discover -s tests   # 43 项（核心 headless + Qt offscreen 冒烟）
+.venv/bin/python -m unittest discover -s tests   # 核心 headless + Qt offscreen 冒烟
 .venv/bin/ruff check src tests
 .venv/bin/pyright
 ```

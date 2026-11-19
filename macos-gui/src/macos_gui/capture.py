@@ -29,7 +29,7 @@ def default_source_factory(mic_enabled: bool):
             sources.append(WindowsMicSource())
         return sources
     from recorder.audio.sck_capture import SwiftLoopbackSource
-    sources = [SwiftLoopbackSource('loopback')]
+    sources: list[AudioSource] = [SwiftLoopbackSource('loopback')]
     if mic_enabled:
         if sys.platform == 'darwin':
             from recorder.audio.macos_mic import MacFeishuMicSource
@@ -190,11 +190,12 @@ class CaptureJob:
         rows = {}
         for uplink in uplinks:
             rows[uplink.source_id] = uplink.stats() | {
-                'connected': not uplink.stopped.is_set(),
+                'connected': uplink.connected.is_set(),
                 'exit_code': uplink.exit_code, 'exit_reason': uplink.exit_reason}
             if session is not None:
                 source = session.sources.get(uplink.source_id)
-                if source is not None and callable(getattr(source, 'stats', None)):
-                    rows[uplink.source_id]['capture'] = source.stats()
+                source_stats = getattr(source, 'stats', None)
+                if callable(source_stats):
+                    rows[uplink.source_id]['capture'] = source_stats()
         return {'state': self.state, 'session_id': self.args.get('session'),
                 'sources': rows}

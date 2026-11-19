@@ -1,6 +1,6 @@
-# macos-gui 客户端设计（v1）
+# macos-gui 客户端设计（v2 UI）
 
-状态：2026-11-12 立项，**设计评审稿（未实现）**。本文是 `macos-gui` 的唯一工作依据；§5 的契约变更草案经评审后回写正式契约（bump v1.2/v0.5）再动代码。
+状态：2026-11-12 立项；2026-11-19 单会话低存在感 UI 修订。§2、§5 的旧 API 设计决策保留为历史背景，界面与交互以 §6.4 和 [图 4](design/monitor-concept.png) 为准。
 上游：[ARCHITECTURE](../docs/ARCHITECTURE.md)、[DEPLOYMENT](../docs/DEPLOYMENT.md)、[CONTRACT_ADVISOR_API](../docs/CONTRACT_ADVISOR_API.md)、[CONTRACT_AUTH](../docs/CONTRACT_AUTH.md)、[CONTRACT_RECORDER_STREAM](../docs/CONTRACT_RECORDER_STREAM.md)。
 
 ## 1. 定位与用户流程
@@ -11,9 +11,9 @@ GUI 客户端 = recorder 的图形分发形态：**同样的采集与上行能�
 
 1. 小A 在飞书里对会参谋 bot 说「入会 xxxxxxx」（既有链路，不变）；
 2. 打开 GUI（首次使用：默认服务器地址 `http://meeting-advisor.nioint.com` 免配置直连 + 扫码登录飞书；地址可从界面修改）；
-3. GUI 后台轮询云端，会话列表出现该活跃会话（标题/会议号/开始时间/phase）；
-4. 小A 从列表点选会话 →「开始采集」→ GUI 直接启动采集上行，**全程无参数输入**；
-5. 监控面板展示上行状态；「停止采集」走干净收尾；关窗隐藏窗口、采集继续。
+3. GUI 后台轮询云端，主界面直接显示该用户唯一活跃会话；
+4. 手动模式点「连接」，自动模式发现会话后连接；本机麦克风固定启用；
+5. 主界面只显示连接状态及静音图标；「断开」走干净收尾；关窗隐藏窗口、连接继续。
 
 **非目标（v1）**：GUI 内入会/结束会议（仍走飞书 bot 指令）、托盘图标、暂停/恢复、Windows loopback（WASAPI 属 recorder 侧后续任务）。
 
@@ -26,7 +26,7 @@ GUI 客户端 = recorder 的图形分发形态：**同样的采集与上行能�
 | D3 | 进程模型 | 同进程：GUI 直接 import recorder 的 `CaptureSession`/`SourceUplink`（TCC 权限归 GUI，只弹一次；SCK Swift helper 子进程不变） |
 | D4 | 技术栈 | PySide6（Qt）；跨平台代码，mac 先行打包 .app，Windows 同代码出 .exe |
 | D5 | 能力边界 | 只做发现 + 确认 + 监控 + 停止采集 |
-| D6 | 多会话 | 永远列表选择，**不做弹窗** |
+| D6 | 单会话 | 主界面不提供选择；意外返回多个会话时拒绝任意连接并显示错误 |
 | D7 | 关窗语义 | 采集中关窗 = 隐藏窗口继续采集（Dock 图标恢复）；无采集关窗 = 退出；Cmd-Q 采集中 = 确认「停止采集并退出？」→ 干净收尾后退出 |
 | D8 | 托盘 | v1 不做 |
 | D9 | 命名 | 目录 `macos-gui`（按需保留），Python 包名 `macos_gui` |
@@ -36,7 +36,7 @@ GUI 客户端 = recorder 的图形分发形态：**同样的采集与上行能�
 ```
 ┌── 组织者 laptop ──────────────────────┐   ┌── 云端单机 ──────────────────────┐
 │  macos_gui (PySide6, 同进程)          │   │  advisor                          │
-│  ├─ ui/ 列表页·监控页·设置页·登录页    │   │  ├─ /gui/* ──(HTTPS 反代, 新)───┐ │
+│  ├─ ui/ 单会话主页·设置页·登录页    │   │  ├─ /gui/* ──(HTTPS 反代, 新)───┐ │
 │  ├─ core api/login/poller/config      │◄─┼─┼─ login/start·poll·sessions·   │ │
 │  ├─ capture (import recorder)         │   │  │  logout + devices 表          │ │
 │  │   └─ SCK helper 子进程(Swift)      │   │  └─► auth /authorize/* /status  │ │
@@ -128,36 +128,38 @@ macos-gui/
     login.py              # device-flow 控制器（QR pixmap、poll 循环、token 落库）
     sessions.py           # 会话轮询器（QTimer，空闲 10s / 采集中 5s）
     capture.py            # 组装 recorder 采集栈（QThread 内跑，Qt 信号上报 stats）
-    app.py  ui/           # QApplication 与窗口（列表/监控/设置/登录四视图）
+    app.py  ui/           # QApplication 与窗口（单会话主页/设置/登录）
   tests/  README.md
 ```
 
 ### 6.2 客户端状态机
 
+```text
+boot → 无 device_token：扫码登录 → 单会话主页
+     → 有 device_token：单会话主页
+主页 → 设置 → 同服务器返回主页；换址清 token 并重新扫码
+主页（无会话）→ 发现唯一 running 会话 → 手动或自动连接 → 已入会
+已入会 → 手动断开／会话 paused、draining、ended → 主页红／灰状态
+任何 401 bad_token → 扫码登录
 ```
-boot ──无存储 server_url──► 用默认地址，同「有」分支
-boot ──有──┬─无 device_token─► login_qr ──poll completed──► listing
-           └─有 token────────► listing
-login_qr/listing ──服务器设置──► settings ──保存──► 换址：清 token 重登录 / 同址：回原页
-listing ⇄ offline（网络失败：退避重试，不清 token；恢复自动回）
-listing ──点选会话+开始采集──► capturing ──停止/会话 ended──► listing
-任何 401 bad_token ──► login_qr（token 失效，重新扫码）
-```
+
+自动连接同一会话仅尝试一次；paused 后恢复 running 不自动重录。采集中可进入设置并关闭自动连接，再从主页手动断开。
 
 ### 6.3 采集集成（capture.py）
 
 - 复用 recorder：按 `recorder_command_args` 构造 `SwiftLoopbackSource`（+ `MicSource` 当 `mic:true`）→ `CaptureSession` → 每源 `SourceUplink`；重连/重传/gap/退出码语义全部继承（CONTRACT_RECORDER_STREAM v1 不变）。
-- 上报：每 1–2s 快照每源 `sent/acked/buffered/reconnects/drops` + 连接状态 → Qt 信号 → 监控面板。
+- 上报：每 1–2s 快照每源 `sent/acked/buffered/reconnects/drops` + 连接状态 → Qt 信号 → 主页状态。
 - 停止：UI「停止采集」→ 置停止事件 → 干净 `stream_end` → 等 `stopped`（有界超时）；Cmd-Q 采集中走 D7 确认。
-- 会话侧结束：轮询见 `draining/ended` 或 uplink 收 `session_ended`/`bad_token` → 自动停止采集回列表，界面提示原因。
-- 错误映射（uplink 退出码 → UI 文案）：2 →「会话已失效，请回飞书重新入会」；3 →「连接不可恢复」；130 → 视为手动中断回列表。
+- 会话侧结束：轮询见 `draining/ended` 或 uplink 收 `session_ended`/`bad_token` → 自动停止采集回主页，界面提示原因。
+- 错误映射（uplink 退出码 → UI 文案）：2 →「会话已失效，请回飞书重新入会」；3 →「连接不可恢复」；130 → 视为手动中断回主页。
 
-### 6.4 UI 骨架
+### 6.4 UI（2026-11-19 修订）
 
-- 列表页（主页）：顶栏身份 + 会话卡片（标题/会议号/开始时间/phase 徽标）+ [刷新]；draining 置灰；选中卡片 [开始采集]。
-- 监控页：每源状态卡（连接状态/上行计数/缓冲/重连次数）+ [停止采集] + [返回列表]（返回不停止采集）。
-- 登录页：QR（自适应缩放 ≤400px，防长 URL 二维码撑爆窗口）+ 「在浏览器打开」链接 + 等待状态；过期自动刷新 QR 并提示「已自动换新」。
-- 设置页：server URL 输入与修改（入口：登录页/列表页「服务器设置」；换址清除设备凭据并重新扫码，同址保留登录直接回列表）。
+- 已确认的主界面素材：[图 4](design/monitor-concept.png) / [SVG](design/monitor-concept.svg)。主界面只显示一个会话及连接状态，灰色无会话、红色断开、绿色已连接（文字为“已入会”）；飞书静音时麦克风图标加斜杠。界面不显示“声音”“采集”等敏感文案或技术计数。
+- 设置页仅保留 server URL 和“发现会话后自动连接”（默认关）。手动模式显示“连接／断开”，自动模式隐藏；本机麦克风固定启用，无开关。
+- 登录页保留二维码与浏览器打开入口，二维码缩至 ≤260px。主窗体登录后收敛为小型监视器；无需选择会话。服务意外返回多个会话时客户端拒绝任意选择并报告异常。
+- 自动连接每个会话只尝试一次，避免失败后反复启动。paused 后停止连接，恢复 running 不自动重录，沿用 STATE_MACHINES v2 决策。
+
 
 ## 7. 运行与分发形态
 
@@ -192,7 +194,7 @@ listing ──点选会话+开始采集──► capturing ──停止/会话 e
 
 ## 10. 验收口径（G6a 命令行形态 → G6b 打包形态）
 
-**阶段一（G6a，命令行）**：干净 venv 安装 → `python -m macos_gui` → 设置页输入服务器地址 → 扫码登录（顶栏出现身份）→ 飞书发「入会」→ 列表 ≤10s 出现会话 → 开始采集 → 监控计数增长 → bot 收到决策通知 → 关窗采集继续（Dock 恢复）→ 停止采集干净收尾（`stopped` 确认）→ 飞书「结束会议」→ 会话 ended、GUI 自动回列表。
+**阶段一（G6a，命令行）**：干净 venv 安装 → `python -m macos_gui` → 设置页输入服务器地址 → 扫码登录（顶栏出现身份）→ 飞书发「入会」→ 主页 ≤10s 显示唯一会话 → 手动／自动连接 → 绿色「已入会」与静音图标 → bot 收到决策通知 → 关窗采集继续（Dock 恢复）→ 断开连接干净收尾（`stopped` 确认）→ 飞书「结束会议」→ 会话 ended、GUI 自动回主页。
 
 **阶段二（G6b，打包 .app）**：干净 Mac 装 .app → 右键打开（Gatekeeper 引导）→ TCC 授权一次 → 重复阶段一关键路径（登录/发现/采集/干净停止/关窗继续）；对比确认打包形态无行为差异。
 

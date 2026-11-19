@@ -1,11 +1,7 @@
-"""Qt smoke tests (offscreen): page wiring and controller state machine.
-
-Skipped automatically when PySide6/segno are not installed (headless CI legs
-install them via the dev extra; core-logic tests never require Qt).
-"""
+"""Offscreen UI and controller tests for the single-session monitor."""
 import os
+import tempfile
 import unittest
-from unittest.mock import patch
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
@@ -20,9 +16,9 @@ from macos_gui import config as config_mod
 from macos_gui.api import ApiError
 
 if PYSIDE_READY:
-    from PySide6.QtWidgets import QApplication, QPushButton
+    from PySide6.QtWidgets import QApplication, QLabel, QPushButton
     from macos_gui.app import Controller, MainWindow
-    from macos_gui.ui.pages import ListPage, LoginPage, SettingsPage, qr_pixmap
+    from macos_gui.ui.pages import DashboardPage, LoginPage, SettingsPage, qr_pixmap
 
 
 @unittest.skipUnless(PYSIDE_READY, 'PySide6/segno not installed')
@@ -32,223 +28,203 @@ class AppSmokeTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def setUp(self):
-        import tempfile
         self._temp = tempfile.TemporaryDirectory()
         self.addCleanup(self._temp.cleanup)
-        self.tmp_dir = self._temp.name
         self.store = config_mod.MemoryConfigStore()
         self.client = ScriptedClient()
         self.controller = Controller(
-            self.store, client_factory=lambda: self.client)
+            self.store, client_factory=lambda: self.client,
+            job_factory=lambda args, out_root: FakeJob(args),
+            capture_out_root=self._temp.name)
         self.window = MainWindow(self.controller)
-        self.pages = {'settings': self.window.settings_page,
-                      'login': self.window.login_page,
-                      'listing': self.window.list_page}
+        # Tests drive synchronous core methods; no background HTTP workers.
+        self.controller.run_async = lambda work: None
+        self.addCleanup(self.window.close)
+        self.addCleanup(self.window._login_timer.stop)
+        self.addCleanup(self.window._session_timer.stop)
+        self.addCleanup(self.window._stats_timer.stop)
 
-    def current_page(self):
-        return self.window.stack.currentWidget()
+    def login_with_stored_token(self):
+        config_mod.save_device_token(self.store, 'dt-x')
+        self.controller.do_boot()
 
-    def test_boot_without_server_uses_default_and_lands_on_login(self):
+    def test_first_login_and_settings(self):
         self.controller.do_boot()
         self.assertEqual(self.controller.state, 'login')
-        self.assertIsInstance(self.current_page(), LoginPage)
-        self.assertEqual(self.controller.server_url,
-                         config_mod.DEFAULT_SERVER_URL)
-        self.assertEqual(self.window.settings_page.url_edit.text(),
-                         config_mod.DEFAULT_SERVER_URL)
-
-    def test_save_server_moves_to_login_and_qr_shows(self):
-        self.controller.do_boot()
-        self.controller.do_edit_server()
-        self.controller.do_save_server('https://advisor.internal/')
-        self.assertEqual(self.controller.state, 'login')
-        self.assertIsInstance(self.current_page(), LoginPage)
+        self.assertIsInstance(self.window.stack.currentWidget(), LoginPage)
         self.assertFalse(self.window.login_page.qr_label.pixmap().isNull())
-
-    def test_login_page_settings_entry(self):
-        self.controller.do_boot()
         self.window.login_page.settings_clicked.emit()
-        self.assertIsInstance(self.current_page(), SettingsPage)
+        self.assertIsInstance(self.window.stack.currentWidget(), SettingsPage)
+        self.assertFalse(self.window.settings_page.auto_checkbox.isChecked())
+        self.assertEqual(self.controller.server_url, config_mod.DEFAULT_SERVER_URL)
 
-    def test_list_settings_entry_keeps_token_when_url_unchanged(self):
-        config_mod.save_server_url(self.store, 'https://advisor.internal')
-        config_mod.save_device_token(self.store, 'dt-x')
+    def test_qr_fits_compact_window(self):
+        pixmap = qr_pixmap('https://accounts.feishu.cn/open-apis/authen/v1/authorize?x=1')
+        self.assertLessEqual(max(pixmap.width(), pixmap.height()), 260)
+        self.assertGreater(pixmap.width(), 100)
+
+    def test_login_completion_and_token_expiry(self):
         self.controller.do_boot()
-        self.window.list_page.settings_clicked.emit()
-        self.assertIsInstance(self.current_page(), SettingsPage)
-        self.assertEqual(self.window.settings_page.url_edit.text(),
-                         'https://advisor.internal')
-        self.controller.do_save_server('https://advisor.internal/')
+        self.client.poll_result = {'status': 'completed', 'device_token': 'dt-2',
+                                   'user': {'open_id': 'ou_A'}}
+        self.controller.do_login_tick()
         self.assertEqual(self.controller.state, 'listing')
-        self.assertEqual(config_mod.load_state(self.store)['device_token'],
-                         'dt-x')
-
-    def test_save_changed_server_url_clears_token_and_relogins(self):
-        config_mod.save_server_url(self.store, 'https://old.internal')
-        config_mod.save_device_token(self.store, 'dt-x')
-        self.controller.do_boot()
-        self.controller.do_edit_server()
-        self.controller.do_save_server('https://new.internal/')
-        self.assertEqual(self.controller.state, 'login')
-        self.assertEqual(self.controller.server_url, 'https://new.internal')
-        self.assertIsNone(config_mod.load_state(self.store)['device_token'])
-
-    def test_save_invalid_url_keeps_settings_page(self):
-        self.controller.do_boot()
-        self.controller.do_edit_server()
-        with self.assertRaises(ValueError):
-            self.controller.do_save_server('ftp://x')
-        self.assertEqual(self.controller.state, 'settings')
-        self.assertIsNone(config_mod.load_state(self.store)['server_url'])
-
-    def test_full_state_machine_to_listing(self):
-        config_mod.save_server_url(self.store, 'https://advisor.internal/')
-        config_mod.save_device_token(self.store, 'dt-old')
-        self.controller.do_boot()
-        self.assertEqual(self.controller.state, 'listing')
-
-        # poll returns a session; the list page renders it
-        snapshot = self.controller.do_poll_sessions()
-        self.assertEqual(snapshot['sessions'][0]['session_id'], 's-1')
-        self.assertEqual(self.window.list_page.session_list.count(), 1)
-        self.assertIsInstance(self.current_page(), ListPage)
-
-        # revoked device token (401) clears state and returns to the QR login
+        self.assertIsInstance(self.window.stack.currentWidget(), DashboardPage)
         self.client.sessions_error = ApiError(401, 'bad_token', 'x')
         self.assertIsNone(self.controller.do_poll_sessions())
         self.assertEqual(self.controller.state, 'login')
         self.assertIsNone(config_mod.load_state(self.store)['device_token'])
 
-    def test_login_tick_completion_moves_to_listing(self):
-        config_mod.save_server_url(self.store, 'https://advisor.internal/')
-        self.controller.do_boot()
-        self.client.poll_result = {'status': 'pending'}
-        self.controller.do_login_tick()
-        self.client.poll_result = {'status': 'completed', 'device_token': 'dt-2',
-                                   'user': {'open_id': 'ou_A'}}
-        event = self.controller.do_login_tick()
-        self.assertEqual(event['state'], 'completed')
+    def test_settings_saves_auto_connect_and_server_change_relogs(self):
+        self.login_with_stored_token()
+        self.window.dashboard_page.settings_clicked.emit()
+        self.window.settings_page.auto_checkbox.setChecked(True)
+        self.window.settings_page._emit_saved()
+        self.assertTrue(config_mod.load_state(self.store)['auto_connect'])
         self.assertEqual(self.controller.state, 'listing')
-        self.assertEqual(config_mod.load_state(self.store)['device_token'], 'dt-2')
-
-    def test_logout_returns_to_login(self):
-        config_mod.save_server_url(self.store, 'https://advisor.internal/')
-        config_mod.save_device_token(self.store, 'dt-x')
-        self.controller.do_boot()
-        self.controller.do_logout()
+        self.controller.do_edit_server()
+        self.window.settings_page.url_edit.setText('https://new.internal/')
+        self.window.settings_page._emit_saved()
         self.assertEqual(self.controller.state, 'login')
         self.assertIsNone(config_mod.load_state(self.store)['device_token'])
 
-    def test_capture_flow_and_close_semantics(self):
-        config_mod.save_server_url(self.store, 'https://advisor.internal/')
-        config_mod.save_device_token(self.store, 'dt-x')
-        self.controller.job_factory = lambda args, out_root: FakeJob(args)
-        self.controller.capture_out_root = self.tmp_dir
+    def test_invalid_server_keeps_settings(self):
         self.controller.do_boot()
+        self.controller.do_edit_server()
+        self.window.settings_page.url_edit.setText('ftp://bad')
+        self.window.settings_page._emit_saved()
+        self.assertEqual(self.controller.state, 'settings')
+        self.assertIn('http', self.window.settings_page.error_label.text())
+
+    def test_single_session_discovery_requires_no_selection(self):
+        self.login_with_stored_token()
+        self.controller.do_poll_sessions()
+        page = self.window.dashboard_page
+        self.assertEqual(page.session['session_id'], 's-1')
+        self.assertEqual(page.status_label.text(), '已断开')
+        self.assertTrue(page.connect_button.isVisibleTo(page) if page.isVisible()
+                        else not page.auto_connect)
+        seen = []
+        page.connect_clicked.connect(seen.append)
+        page._toggle_connection()
+        self.assertEqual(seen[0]['session_id'], 's-1')
+
+    def test_manual_capture_forces_mic_and_green_requires_both_sources(self):
+        self.login_with_stored_token()
+        self.controller.do_poll_sessions()
         session = self.client.sessions_payload['sessions'][0]
         job = self.controller.do_start_capture(session)
-        self.assertIsNotNone(job)
-        self.assertEqual(self.controller.state, 'capturing')
-        self.assertIs(self.current_page(), self.window.monitor_page)
-        self.assertIn('周会', self.window.monitor_page.title_label.text())
+        self.assertTrue(job.args['mic'])
+        self.assertFalse(session['recorder_command_args']['mic'])
+        page = self.window.dashboard_page
+        self.assertEqual(self.window.stack.currentWidget(), page)
+        self.assertEqual(page.status_label.text(), '连接中…')
+        self.controller.poll_capture_stats()
+        self.assertEqual(page.status_label.text(), '已入会')
+        self.assertEqual(page.orb.color, '#38a976')
+        job.mic_state = 'muted'
+        self.controller.poll_capture_stats()
+        self.assertEqual(page.orb.mic_state, 'muted')
+        self.assertTrue(page.orb.show_mic)
+        job.mic_connected = False
+        self.controller.poll_capture_stats()
+        self.assertEqual(page.orb.color, '#d8645e')
+        self.assertEqual(page.status_label.text(), '连接中…')
+        job.mic_connected = True
+        job.mic_state = 'no_device'
+        self.controller.poll_capture_stats()
+        self.assertEqual(page.status_label.text(), '设备不可用')
+        job.finish()
+        self.controller.poll_capture_stats()
+        self.assertEqual(page.status_label.text(), '已断开')
 
-        # D7: closing the window while capturing hides it and keeps the job
+    def test_auto_connection_attempts_once(self):
+        config_mod.save_auto_connect(self.store, True)
+        self.login_with_stored_token()
+        self.controller.do_poll_sessions()
+        job = self.controller.job
+        self.assertIsNotNone(job)
+        self.assertFalse(self.window.dashboard_page.connect_button.isVisible())
+        job.finish()
+        self.controller.poll_capture_stats()
+        self.controller.do_poll_sessions()
+        self.assertIsNone(self.controller.job)
+
+    def test_pause_stops_without_auto_resuming(self):
+        config_mod.save_auto_connect(self.store, True)
+        self.login_with_stored_token()
+        self.controller.do_poll_sessions()
+        job = self.controller.job
+        self.client.sessions_payload['sessions'][0]['phase'] = 'paused'
+        self.controller.do_poll_sessions()
+        self.assertTrue(job.stop_requested)
+        self.controller.poll_capture_stats()
+        self.client.sessions_payload['sessions'][0]['phase'] = 'running'
+        self.controller.do_poll_sessions()
+        self.assertIsNone(self.controller.job)
+
+    def test_multiple_sessions_stop_and_block_arbitrary_choice(self):
+        self.login_with_stored_token()
+        self.controller.do_poll_sessions()
+        job = self.controller.do_start_capture(self.client.sessions_payload['sessions'][0])
+        self.client.sessions_payload['sessions'] *= 2
+        self.controller.do_poll_sessions()
+        self.assertTrue(job.stop_requested)
+        self.assertIsNone(self.window.dashboard_page.session)
+        self.assertIn('多个会话', self.window.dashboard_page.status_label.text())
+
+    def test_auto_mode_can_be_turned_off_while_connected(self):
+        config_mod.save_auto_connect(self.store, True)
+        self.login_with_stored_token()
+        self.controller.do_poll_sessions()
+        self.controller.do_edit_server()
+        self.assertEqual(self.controller.state, 'settings')
+        self.assertFalse(self.window.settings_page.url_edit.isEnabled())
+        self.window.settings_page.auto_checkbox.setChecked(False)
+        self.window.settings_page._emit_saved()
+        self.assertEqual(self.controller.state, 'capturing')
+        self.assertFalse(config_mod.load_state(self.store)['auto_connect'])
+        self.assertFalse(self.window.dashboard_page.connect_button.isHidden())
+
+    def test_close_hides_while_connected(self):
+        self.login_with_stored_token()
+        self.controller.do_poll_sessions()
+        self.controller.do_start_capture(self.client.sessions_payload['sessions'][0])
         self.window.show()
         self.window.close()
         self.assertFalse(self.window.isVisible())
         self.assertTrue(self.controller.capturing)
 
-        # stats poll surfaces rows; finish returns to the listing page
-        stats = self.controller.poll_capture_stats()
-        self.assertEqual(stats['state'], 'running')
-        job.finish(exit_code=0)
-        stats = self.controller.poll_capture_stats()
-        self.assertEqual(stats['state'], 'stopped')
-        self.assertFalse(self.controller.capturing)
-        self.assertEqual(self.controller.state, 'listing')
-
-    def test_session_disappearance_auto_stops_capture(self):
-        config_mod.save_server_url(self.store, 'https://advisor.internal/')
-        config_mod.save_device_token(self.store, 'dt-x')
-        self.controller.job_factory = lambda args, out_root: FakeJob(args)
-        self.controller.capture_out_root = self.tmp_dir
-        self.controller.do_boot()
-        session = self.client.sessions_payload['sessions'][0]
-        job = self.controller.do_start_capture(session)
-        self.client.empty_sessions = True
+    def test_revoked_login_stops_connection_and_stays_on_login(self):
+        self.login_with_stored_token()
+        self.controller.do_poll_sessions()
+        job = self.controller.do_start_capture(self.client.sessions_payload['sessions'][0])
+        self.client.sessions_error = ApiError(401, 'bad_token', 'x')
         self.controller.do_poll_sessions()
         self.assertTrue(job.stop_requested)
-
-    def test_qr_pixmap_renders(self):
-        pixmap = qr_pixmap('https://accounts.feishu.cn/open-apis/authen/v1/authorize?x=1')
-        self.assertFalse(pixmap.isNull())
-        self.assertGreater(pixmap.width(), 100)
-
-    def test_login_qr_fits_window_and_buttons_visible(self):
-        long_url = ('https://accounts.feishu.cn/open-apis/authen/v1/authorize?'
-                    + '&'.join(f'p{i}={"x" * 40}' for i in range(9)))
-        self.controller.do_boot()
-        self.window.resize(560, 640)
-        self.window.show()
-        self.controller.login_started.emit(
-            {'login_url': long_url, 'device_code': 'dc-xyz-123456',
-             'expires_at': 1.0})
-        pixmap = self.window.login_page.qr_label.pixmap()
-        self.assertLessEqual(max(pixmap.width(), pixmap.height()), 400)
-        for page in (self.window.login_page,):
-            for button in page.findChildren(QPushButton):
-                point = button.mapTo(self.window, button.rect().center())
-                self.assertTrue(
-                    self.window.rect().contains(point),
-                    f'{button.text()} out of the visible window')
-
-    def test_expired_device_code_regenerates_qr_with_notice(self):
-        config_mod.save_server_url(self.store, 'https://advisor.internal')
-        self.controller.do_boot()
-        self.client.poll_result = {'status': 'pending'}
-        self.controller.do_login_tick()
-        self.client.poll_result = ApiError(410, 'expired', 'x')
-        self.controller.do_login_tick()
         self.assertEqual(self.controller.state, 'login')
-        self.assertFalse(self.window.login_page.qr_label.pixmap().isNull())
-        self.assertEqual(self.window.login_page.status_label.text(),
-                         '二维码已过期，已自动换新，请重新扫码')
+        self.controller.poll_capture_stats()
+        self.assertEqual(self.controller.state, 'login')
 
-    def test_windows_mic_selection_is_explicit_and_preserves_server_args(self):
-        with patch('macos_gui.ui.pages.sys.platform', 'win32'):
-            page = ListPage()
-            snapshot = self.client.sessions_payload
-            page.update_sessions(snapshot)
-            page.session_list.setCurrentRow(0)
-            selected = []
-            page.start_capture.connect(selected.append)
-            page.mic_checkbox.setChecked(True)
-            page._emit_start()
-            self.assertTrue(selected[0]['recorder_command_args']['mic'])
-            self.assertFalse(snapshot['sessions'][0]['recorder_command_args']['mic'])
-
-    def test_mac_mic_selection_is_explicit(self):
-        with patch('macos_gui.ui.pages.sys.platform', 'darwin'):
-            page = ListPage()
-            page.update_sessions(self.client.sessions_payload)
-            page.session_list.setCurrentRow(0)
-            selected = []
-            page.start_capture.connect(selected.append)
-            self.assertTrue(page.mic_checkbox.isVisibleTo(page))
-            page.mic_checkbox.setChecked(True)
-            page._emit_start()
-            self.assertTrue(selected[0]['recorder_command_args']['mic'])
+    def test_visible_copy_avoids_sensitive_terms(self):
+        self.login_with_stored_token()
+        self.controller.do_poll_sessions()
+        self.controller.do_start_capture(self.client.sessions_payload['sessions'][0])
+        self.controller.poll_capture_stats()
+        labels = [w.text() for w in self.window.dashboard_page.findChildren(QLabel)]
+        buttons = [w.text() for w in self.window.dashboard_page.findChildren(QPushButton)]
+        self.assertNotIn('采集', ' '.join(labels + buttons))
+        self.assertNotIn('声音', ' '.join(labels + buttons))
 
 
 class ScriptedClient:
     def __init__(self):
         self.poll_result = {'status': 'pending'}
         self.sessions_error = None
-        self.empty_sessions = False
         self.sessions_payload = {'user': {'open_id': 'ou_A', 'name': 'Kai Han',
                                           'email': 'kai.han@nio.com'},
                                  'sessions': [{'session_id': 's-1', 'meeting_no': '111',
-                                                'title': '周会', 'phase': 'running',
+                                               'title': '周会', 'phase': 'running',
                                                'started_at': 1_763_000_000.0,
                                                'recorder_command_args': {
                                                    'session': 's-1', 'event': 'c/e',
@@ -268,8 +244,6 @@ class ScriptedClient:
     def sessions(self, token):
         if self.sessions_error is not None:
             raise self.sessions_error
-        if self.empty_sessions:
-            return {'user': self.sessions_payload['user'], 'sessions': []}
         return self.sessions_payload
 
     def logout(self, token):
@@ -277,14 +251,14 @@ class ScriptedClient:
 
 
 class FakeJob:
-    """Recorder-free capture job double for controller wiring tests."""
-
     def __init__(self, args):
         self.args = dict(args)
         self.session_id = args['session']
         self.state = 'idle'
         self.result = None
         self.stop_requested = False
+        self.mic_state = 'open'
+        self.mic_connected = True
         self._done = __import__('threading').Event()
 
     def start(self):
@@ -307,10 +281,9 @@ class FakeJob:
 
     def stats(self):
         return {'state': self.state, 'session_id': self.session_id,
-                'sources': {'loopback': {
-                    'sent_frames': 3, 'acked_sequence': 3, 'buffered': 0,
-                    'reconnects': 0, 'connected': not self.finished,
-                    'exit_code': 0, 'exit_reason': ''}}}
+                'sources': {'loopback': {'connected': not self.finished},
+                            'mic': {'connected': self.mic_connected and not self.finished,
+                                    'capture': {'state': self.mic_state}}}}
 
 
 if __name__ == '__main__':
