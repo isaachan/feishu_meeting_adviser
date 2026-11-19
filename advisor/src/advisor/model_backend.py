@@ -6,6 +6,7 @@ inference contract (CONTRACT_REMOTE_INFERENCE) with idempotent submit and
 poll-based recovery, exactly as the legacy advisor implementation.
 """
 from dataclasses import dataclass
+from datetime import datetime
 import hashlib
 import json
 import logging
@@ -166,7 +167,9 @@ class RemoteModelBackend:
                 'metadata': metadata}
         deadline = time.monotonic() + self.settings.model_timeout_seconds + 2.0
         started = time.monotonic()
+        submit_started = time.monotonic()
         task = self._submit(body)
+        advisor_submit_ms = int((time.monotonic() - submit_started) * 1000)
         expired_once = False
         LOG.info('gateway submit: request_id=%s backend=%s state=%s',
                  request_id, self.settings.remote_backend, task.get('state'))
@@ -178,13 +181,15 @@ class RemoteModelBackend:
                 state = task.get('state')
                 if state == 'succeeded':
                     result = task.get('result') or {}
-                    timings = result.get('timings') or {}
+                    timings = self._advisor_timings(result.get('timings') or {}, started,
+                                                    advisor_submit_ms, task, time.time())
                     self.metadata = {'remote_timings': timings} if timings else {}
-                    LOG.info('gateway done: request_id=%s elapsed_ms=%.0f timings=%s',
+                    LOG.info('gateway done: request_id=%s end_to_end_ms=%.0f timings=%s',
                              request_id, (time.monotonic() - started) * 1000, timings)
                     return Decision.parse(result.get('decision'))
                 if state == 'failed':
-                    timings = task.get('timings') or {}
+                    timings = self._advisor_timings(task.get('timings') or {}, started,
+                                                    advisor_submit_ms, task, time.time())
                     self.metadata = {'remote_timings': timings} if timings else {}
                     code = (task.get('error') or {}).get('code', 'server_error')
                     LOG.warning('gateway failed: request_id=%s code=%s', request_id, code)
@@ -204,6 +209,22 @@ class RemoteModelBackend:
                 task = self._poll(request_id, body)
         finally:
             self.metadata.setdefault('remote_request_id', request_id)
+
+    @staticmethod
+    def _advisor_timings(gateway_timings: dict, started: float, advisor_submit_ms: int,
+                         task: dict, observed_wall: float) -> dict:
+        """Merge gateway stage timings with advisor-side junction points."""
+        timings = dict(gateway_timings) if isinstance(gateway_timings, dict) else {}
+        timings['end_to_end_ms'] = int((time.monotonic() - started) * 1000)
+        timings['advisor_submit_ms'] = advisor_submit_ms
+        finished_at = task.get('finished_at') if isinstance(task, dict) else None
+        if isinstance(finished_at, str):
+            try:
+                finished_epoch = datetime.fromisoformat(finished_at).timestamp()
+                timings['finish_gap_ms'] = max(0, int((observed_wall - finished_epoch) * 1000))
+            except ValueError:
+                pass
+        return timings
 
     def _poll(self, request_id: str, body: dict) -> dict:
         try:

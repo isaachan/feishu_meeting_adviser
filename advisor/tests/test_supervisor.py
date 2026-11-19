@@ -1,5 +1,6 @@
 """Plan-1.4 acceptance: supervisor auto-consume, drain-to-ended, restart
 recovery, N concurrent sessions."""
+import json
 import time
 import unittest
 from pathlib import Path
@@ -111,6 +112,29 @@ class AutoConsumeTests(SupervisorBase):
         self.supervisor._apply_result(result, time.time(),
             {'remote_timings': {'tool_events': ['nsdp_authorization_required']}})
         self.assertEqual(notices, [(session['session_id'], 'ou_A')])
+
+    def test_remote_timings_are_persisted_per_job(self):
+        from types import SimpleNamespace
+
+        session = self.create()
+        self.store.fail_job = lambda *args, **kwargs: None
+        with self.store.unit_of_work() as tx:
+            tx.connection.execute(
+                "INSERT INTO jobs(job_id,session_id,generation,snapshot,role_version,"
+                "state,created_ns) VALUES ('job-t','" + session['session_id'] +
+                "',1,'{}','v1','running',1)")
+        result = SimpleNamespace(job={'session_id': session['session_id'], 'job_id': 'job-t'},
+                                 error='model_failed', decision=None, elapsed_ms=1)
+        self.supervisor._apply_result(result, time.time(),
+            {'remote_timings': {'execution_ms': 9, 'process_start_ms': 2,
+                                'end_to_end_ms': 12},
+             'remote_request_id': 'req-0001'})
+        row = self.store.db.execute(
+            "SELECT timings FROM jobs WHERE job_id='job-t'").fetchone()
+        timings = json.loads(row['timings'])
+        self.assertEqual(timings['process_start_ms'], 2)
+        self.assertEqual(timings['end_to_end_ms'], 12)
+        self.assertEqual(timings['request_id'], 'req-0001')
 
     def test_create_then_captions_produce_replies_automatically(self):
         session = self.create()

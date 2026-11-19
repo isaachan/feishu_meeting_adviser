@@ -54,6 +54,8 @@ def upgrade_schema(database: SQLiteDatabase) -> None:
     v9→v10: runtime config table ``app_config`` (CONTRACT_ADVISOR_API §9.5;
     key/value with audit columns; no row backfill — absent keys fall back to
     process defaults).
+    v10→v11: ``jobs.timings`` (performance observation; NULL until a task
+    reaches a terminal state on the model backend).
     """
     version = database.connection.execute('PRAGMA user_version').fetchone()[0]
     if version == SCHEMA_VERSION:
@@ -204,6 +206,14 @@ def upgrade_schema(database: SQLiteDatabase) -> None:
                     key TEXT PRIMARY KEY, value TEXT NOT NULL,
                     updated_ns INTEGER NOT NULL, updated_by TEXT NOT NULL DEFAULT 'admin')''')
             database.connection.execute('PRAGMA user_version=10')
+        version = 10
+    if version == 10:
+        with database.transaction():
+            columns = {row['name']
+                       for row in database.connection.execute('PRAGMA table_info(jobs)')}
+            if 'timings' not in columns:
+                database.connection.execute('ALTER TABLE jobs ADD COLUMN timings TEXT')
+            database.connection.execute('PRAGMA user_version=11')
     # fresh (0/empty) and unknown versions are judged by require_schema
 
 
@@ -1055,6 +1065,30 @@ class SessionStore:
     def mark_job_running(self, job_id):
         with self.unit_of_work() as tx:
             tx.jobs.claim(job_id)
+
+    @_locked
+    def record_job_timings(self, job_id, timings):
+        """Persist the merged gateway + advisor observation for one task."""
+        if not isinstance(timings, dict) or not timings:
+            return
+        self.db.execute('UPDATE jobs SET timings=? WHERE job_id=?',
+                        (json.dumps(timings, ensure_ascii=False), job_id))
+
+    @_locked
+    def session_job_timings(self, session_id):
+        rows = self.db.execute(
+            'SELECT job_id,generation,state,created_ns,timings FROM jobs '
+            'WHERE session_id=? ORDER BY created_ns', (session_id,)).fetchall()
+        jobs = []
+        for row in rows:
+            try:
+                timings = json.loads(row['timings']) if row['timings'] else None
+            except ValueError:
+                timings = None
+            jobs.append({'job_id': row['job_id'], 'generation': row['generation'],
+                         'state': row['state'], 'created_ns': row['created_ns'],
+                         'timings': timings})
+        return jobs
 
     def recover(self):
         with self.unit_of_work() as tx:

@@ -223,6 +223,12 @@ class SessionSupervisor:
             LOG.info('late gateway result ignored: session=%s', result.job['session_id'])
             return
         timings = (metadata or {}).get('remote_timings') or {}
+        if timings:
+            persisted = dict(timings)
+            request_id = (metadata or {}).get('remote_request_id')
+            if isinstance(request_id, str):
+                persisted['request_id'] = request_id
+            self.store.record_job_timings(result.job['job_id'], persisted)
         if (self.nsdp is not None and
                 'nsdp_authorization_required' in timings.get('tool_events', [])):
             session = self.store.session(result.job['session_id'])

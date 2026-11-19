@@ -478,6 +478,29 @@ class AdminFaceTests(ApiBase):
         _, transcript = self.get(f'/admin/sessions/{sid}/transcript')
         self.assertEqual(len(transcript['records']), 1)
 
+    def test_admin_timings_export_lists_job_rows(self):
+        session = self.created()
+        sid = session['session_id']
+        with self.store.unit_of_work() as tx:
+            tx.connection.execute(
+                "INSERT INTO jobs(job_id,session_id,generation,snapshot,role_version,"
+                "state,created_ns,timings) VALUES ('job-1',?,1,'{}','v1','succeeded',1,?)",
+                (sid, '{"execution_ms":5,"process_start_ms":1,"request_id":"req-0001"}'))
+            tx.connection.execute(
+                "INSERT INTO jobs(job_id,session_id,generation,snapshot,role_version,"
+                "state,created_ns) VALUES ('job-2',?,2,'{}','v1','pending',2)", (sid,))
+        status, body = self.get(f'/admin/sessions/{sid}/timings')
+        self.assertEqual(status, 200)
+        self.assertEqual(body['session_id'], sid)
+        self.assertEqual([job['job_id'] for job in body['jobs']], ['job-1', 'job-2'])
+        self.assertEqual(body['jobs'][0]['timings']['process_start_ms'], 1)
+        self.assertEqual(body['jobs'][0]['timings']['request_id'], 'req-0001')
+        self.assertIsNone(body['jobs'][1]['timings'])
+
+    def test_admin_timings_unknown_session_404(self):
+        status, body = self.get_error('/admin/sessions/s-nope/timings')
+        self.assertEqual((status, body['error']['code']), (404, 'not_found'))
+
     def test_admin_transcript_unknown_404(self):
         status, body = self.get_error('/admin/sessions/s-nope/transcript')
         self.assertEqual((status, body['error']['code']), (404, 'not_found'))

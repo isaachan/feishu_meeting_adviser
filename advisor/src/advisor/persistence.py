@@ -19,7 +19,7 @@ from .models import (Caption, JobState, MaterialState, ReplyState, SourceState,
                      caption_to_dict, digest)
 from .sqlite import SQLiteDatabase
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 SCHEMA = (
     '''CREATE TABLE sessions (
@@ -55,7 +55,7 @@ SCHEMA = (
         job_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, generation INTEGER NOT NULL,
         snapshot TEXT NOT NULL, role_version TEXT NOT NULL,
         state TEXT NOT NULL DEFAULT 'pending', result TEXT, created_ns INTEGER NOT NULL,
-        context_version TEXT)''',
+        context_version TEXT, timings TEXT)''',
     'CREATE INDEX job_session ON jobs(session_id,generation)',
     '''CREATE TABLE outbox (
         uuid TEXT PRIMARY KEY, session_id TEXT NOT NULL, kind TEXT NOT NULL,
