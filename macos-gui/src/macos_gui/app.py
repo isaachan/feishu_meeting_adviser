@@ -15,7 +15,7 @@ from . import config as config_mod
 from .api import ApiError, GuiApiClient, NetworkError
 from .login import LoginFlow
 from .sessions import normalize_sessions
-from .ui.pages import ListPage, LoginPage, MonitorPage, SettingsPage
+from .ui.pages import ListPage, LoginPage, SettingsPage
 
 LOGIN_POLL_INTERVAL_MS = 2500
 SESSION_POLL_INTERVAL_MS = 10_000
@@ -48,6 +48,7 @@ class Controller(QObject):
         self.token = None
         self.offline = False
         self.job = None
+        self._auto_started_session_id = None
         self._worker_lock = threading.Lock()
 
     @property
@@ -143,6 +144,14 @@ class Controller(QObject):
         self._set_offline(False)
         self._auto_stop_ended_session(snapshot)
         self.sessions_updated.emit(snapshot)
+        if self.state in ('listing', 'capturing') and self.store.get(config_mod.KEY_AUTO_CONNECT) == 'true':
+            sessions = snapshot['sessions']
+            if len(sessions) != 1:
+                self._auto_started_session_id = None
+            elif (sessions[0]['phase'] == 'running' and self.job is None and
+                  self._auto_started_session_id != sessions[0]['session_id']):
+                self._auto_started_session_id = sessions[0]['session_id']
+                self.do_start_capture(sessions[0])
         return snapshot
 
     def _auto_stop_ended_session(self, snapshot):
@@ -153,6 +162,9 @@ class Controller(QObject):
         """
         job = self.job
         if job is None or job.finished:
+            return
+        if len(snapshot.get('sessions', [])) != 1:
+            job.request_stop()
             return
         live = {s['session_id'] for s in snapshot.get('sessions', [])
                 if s['phase'] == 'running'}
@@ -185,6 +197,8 @@ class Controller(QObject):
         args = session_item.get('recorder_command_args')
         if not isinstance(args, dict) or not args.get('session'):
             return None
+        args = dict(args)
+        args['mic'] = config_mod.load_state(self.store)['mic_enabled']
         factory = self.job_factory or self._default_job
         out_root = self.capture_out_root or _default_capture_root()
         job = factory(args, out_root)
@@ -260,11 +274,17 @@ class MainWindow(QMainWindow):
         self.settings_page = SettingsPage()
         self.login_page = LoginPage()
         self.list_page = ListPage()
-        self.monitor_page = MonitorPage()
-        for page in (self.settings_page, self.login_page, self.list_page,
-                     self.monitor_page):
+        for page in (self.settings_page, self.login_page, self.list_page):
             self.stack.addWidget(page)
         self.settings_page.url_edit.setText(controller.server_url)
+        self.settings_page.auto_checkbox.setChecked(
+            config_mod.load_state(controller.store)['auto_connect'])
+        self.settings_page.mic_checkbox.setChecked(
+            config_mod.load_state(controller.store)['mic_enabled'])
+        self.list_page.set_auto_connect(
+            config_mod.load_state(controller.store)['auto_connect'])
+        self.list_page.set_mic_enabled(
+            config_mod.load_state(controller.store)['mic_enabled'])
 
         self._login_timer = QTimer(self)
         self._login_timer.setInterval(LOGIN_POLL_INTERVAL_MS)
@@ -282,54 +302,59 @@ class MainWindow(QMainWindow):
                                                      start['device_code']))
         controller.login_status.connect(self.login_page.set_status)
         controller.sessions_updated.connect(self.list_page.update_sessions)
-        controller.offline_changed.connect(
-            lambda offline: self.list_page.set_status(
-                '离线，重试中…' if offline else '已连接'))
-        controller.capture_started.connect(self.monitor_page.start_run)
-        controller.capture_stats.connect(self.monitor_page.update_stats)
+        controller.offline_changed.connect(self.list_page.set_offline)
+        controller.capture_started.connect(self.list_page.set_active_session)
+        controller.capture_stats.connect(self.list_page.update_stats)
         controller.capture_finished.connect(self._on_capture_finished)
         self.settings_page.saved.connect(self._save_server)
         self.login_page.settings_clicked.connect(controller.do_edit_server)
         self.list_page.settings_clicked.connect(controller.do_edit_server)
         self.login_page.regenerate.connect(
             lambda: controller.run_async(controller.do_start_login))
-        self.list_page.refresh_clicked.connect(self._poll_sessions)
         self.list_page.logout_clicked.connect(
             lambda: controller.run_async(controller.do_logout))
-        self.list_page.start_capture.connect(self._start_capture)
-        self.monitor_page.stop_clicked.connect(self.controller.do_stop_capture)
-        self.monitor_page.back_clicked.connect(
-            lambda: self._on_page_changed('listing'))
+        self.list_page.connect_clicked.connect(self._start_capture)
+        self.list_page.disconnect_clicked.connect(self.controller.do_stop_capture)
 
     def closeEvent(self, event):
         """D7：采集中关窗 = 隐藏窗口继续采集；无采集 = 正常退出。"""
         if self.controller.capturing:
             event.ignore()
             if sys.platform == 'win32':
-                self.monitor_page.set_state('请先停止采集，再关闭窗口')
+                self.list_page.set_status('请先断开采集，再关闭窗口')
             else:
                 self.hide()
         else:
             event.accept()
 
-    def _save_server(self, url):
+    def _save_server(self, url, auto_connect, mic_enabled):
         try:
             self.controller.do_save_server(url)
+            config_mod.save_auto_connect(self.controller.store, auto_connect)
+            config_mod.save_mic_enabled(self.controller.store, mic_enabled)
+            self.list_page.set_auto_connect(auto_connect)
+            self.list_page.set_mic_enabled(mic_enabled)
+            self.controller._auto_started_session_id = None
         except ValueError as exc:
             self.settings_page.show_error(str(exc))
 
     def _on_page_changed(self, state):
         pages = {'settings': self.settings_page, 'login': self.login_page,
-                 'listing': self.list_page, 'capturing': self.monitor_page}
+                 'listing': self.list_page, 'capturing': self.list_page}
         self.stack.setCurrentWidget(pages[state])
         if state == 'settings':
             self.settings_page.url_edit.setText(self.controller.server_url)
+            self.settings_page.auto_checkbox.setChecked(
+                config_mod.load_state(self.controller.store)['auto_connect'])
+            self.settings_page.mic_checkbox.setChecked(
+                config_mod.load_state(self.controller.store)['mic_enabled'])
             self.settings_page.show_error('')
         if state == 'login':
             self._login_timer.start()
         else:
             self._login_timer.stop()
         if state == 'listing':
+            self.list_page.set_capturing(False)
             self._session_timer.setInterval(SESSION_POLL_INTERVAL_MS)
             self._session_timer.start()
             self._poll_sessions()
@@ -358,6 +383,7 @@ class MainWindow(QMainWindow):
             lambda: self.controller.do_start_capture(session))
 
     def _on_capture_finished(self, result):
+        self.list_page.set_capturing(False)
         code = result.get('exit_code') if isinstance(result, dict) else None
         notes = {0: '采集已停止（干净收尾）', 2: '会话已失效，请回飞书重新入会',
                  3: '连接不可恢复，采集已停止', 130: '采集已中断'}
@@ -366,7 +392,7 @@ class MainWindow(QMainWindow):
             note = f"采集启动失败：{result['error']}"
         if note is None:
             note = '采集已结束'
-        self.list_page.set_status(note)
+        self.list_page.set_status('' if code == 0 else note)
         self._poll_sessions()
 
 
@@ -376,7 +402,7 @@ def run(argv=None):
     app = QApplication(sys.argv if argv is None else argv)
     controller = Controller(config_mod.default_store())
     window = MainWindow(controller)
-    window.resize(560, 640)
+    window.resize(380, 380)
     window.show()
     controller.do_boot()
     return app.exec()
