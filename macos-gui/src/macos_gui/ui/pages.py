@@ -9,8 +9,8 @@ import time
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import (QCheckBox, QHBoxLayout, QLabel, QLineEdit,
-                               QPushButton, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QCheckBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+                               QListWidgetItem, QPushButton, QVBoxLayout, QWidget)
 
 
 def qr_pixmap(url, *, scale=12, max_size=400):
@@ -29,7 +29,7 @@ def qr_pixmap(url, *, scale=12, max_size=400):
 
 
 class SettingsPage(QWidget):
-    saved = Signal(str, bool, bool)
+    saved = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -38,12 +38,6 @@ class SettingsPage(QWidget):
         self.url_edit = QLineEdit()
         self.url_edit.setPlaceholderText('http://meeting-advisor.nioint.com')
         layout.addWidget(self.url_edit)
-        self.auto_checkbox = QCheckBox('发现会话后自动连接声音采集')
-        self.auto_checkbox.setChecked(False)
-        layout.addWidget(self.auto_checkbox)
-        self.mic_checkbox = QCheckBox('采集本机麦克风（跟随飞书静音状态）')
-        self.mic_checkbox.setVisible(sys.platform in ('win32', 'darwin'))
-        layout.addWidget(self.mic_checkbox)
         self.error_label = QLabel('')
         self.error_label.setStyleSheet('color: #b00')
         layout.addWidget(self.error_label)
@@ -53,8 +47,7 @@ class SettingsPage(QWidget):
         layout.addStretch(1)
 
     def _emit_saved(self):
-        self.saved.emit(self.url_edit.text().strip(), self.auto_checkbox.isChecked(),
-                        self.mic_checkbox.isChecked())
+        self.saved.emit(self.url_edit.text().strip())
 
     def show_error(self, message):
         self.error_label.setText(message)
@@ -87,7 +80,7 @@ class LoginPage(QWidget):
         layout.addStretch(1)
 
     def show_login(self, login_url, device_code):
-        self.qr_label.setPixmap(qr_pixmap(login_url, max_size=260))
+        self.qr_label.setPixmap(qr_pixmap(login_url))
         short = device_code[:11] + '…'
         self.link_label.setText(
             f'<a href="{login_url}">无法扫码？点此在浏览器打开</a>（{short}）')
@@ -98,139 +91,163 @@ class LoginPage(QWidget):
 
 
 class ListPage(QWidget):
-    """Single-session capture monitor. The server remains the session authority."""
-    connect_clicked = Signal(dict)
-    disconnect_clicked = Signal()
-    settings_clicked = Signal()
+    refresh_clicked = Signal()
+    start_capture = Signal(dict)
     logout_clicked = Signal()
+    settings_clicked = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.session = None
-        self.auto_connect = False
-        self.capturing = False
-        self.offline = False
-        self.error = ''
-        self.mic_state = ''
-        self.mic_enabled = False
-        self.setStyleSheet('''
-            QWidget { background: #f7f8fa; color: #253043; font-size: 13px; }
-            QPushButton { border: 1px solid #d5dae2; border-radius: 8px;
-                          padding: 7px 11px; background: white; }
-            QPushButton:disabled { color: #9ca4af; }
-        ''')
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(22, 18, 22, 18)
-        layout.setSpacing(12)
-        top = QHBoxLayout()
+        header = QHBoxLayout()
         self.user_label = QLabel('')
-        top.addWidget(self.user_label)
-        top.addStretch(1)
-        self.settings_button = QPushButton('设置')
-        self.settings_button.clicked.connect(self.settings_clicked.emit)
-        top.addWidget(self.settings_button)
-        self.logout_button = QPushButton('退出登录')
-        self.logout_button.clicked.connect(self.logout_clicked.emit)
-        top.addWidget(self.logout_button)
-        layout.addLayout(top)
-        self.meeting_label = QLabel('等待飞书会话')
-        self.meeting_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self.meeting_label)
-        self.orb = QLabel('●')
-        self.orb.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.orb.setStyleSheet('font-size: 112px; color: #aab2bd; background: transparent;')
-        layout.addWidget(self.orb, 1)
-        self.mic_label = QLabel('')
-        self.mic_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self.mic_label)
-        self.status_label = QLabel('等待会话')
-        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.status_label.setWordWrap(True)
-        layout.addWidget(self.status_label)
-        self.connect_button = QPushButton('连接采集')
-        self.connect_button.clicked.connect(self._toggle_capture)
-        layout.addWidget(self.connect_button)
-        self._render()
+        header.addWidget(self.user_label)
+        header.addStretch(1)
+        settings = QPushButton('服务器设置')
+        settings.clicked.connect(self.settings_clicked.emit)
+        header.addWidget(settings)
+        refresh = QPushButton('刷新')
+        refresh.clicked.connect(self.refresh_clicked.emit)
+        header.addWidget(refresh)
+        logout = QPushButton('退出登录')
+        logout.clicked.connect(self.logout_clicked.emit)
+        header.addWidget(logout)
+        layout.addLayout(header)
+        self.session_list = QListWidget()
+        self.session_list.itemSelectionChanged.connect(self._update_buttons)
+        layout.addWidget(self.session_list)
+        self.mic_checkbox = QCheckBox('采集本机麦克风（跟随飞书静音状态）')
+        self.mic_checkbox.setVisible(sys.platform in ('win32', 'darwin'))
+        layout.addWidget(self.mic_checkbox)
+        footer = QHBoxLayout()
+        self.status_label = QLabel('')
+        footer.addWidget(self.status_label)
+        footer.addStretch(1)
+        self.start_button = QPushButton('开始采集')
+        self.start_button.setEnabled(False)
+        self.start_button.clicked.connect(self._emit_start)
+        footer.addWidget(self.start_button)
+        layout.addLayout(footer)
 
-    def set_auto_connect(self, enabled):
-        self.auto_connect = enabled
-        self._render()
+    def _selected_session(self):
+        items = self.session_list.selectedItems()
+        return items[0].data(Qt.ItemDataRole.UserRole) if items else None
 
-    def set_mic_enabled(self, enabled):
-        self.mic_enabled = enabled
-        self._render()
+    def _emit_start(self):
+        session = self._selected_session()
+        if session is not None:
+            if sys.platform in ('win32', 'darwin'):
+                session = dict(session)
+                session['recorder_command_args'] = dict(session['recorder_command_args'])
+                session['recorder_command_args']['mic'] = self.mic_checkbox.isChecked()
+            self.start_capture.emit(session)
+
+    def _update_buttons(self):
+        self.start_button.setEnabled(self._selected_session() is not None)
+
+    def set_status(self, text):
+        self.status_label.setText(text)
 
     def update_sessions(self, snapshot):
         user = snapshot.get('user') or {}
-        self.user_label.setText(user.get('name') or user.get('open_id') or '')
-        sessions = snapshot.get('sessions') or []
-        previous_id = self.session['session_id'] if self.session else None
-        self.session = sessions[0] if len(sessions) == 1 else None
-        current_id = self.session['session_id'] if self.session else None
-        if previous_id != current_id:
-            self.error = ''
-        if len(sessions) > 1:
-            self.error = '发现多个会话，请检查云端单会话约束'
-        self._render()
+        name = user.get('name') or user.get('open_id') or ''
+        email = user.get('email') or ''
+        self.user_label.setText(f'{name}（{email}）' if email else name)
+        selected = self._selected_session()
+        self.session_list.clear()
+        for item in snapshot.get('sessions', []):
+            phase_text = {'running': '可采集', 'paused': 'owner 离会，暂停中',
+                          'draining': '排空中'}.get(item['phase'], item['phase'])
+            started = _format_started(item.get('started_at'))
+            parts = [item['title'], item['meeting_no']]
+            if started:
+                parts.append(started)
+            parts.append(phase_text)
+            row = QListWidgetItem('  ·  '.join(parts))
+            row.setData(Qt.ItemDataRole.UserRole, item)
+            if item['phase'] != 'running':
+                row.setFlags(row.flags() & ~Qt.ItemFlag.ItemIsSelectable & ~Qt.ItemFlag.ItemIsEnabled)
+            self.session_list.addItem(row)
+            if selected and selected['session_id'] == item['session_id']:
+                self.session_list.setCurrentItem(row)
+        self._update_buttons()
 
-    def set_offline(self, offline):
-        self.offline = offline
-        self._render()
 
-    def set_status(self, text):
-        self.error = text
-        self._render()
+def _format_started(started_at):
+    if not isinstance(started_at, (int, float)):
+        return ''
+    return time.strftime('%H:%M 开始', time.localtime(started_at))
 
-    def set_capturing(self, value):
-        self.capturing = value
-        if value:
-            self.error = ''
-            self.mic_state = ''
-        self._render()
 
-    def set_active_session(self, session):
-        self.session = session
-        self.set_capturing(True)
+class MonitorPage(QWidget):
+    stop_clicked = Signal()
+    back_clicked = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        self.title_label = QLabel('')
+        layout.addWidget(self.title_label)
+        self.state_label = QLabel('')
+        layout.addWidget(self.state_label)
+        self.rows_layout = QVBoxLayout()
+        layout.addLayout(self.rows_layout)
+        layout.addStretch(1)
+        self.hint_label = QLabel('采集中请保持窗口打开。' if sys.platform == 'win32' else
+                                 '关闭窗口不会停止采集（从 Dock 图标重新打开）。')
+        self.hint_label.setStyleSheet('color: #888')
+        layout.addWidget(self.hint_label)
+        footer = QHBoxLayout()
+        back = QPushButton('返回列表')
+        back.clicked.connect(self.back_clicked.emit)
+        footer.addWidget(back)
+        footer.addStretch(1)
+        stop = QPushButton('停止采集')
+        stop.setStyleSheet('color: #b00')
+        stop.clicked.connect(self.stop_clicked.emit)
+        footer.addWidget(stop)
+        layout.addLayout(footer)
+        self._row_widgets = {}
+
+    def start_run(self, session_item):
+        parts = [session_item.get('title') or session_item['session_id']]
+        if session_item.get('meeting_no'):
+            parts.append(session_item['meeting_no'])
+        self.title_label.setText('  ·  '.join(parts))
+        for label in self._row_widgets.values():
+            label.deleteLater()
+        self._row_widgets = {}
+        self.set_state('starting')
+
+    def set_state(self, text):
+        self.state_label.setText(text)
 
     def update_stats(self, stats):
-        sources = stats.get('sources') or {}
-        mic = (sources.get('mic') or {}).get('capture') or {}
-        self.mic_state = {'open': '🎙 麦克风已开启',
-                          'muted': '🎙 飞书已静音',
-                          'unknown': '🎙 飞书静音状态未知',
-                          'no_device': '🎙 无默认麦克风',
-                          'error': '🎙 麦克风不可用'}.get(str(mic.get('state') or ''), '')
-        self._render()
+        state = stats.get('state')
+        self.set_state({'idle': '', 'running': '采集进行中',
+                        'stopping': '正在停止…', 'stopped': '已停止'}.get(state, ''))
+        for source_id, row in (stats.get('sources') or {}).items():
+            label = self._row_widgets.get(source_id)
+            if label is None:
+                label = QLabel('')
+                self.rows_layout.addWidget(label)
+                self._row_widgets[source_id] = label
+            connected = '已连接' if row.get('connected') else '未连接'
+            reason = row.get('exit_reason') or ''
+            label.setText(
+                f"{source_id}：{connected} · 已发 {row.get('sent_frames', 0)} · "
+                f"已确认 {row.get('acked_sequence', 0)} · 缓冲 {row.get('buffered', 0)} · "
+                f"重连 {row.get('reconnects', 0)}"
+                + (f" · {reason}" if reason else '')
+                + self._capture_status(source_id, row.get('capture')))
 
-    def _toggle_capture(self):
-        if self.capturing:
-            self.disconnect_clicked.emit()
-        elif self.session is not None:
-            self.connect_clicked.emit(self.session)
-
-    def _render(self):
-        session = self.session
-        if session is None:
-            self.meeting_label.setText('等待飞书会话')
-        else:
-            self.meeting_label.setText(session.get('title') or session.get('meeting_no') or '当前会话')
-        if self.offline or self.error:
-            color, label = '#d55752', self.error or '服务暂时不可达，正在重试'
-        elif self.capturing:
-            color, label = '#38a66b', '正在采集声音'
-        elif session and session.get('phase') == 'paused':
-            color, label = '#aab2bd', '会话已暂停，等待恢复'
-        elif session and session.get('phase') == 'running':
-            color, label = '#aab2bd', '会话已就绪，尚未连接'
-        else:
-            color, label = '#aab2bd', '等待飞书会话'
-        self.orb.setStyleSheet(f'font-size: 112px; color: {color}; background: transparent;')
-        self.status_label.setText(label)
-        self.mic_label.setText(
-            (self.mic_state or '🎙 麦克风状态检测中') if self.capturing and self.mic_enabled
-            else '🎙 麦克风未采集' if self.capturing else '')
-        self.connect_button.setVisible(not self.auto_connect)
-        self.settings_button.setEnabled(not self.capturing)
-        self.logout_button.setEnabled(not self.capturing)
-        self.connect_button.setText('断开采集' if self.capturing else '连接采集')
-        self.connect_button.setEnabled(self.capturing or bool(session and session.get('phase') == 'running' and session.get('recorder_command_args')))
+    @staticmethod
+    def _capture_status(source_id, capture):
+        if not capture:
+            return ''
+        if source_id == 'mic':
+            state = {'unknown': '飞书状态未知，麦克风已暂停', 'muted': '飞书已静音，麦克风已暂停',
+                     'open': '飞书已开麦', 'no_device': '无默认麦克风',
+                     'error': '麦克风不可用'}.get(capture.get('state'), '')
+            return ' · ' + ' '.join(filter(None, (state, capture.get('device'), capture.get('detail'))))
+        return ' · ' + str(capture.get('state', ''))

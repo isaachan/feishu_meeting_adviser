@@ -37,7 +37,6 @@ class AppSmokeTests(unittest.TestCase):
         self.addCleanup(self._temp.cleanup)
         self.tmp_dir = self._temp.name
         self.store = config_mod.MemoryConfigStore()
-        config_mod.save_auto_connect(self.store, False)
         self.client = ScriptedClient()
         self.controller = Controller(
             self.store, client_factory=lambda: self.client)
@@ -111,7 +110,7 @@ class AppSmokeTests(unittest.TestCase):
         # poll returns a session; the list page renders it
         snapshot = self.controller.do_poll_sessions()
         self.assertEqual(snapshot['sessions'][0]['session_id'], 's-1')
-        self.assertEqual(self.window.list_page.session['session_id'], 's-1')
+        self.assertEqual(self.window.list_page.session_list.count(), 1)
         self.assertIsInstance(self.current_page(), ListPage)
 
         # revoked device token (401) clears state and returns to the QR login
@@ -150,8 +149,8 @@ class AppSmokeTests(unittest.TestCase):
         job = self.controller.do_start_capture(session)
         self.assertIsNotNone(job)
         self.assertEqual(self.controller.state, 'capturing')
-        self.assertIs(self.current_page(), self.window.list_page)
-        self.assertIn('周会', self.window.list_page.meeting_label.text())
+        self.assertIs(self.current_page(), self.window.monitor_page)
+        self.assertIn('周会', self.window.monitor_page.title_label.text())
 
         # D7: closing the window while capturing hides it and keeps the job
         self.window.show()
@@ -215,64 +214,30 @@ class AppSmokeTests(unittest.TestCase):
         self.assertEqual(self.window.login_page.status_label.text(),
                          '二维码已过期，已自动换新，请重新扫码')
 
-    def test_manual_connect_and_auto_connect(self):
-        config_mod.save_device_token(self.store, 'dt-x')
-        self.controller.job_factory = lambda args, out_root: FakeJob(args)
-        self.controller.capture_out_root = self.tmp_dir
-        self.controller.do_boot()
-        self.controller.do_poll_sessions()
-        self.assertIsNone(self.controller.job)
-        page = self.window.list_page
-        self.assertTrue(page.connect_button.isVisibleTo(page) if page.isVisible() else
-                        not page.auto_connect)
-        page._toggle_capture()
-        self.assertTrue(self.controller.capturing or self.controller.job is None)
+    def test_windows_mic_selection_is_explicit_and_preserves_server_args(self):
+        with patch('macos_gui.ui.pages.sys.platform', 'win32'):
+            page = ListPage()
+            snapshot = self.client.sessions_payload
+            page.update_sessions(snapshot)
+            page.session_list.setCurrentRow(0)
+            selected = []
+            page.start_capture.connect(selected.append)
+            page.mic_checkbox.setChecked(True)
+            page._emit_start()
+            self.assertTrue(selected[0]['recorder_command_args']['mic'])
+            self.assertFalse(snapshot['sessions'][0]['recorder_command_args']['mic'])
 
-        self.controller.do_stop_capture()
-        self.controller.poll_capture_stats()
-        config_mod.save_auto_connect(self.store, True)
-        self.controller._auto_started_session_id = None
-        self.controller.do_poll_sessions()
-        self.assertTrue(self.controller.capturing)
-        self.assertFalse(page.connect_button.isVisible())
-        job = self.controller.job
-        job.finish()
-        self.controller.poll_capture_stats()
-        self.controller.do_poll_sessions()
-        self.assertIsNone(self.controller.job)  # no retry loop on failure/stop
-
-    def test_mic_setting_preserves_server_args(self):
-        config_mod.save_mic_enabled(self.store, True)
-        self.controller.job_factory = lambda args, out_root: FakeJob(args)
-        self.controller.capture_out_root = self.tmp_dir
-        session = self.client.sessions_payload['sessions'][0]
-        job = self.controller.do_start_capture(session)
-        self.assertTrue(job.args['mic'])
-        self.assertFalse(session['recorder_command_args']['mic'])
-
-    def test_multiple_sessions_are_not_silently_selected(self):
-        page = ListPage()
-        snapshot = self.client.sessions_payload
-        page.update_sessions({**snapshot, 'sessions': snapshot['sessions'] * 2})
-        self.assertIsNone(page.session)
-        self.assertIn('多个会话', page.status_label.text())
-
-    def test_auto_connection_does_not_restart_after_pause(self):
-        config_mod.save_auto_connect(self.store, True)
-        config_mod.save_device_token(self.store, 'dt-x')
-        self.controller.job_factory = lambda args, out_root: FakeJob(args)
-        self.controller.capture_out_root = self.tmp_dir
-        self.controller.do_boot()
-        self.controller.do_poll_sessions()
-        job = self.controller.job
-        self.assertIsNotNone(job)
-        self.client.sessions_payload['sessions'][0]['phase'] = 'paused'
-        self.controller.do_poll_sessions()
-        self.assertTrue(job.stop_requested)
-        self.controller.poll_capture_stats()
-        self.client.sessions_payload['sessions'][0]['phase'] = 'running'
-        self.controller.do_poll_sessions()
-        self.assertIsNone(self.controller.job)
+    def test_mac_mic_selection_is_explicit(self):
+        with patch('macos_gui.ui.pages.sys.platform', 'darwin'):
+            page = ListPage()
+            page.update_sessions(self.client.sessions_payload)
+            page.session_list.setCurrentRow(0)
+            selected = []
+            page.start_capture.connect(selected.append)
+            self.assertTrue(page.mic_checkbox.isVisibleTo(page))
+            page.mic_checkbox.setChecked(True)
+            page._emit_start()
+            self.assertTrue(selected[0]['recorder_command_args']['mic'])
 
 
 class ScriptedClient:

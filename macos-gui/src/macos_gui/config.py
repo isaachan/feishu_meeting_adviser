@@ -10,7 +10,6 @@ SERVICE = 'macos-gui'
 KEY_SERVER_URL = 'server_url'
 KEY_DEVICE_TOKEN = 'device_token'
 KEY_AUTO_CONNECT = 'auto_connect'
-KEY_MIC_ENABLED = 'mic_enabled'
 
 # 首开免配置：未显式保存过地址时使用的默认会参谋服务器（docs/DEPLOYMENT.md）。
 DEFAULT_SERVER_URL = 'http://meeting-advisor.nioint.com'
@@ -78,16 +77,11 @@ def normalize_server_url(url):
 def load_state(store):
     return {'server_url': store.get(KEY_SERVER_URL) or None,
             'device_token': store.get(KEY_DEVICE_TOKEN) or None,
-            'auto_connect': store.get(KEY_AUTO_CONNECT) == 'true',
-            'mic_enabled': store.get(KEY_MIC_ENABLED) == 'true'}
+            'auto_connect': store.get(KEY_AUTO_CONNECT) != 'false'}
 
 
 def save_auto_connect(store, enabled):
     store.set(KEY_AUTO_CONNECT, 'true' if enabled else 'false')
-
-
-def save_mic_enabled(store, enabled):
-    store.set(KEY_MIC_ENABLED, 'true' if enabled else 'false')
 
 
 def save_server_url(store, url):

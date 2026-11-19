@@ -8,13 +8,11 @@ class MemoryStoreTests(unittest.TestCase):
         store = config.MemoryConfigStore()
         self.assertEqual(config.load_state(store),
                          {'server_url': None, 'device_token': None,
-                          'auto_connect': False, 'mic_enabled': False})
+                          'auto_connect': True})
         config.save_auto_connect(store, False)
         self.assertFalse(config.load_state(store)['auto_connect'])
         config.save_auto_connect(store, True)
         self.assertTrue(config.load_state(store)['auto_connect'])
-        config.save_mic_enabled(store, True)
-        self.assertTrue(config.load_state(store)['mic_enabled'])
         config.save_server_url(store, 'https://advisor.internal/')
         self.assertEqual(config.load_state(store)['server_url'],
                          'https://advisor.internal')
