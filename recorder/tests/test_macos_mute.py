@@ -75,6 +75,16 @@ class MacMuteDetectorTests(unittest.TestCase):
                     [str(binary), '--check-decision', *inputs], text=True)
                 self.assertEqual(output.strip(), expected)
 
+    @unittest.skipUnless(sys.platform == 'darwin', 'Swift helper requires macOS')
+    def test_helper_locates_shifted_toolbar_and_rejects_missing_anchor(self):
+        binary = ensure_helper_binary()
+        for kind, expected in [('muted', 'true'), ('open', 'false'),
+                               ('no-camera', 'unknown')]:
+            with self.subTest(kind=kind):
+                output = subprocess.check_output(
+                    [str(binary), '--check-toolbar', kind], text=True)
+                self.assertEqual(output.strip(), expected)
+
 
 if __name__ == '__main__':
     unittest.main()

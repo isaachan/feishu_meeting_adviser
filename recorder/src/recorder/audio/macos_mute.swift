@@ -139,6 +139,64 @@ func iconStats(_ image: CGImage, centerX: Int, centerY: Int, radius: Int) -> Ico
     return IconStats(red: red, gray: gray, area: width * height)
 }
 
+// The toolbar expands when reactions or other controls appear. Locate the
+// camera-off icon first, then inspect the microphone button immediately to its
+// left. A missing camera anchor leaves the state unknown instead of reading an
+// unrelated gray toolbar icon as an unmuted microphone.
+func toolbarMute(_ image: CGImage, scale: CGFloat, compact: Bool,
+                 frameWidth: CGFloat) -> Bool? {
+    let centerY = image.height - Int((compact ? 22.0 : 32.0) * scale)
+    let radius = max(8, Int(14 * scale))
+    let start = compact ? 130 : 180
+    let end = min(Int(frameWidth * (compact ? 0.78 : 0.6)), compact ? 200 : 500)
+    var groups: [(Int, Int)] = []
+    var groupStart: Int? = nil
+    var groupEnd = 0
+    if start > end { return nil }
+    for x in stride(from: start, through: end, by: 3) {
+        let stats = iconStats(image, centerX: Int(CGFloat(x) * scale),
+                              centerY: centerY, radius: radius)
+        let red = stats.map { $0.red >= max(25, $0.area / 12) } ?? false
+        if red {
+            if groupStart == nil { groupStart = x }
+            groupEnd = x
+        } else if let first = groupStart {
+            groups.append((first, groupEnd))
+            groupStart = nil
+        }
+    }
+    if let first = groupStart { groups.append((first, groupEnd)) }
+    guard let camera = groups.last, camera.1 - camera.0 >= 6 else { return nil }
+    let cameraCenter = (camera.0 + camera.1) / 2
+    let micCenter = cameraCenter - (compact ? 65 : 70)
+    return iconStats(image, centerX: Int(CGFloat(micCenter) * scale),
+                     centerY: centerY, radius: radius)?.muted
+}
+
+func toolbarFixture(_ kind: String) -> CGImage? {
+    let width = 1856
+    let height = 1438
+    var pixels = [UInt8](repeating: 255, count: width * height * 4)
+    func square(_ centerX: Int, _ color: (UInt8, UInt8, UInt8)) {
+        for y in 1359..<1389 {
+            for x in (centerX - 15)..<(centerX + 15) {
+                let index = (y * width + x) * 4
+                pixels[index] = color.0
+                pixels[index + 1] = color.1
+                pixels[index + 2] = color.2
+            }
+        }
+    }
+    square(316, (95, 100, 110)) // gray chat at the old mic position
+    square(552, kind == "muted" ? (235, 55, 65) : (95, 100, 110))
+    if kind != "no-camera" { square(696, (235, 55, 65)) }
+    let bitmap = CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
+    let context = CGContext(data: &pixels, width: width, height: height,
+                            bitsPerComponent: 8, bytesPerRow: width * 4,
+                            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: bitmap)
+    return context?.makeImage()
+}
+
 func visualSample() async -> (Bool?, String, Bool) {
     do {
         let content = try await SCShareableContent.excludingDesktopWindows(
@@ -158,11 +216,8 @@ func visualSample() async -> (Bool?, String, Bool) {
                 contentFilter: filter, configuration: config)
             let compact = window.frame.width / window.frame.height > 2.4
                 && window.frame.height < 150
-            let centerX = Int((compact ? 96.0 : 158.0) * scale)
-            let centerY = image.height - Int((compact ? 22.0 : 32.0) * scale)
-            let radius = max(8, Int(14 * scale))
-            guard let state = iconStats(image, centerX: centerX, centerY: centerY,
-                                        radius: radius)?.muted else { continue }
+            guard let state = toolbarMute(image, scale: scale, compact: compact,
+                                          frameWidth: window.frame.width) else { continue }
             if let previous = observed, previous != state {
                 return (nil, "多个会议窗口的麦克风图标状态不一致", true)
             }
@@ -199,6 +254,13 @@ func sample() async -> [String: Any] {
 @main
 struct HelperMain {
     static func main() async {
+        if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--check-toolbar" {
+            if let image = toolbarFixture(CommandLine.arguments[2]) {
+                let result = toolbarMute(image, scale: 2, compact: false, frameWidth: 928)
+                print(result.map(String.init) ?? "unknown")
+            }
+            return
+        }
         if CommandLine.arguments.count == 4 && CommandLine.arguments[1] == "--check-decision" {
             func parse(_ value: String) -> Bool? {
                 if value == "true" { return true }
