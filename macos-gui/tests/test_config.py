@@ -7,12 +7,7 @@ class MemoryStoreTests(unittest.TestCase):
     def test_roundtrip_and_clear(self):
         store = config.MemoryConfigStore()
         self.assertEqual(config.load_state(store),
-                         {'server_url': None, 'device_token': None,
-                          'auto_connect': True})
-        config.save_auto_connect(store, False)
-        self.assertFalse(config.load_state(store)['auto_connect'])
-        config.save_auto_connect(store, True)
-        self.assertTrue(config.load_state(store)['auto_connect'])
+                         {'server_url': None, 'device_token': None})
         config.save_server_url(store, 'https://advisor.internal/')
         self.assertEqual(config.load_state(store)['server_url'],
                          'https://advisor.internal')
