@@ -82,7 +82,19 @@ advisor 决定调用模型
 
 报告每组成功率、p50/p95 延迟、各阶段分布、token(如可得)、峰值 RSS/CPU、样本数与环境版本;真实 NSDP/Jira 后端波动大,工具耗时单列;所有轮询观测指标注明量化精度。只有相同输入与功能约束下的结果可直接比较。
 
-## 7. 决策与验收
+## 7. 运维获取方式(admin-site)
+
+测量数据分两层获取,均走现有运维面,不引入新部署组件。
+
+**每会话明细导出(主要入口)。** advisor 持久化每个模型任务的 timings:gateway 返回的阶段数字与工具明细,加上 advisor 侧衔接点(`end_to_end_ms`、`advisor_submit_ms`、`finish_gap_ms`),按 job 行存入 SQLite(当前 timings 只用于 `tool_events` 判断、`elapsed_ms` 仅进日志,需补持久化)。新增只读端点 `GET /admin/sessions/{id}/timings`(CONTRACT_ADVISOR_API §9 additive bump,语义与 §9.6 transcript 导出同口径:无 owner 校验、无需幂等键、不存在 → 404),返回该会话全部任务行:job_id、request_id、提交时间、终态与 error_code、各阶段 ms、工具调用明细(名称/状态/耗时)及轮询量化标注。admin-site 会话列表每行提供「下载 timings」(JSON,可选 CSV),供本地分析;进行中会话可重复拉取,已结束会话数据不变。
+
+**gateway 原始事件与对账。** gateway 结构化日志按 `request_id` 输出阶段事件(JSON lines);运维经 admin-site 现有 tail -f 日志流实时观察,或本地 grep/jq 聚合;gateway 任务表的 `timings` 为第二来源,用于与 advisor 导出对账(两边时钟独立,只对阶段数字,不对绝对时间)。
+
+**汇总分析。** 不建看板:§6 对照实验与日常分析均从导出文件本地聚合(p50/p95、分段分布、冷热对比);若实测后确有常驻趋势需求,另行立项。
+
+边界与约束:导出仅含低基数阶段数字、工具名、状态与终态,不含字幕、prompt、skill 正文、reply 正文或任何凭据;沿用 §9 localhost/受信边界与无认证现状,部署面扩大前必须先加认证。每任务全量记录而非采样,单任务几十个数字,存储与导出开销可忽略。
+
+## 8. 决策与验收
 
 - 若 `decision_wait_ms` 占 `end_to_end_ms` 绝大部分,应优先优化 prompt、上下文大小与工具查询,而非更换执行框架。
 - 若框架段(进程启动 + 核验)在全部样本中稳定占显著比例,再为轻量 agent 做功能等价原型对照;原型须覆盖相同 skill、工具权限、取消与输出校验。决策以端到端 p95、成功率、资源消耗和维护复杂度共同判断,不只看单轮最快值。
