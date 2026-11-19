@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="648" viewBox="765 627 560 324">
+<defs>
+  <style>
+    text { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', sans-serif; fill:#263242; }
+    .small { font-size:19px; fill:#758093; }
+    .cap { font-size:24px; font-weight:600; }
+    .body { font-size:22px; }
+    .muted { fill:#8190a1; }
+    .button { font-size:19px; font-weight:600; }
+  </style>
+  <filter id="shadow"><feDropShadow dx="0" dy="8" stdDeviation="14" flood-color="#263242" flood-opacity=".10"/></filter>
+  <pattern id="qr" width="17" height="17" patternUnits="userSpaceOnUse"><rect width="17" height="17" fill="white"/><rect width="8" height="8" fill="#263242"/><rect x="10" y="10" width="7" height="7" fill="#263242"/></pattern>
+</defs>
+<rect x="765" y="627" width="560" height="324" rx="23" fill="white" filter="url(#shadow)"/>
+<rect x="765" y="627" width="560" height="42" rx="23" fill="#fbfcfd"/>
+<circle cx="792" cy="648" r="6" fill="#f1a59e"/><circle cx="813" cy="648" r="6" fill="#f0ce82"/><circle cx="834" cy="648" r="6" fill="#9ed5b7"/>
+<text x="1045" y="654" font-size="15" text-anchor="middle" fill="#778292">会参谋</text>
+<text x="1276" y="654" font-size="17" text-anchor="middle">⚙</text>
+<text x="1045" y="712" font-size="18" text-anchor="middle" fill="#8b96a5">周会 · 123 456 789</text>
+<circle cx="1045" cy="783" r="53" fill="#38a976"/>
+<!-- 飞书静音示例：图标加斜杠；未静音时仅去掉斜杠 -->
+<circle cx="1082" cy="817" r="19" fill="white" stroke="#dbe3e9"/>
+<rect x="1078" y="807" width="8" height="15" rx="4" fill="#263242"/>
+<path d="M1074 818a8 8 0 0 0 16 0 M1082 826v5 m-6 0h12" fill="none" stroke="#263242" stroke-width="2" stroke-linecap="round"/>
+<path d="M1071 829l22 -24" fill="none" stroke="#d8645e" stroke-width="3" stroke-linecap="round"/>
+<circle cx="1213" cy="778" r="18" fill="#d8645e"/><text x="1213" y="813" font-size="14" text-anchor="middle" fill="#8190a1">断开时</text>
+<text x="1045" y="864" class="body" text-anchor="middle">已入会</text>
+<rect x="1200" y="897" width="89" height="34" rx="9" fill="#f5f7f9" stroke="#dce2e9"/>
+<text x="1244" y="920" font-size="17" text-anchor="middle">断开</text>
+
+
+</svg>
