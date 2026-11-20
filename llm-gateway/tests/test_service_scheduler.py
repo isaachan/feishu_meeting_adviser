@@ -47,13 +47,16 @@ class DecisionValidationTests(unittest.TestCase):
 
 def payload(request_id='req-0001', backend='fake', system='角色', input_value=None,
             metadata=None, deadline=30, content_hash=None):
+    if metadata is None:
+        metadata = {}
+    metadata = {'owner_open_id': 'ou_A'} | metadata
     body = {'schema_version': 1, 'request_id': request_id, 'backend': backend,
             'model': None, 'system': system, 'input': input_value or {'input': 1},
             'output': 'decision-v1', 'deadline_seconds': deadline,
             'content_hash': content_hash or canonical_hash(
-                system, input_value or {'input': 1}, 'decision-v1', backend, None)}
-    if metadata is not None:
-        body['metadata'] = metadata
+                system, input_value or {'input': 1}, 'decision-v1', backend, None,
+                metadata['owner_open_id'], metadata.get('session_id'))}
+    body['metadata'] = metadata
     return body
 
 
@@ -85,6 +88,14 @@ class ServiceTests(unittest.TestCase):
         with self.assertRaises(RequestError) as caught:
             self.service.submit(other)
         self.assertEqual(caught.exception.code, 'content_conflict')
+
+    def test_missing_owner_is_rejected(self):
+        body = payload()
+        body['metadata'] = {'client': 'adviser'}
+        with self.assertRaises(RequestError) as caught:
+            self.service.submit(body)
+        self.assertEqual((caught.exception.status, caught.exception.code),
+                         (422, 'invalid_request'))
 
     def test_session_catalog_is_frozen_at_submission(self):
         class Catalogs:

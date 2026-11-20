@@ -29,7 +29,8 @@ class OpenCodeBackendTests(unittest.TestCase):
     def decide(self, backend, deadline=8):
         return backend.decide('会议角色', {'input': 1, 'fresh_input_keys': ['s:1']},
                               deadline_seconds=deadline,
-                              stop_event=threading.Event(), metadata={})
+                              stop_event=threading.Event(),
+                              metadata={'owner_open_id': 'ou_A'})
 
     def test_reply_decision_passes_verification_and_schema(self):
         decision = self.decide(self.backend('reply'))

@@ -33,12 +33,10 @@ class Limits:
 
 
 def canonical_hash(system: str, input_value: dict, output: str, backend: str,
-                   model: str | None, owner_open_id: str | None = None,
+                   model: str | None, owner_open_id: str,
                    session_id: str | None = None) -> str:
     identity = {'system': system, 'input': input_value, 'output': output,
-                'backend': backend, 'model': model}
-    if owner_open_id is not None:
-        identity['owner_open_id'] = owner_open_id
+                'backend': backend, 'model': model, 'owner_open_id': owner_open_id}
     if session_id is not None:
         identity['session_id'] = session_id
     canonical = json.dumps(identity,
@@ -85,11 +83,10 @@ def validate_request(payload: dict, *, limits: Limits) -> dict:
     if len(system.encode('utf-8')) + len(json.dumps(input_value).encode('utf-8')) > MAX_PAYLOAD_BYTES:
         raise RequestError(413, 'payload_too_large', 'system+input exceeds 2 MiB')
     owner = metadata.get('owner_open_id')
-    if owner is not None and (not isinstance(owner, str)
-                              or not re.fullmatch(r'ou_[A-Za-z0-9_-]{1,128}', owner)):
-        raise RequestError(422, 'invalid_request', 'owner_open_id is invalid')
+    if not isinstance(owner, str) or not re.fullmatch(r'ou_[A-Za-z0-9_-]{1,128}', owner):
+        raise RequestError(422, 'invalid_request', 'owner_open_id is required')
     session_id = metadata.get('session_id')
-    if session_id is not None and (not owner or not isinstance(session_id, str)
+    if session_id is not None and (not isinstance(session_id, str)
                                    or not re.fullmatch(r's-[A-Za-z0-9_-]{1,128}', session_id)):
         raise RequestError(422, 'invalid_request', 'session_id is invalid')
     expected = canonical_hash(system, input_value, 'decision-v1', backend, model, owner, session_id)
@@ -133,10 +130,11 @@ class GatewayService:
             return 200, self.represent(existing)
         self._check_queue()
         metadata = dict(request['metadata'])
-        session_id, owner = metadata.get('session_id'), metadata.get('owner_open_id')
-        if session_id and owner and self.catalogs is not None:
-            self.prepare(session_id, owner)
-            metadata['_gateway_context'] = self.catalogs.get(session_id, owner)
+        session_id = metadata.get('session_id')
+        if session_id and self.catalogs is not None:
+            self.prepare(session_id, metadata['owner_open_id'])
+            metadata['_gateway_context'] = self.catalogs.get(session_id,
+                                                             metadata['owner_open_id'])
         task = self.store.insert(
             request_id=request['request_id'], content_hash=payload['content_hash'],
             backend=request['backend'], model=request['model'],

@@ -16,13 +16,17 @@ from llm_gateway.store import GatewayStore
 
 
 def payload(request_id='req-0001', input_value=None, metadata=None):
+    if metadata is None:
+        metadata = {}
+    metadata = {'owner_open_id': 'ou_A'} | metadata
     body = {'schema_version': 1, 'request_id': request_id, 'backend': 'fake',
             'model': None, 'system': '角色', 'input': input_value or {'input': 1},
             'output': 'decision-v1', 'deadline_seconds': 30}
     body['content_hash'] = canonical_hash(body['system'], body['input'], body['output'],
-                                          body['backend'], body['model'])
-    if metadata is not None:
-        body['metadata'] = metadata
+                                          body['backend'], body['model'],
+                                          metadata['owner_open_id'],
+                                          metadata.get('session_id'))
+    body['metadata'] = metadata
     return body
 
 
