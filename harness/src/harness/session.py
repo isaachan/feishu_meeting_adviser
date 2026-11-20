@@ -1,7 +1,7 @@
 """Simulated meeting state and snapshot construction.
 
 Mirrors the adviser store/snapshot semantics closely enough for LLM behavior
-testing: per-caption generation bump, fresh window 120s, reply-evidence window
+testing: per-caption generation bump, fresh window 240s, reply-evidence window
 600s, byte-budgeted caption context (newest kept, oldest dropped), and
 decided_generation catch-up after an applied decision.
 """
@@ -10,7 +10,7 @@ import hashlib
 import json
 import time
 
-FRESHNESS_SECONDS = 120
+FRESHNESS_SECONDS = 240
 REPLY_EVIDENCE_SECONDS = 600
 CONTEXT_CHARACTERS = 30000
 SENT_REPLIES_LIMIT = 20

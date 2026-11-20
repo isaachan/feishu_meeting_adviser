@@ -9,7 +9,7 @@ class AdviserSettings:
     model_timeout_seconds: float = 90
     batch_seconds: float = 2
     context_characters: int = 30000
-    freshness_seconds: int = 120
+    freshness_seconds: int = 240
     reply_evidence_seconds: int = 600
     reply_interval_seconds: float = 10
     idle_timeout_s: int = 900

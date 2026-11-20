@@ -4,7 +4,7 @@
 
 ## 机制对照（advisor → harness）
 
-advisor 不是逐句触发 LLM：supervisor 每 0.5s 轮询，仅当"无运行中任务、过 backoff、存在 `generation > decided_generation` 的新句"时发起一次 decide，批 = 自上次判断以来的所有新句（freshness 窗口 120s）。harness 用手动 `/decide` 复现该批语义：输入只累积，`/decide` 时 fresh_keys = 所有未判新句。
+advisor 不是逐句触发 LLM：supervisor 每 0.5s 轮询，仅当"无运行中任务、过 backoff、存在 `generation > decided_generation` 的新句"时发起一次 decide，批 = 自上次判断以来的所有新句（freshness 窗口 240s）。harness 用手动 `/decide` 复现该批语义：输入只累积，`/decide` 时 fresh_keys = 所有未判新句。
 
 ## 运行
 
@@ -26,7 +26,7 @@ python3 -m venv .venv
 
 ## 与真实 advisor 的简化
 
-- caption 时间戳用输入时刻生成（freshness/reply-evidence 窗口 120s/600s 与真实默认一致）
+- caption 时间戳用输入时刻生成（freshness/reply-evidence 窗口 240s/600s 与真实默认一致）
 - decision 的 reply 直接记入 `sent_replies`（真实链路经 pending_reply → bot 发送）
 - 不含组织者身份/NSDP/Jira 工具、meeting_context 材料、上下文预算的 result 级裁剪（仅逐句跳过 + `context_omitted` 标记）
 
