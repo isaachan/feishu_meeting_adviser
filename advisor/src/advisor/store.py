@@ -1129,7 +1129,7 @@ class SessionStore:
         return [dict(row) for row in self.db.execute(
             "SELECT uuid,session_id,kind,content,channel,recipient_id,created_ns,"
             "0 AS attempts FROM outbox "
-            "WHERE kind='reply' AND channel='im' AND state='pending' "
+            "WHERE kind IN ('reply','subscription_notice') AND channel='im' AND state='pending' "
             'ORDER BY created_ns LIMIT ?', (limit,))]
 
     def mark_sending(self, message_uuid):
@@ -1222,6 +1222,25 @@ class SessionStore:
     # -- subscriptions ------------------------------------------------------
 
     @staticmethod
+    def _subscription_notice(tx, row, title, state, moment):
+        number = row['request_no']
+        if state == 'approved':
+            content = f'你订阅的「{title}」已获同意，之后会收到会参谋的回答。'
+        elif state == 'denied':
+            content = f'你订阅「{title}」的申请未获同意。'
+        elif state == 'owner_revoked':
+            content = f'「{title}」的订阅已被会议负责人取消，之后不会再收到回答。'
+        else:
+            content = f'你订阅「{title}」的申请已过期。如仍需要，请重新申请。'
+        notice_uuid = str(uuid5(NAMESPACE_URL, f'subscription-notice:{number}:{state}'))
+        tx.connection.execute(
+            "INSERT OR IGNORE INTO outbox(uuid,session_id,kind,content,evidence,"
+            "generation,created_ns,context_version,answer_uuid,channel,recipient_id,state) "
+            "VALUES (?,?,'subscription_notice',?,'{}',0,?,NULL,?,'im',?,'pending')",
+            (notice_uuid, row['session_id'], content, int(moment * 1_000_000_000),
+             notice_uuid, row['subscriber_open_id']))
+
+    @staticmethod
     def _expire_due_requests(tx, moment, session_id=None):
         """Atomic TTL transition + claim release; also used before new claims."""
         query = ("SELECT * FROM subscriptions WHERE state='requested' "
@@ -1234,6 +1253,9 @@ class SessionStore:
         for row in rows:
             tx.subscriptions.settle(row['request_no'], 'expired', now=moment,
                                     closed_by='system')
+            title = tx.connection.execute('SELECT title FROM sessions WHERE session_id=?',
+                                          (row['session_id'],)).fetchone()['title']
+            SessionStore._subscription_notice(tx, row, title, 'expired', moment)
             still_active = tx.connection.execute(
                 'SELECT 1 FROM subscriptions WHERE session_id=? '
                 "AND subscriber_open_id=? AND state IN ('requested','approved') LIMIT 1",
@@ -1313,6 +1335,7 @@ class SessionStore:
             settled = tx.subscriptions.settle(
                 request_no, 'approved' if decision == 'approve' else 'denied', now=moment,
                 closed_by='owner' if decision == 'deny' else None)
+            self._subscription_notice(tx, row, session['title'], settled['state'], moment)
             if settled['state'] == 'denied':
                 tx.connection.execute(
                     'UPDATE session_claims SET active=0,released_ns=? '
@@ -1351,6 +1374,13 @@ class SessionStore:
                                                                 session['owner_open_id']))
                 keep.discard(row['subscriber_open_id'])
                 tx.outbox.cancel_pending_recipients(row['session_id'], keep)
+                approval_uuid = str(uuid5(NAMESPACE_URL,
+                                          f'subscription-notice:{request_no}:approved'))
+                tx.connection.execute(
+                    "UPDATE outbox SET state='cancelled' WHERE uuid=? AND state='pending'",
+                    (approval_uuid,))
+                if caller_is_owner:
+                    self._subscription_notice(tx, row, session['title'], target, moment)
         return {'request_no': request_no, 'state': settled['state']}
 
     @_locked

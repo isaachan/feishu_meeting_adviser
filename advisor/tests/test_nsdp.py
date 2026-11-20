@@ -55,6 +55,9 @@ class FakeAuth:
     def invalidate_nsdp(self, open_id):
         self.invalidated.append(open_id)
 
+    def user_profile(self, open_id):
+        return None
+
 
 class FakeCalendar(StubCalendarValidator):
     def __init__(self, code=None, description='版本 NT3 BL2.0.0 与票 NT3VFTVDR-111482'):

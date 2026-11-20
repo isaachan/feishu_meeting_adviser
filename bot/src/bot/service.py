@@ -330,12 +330,13 @@ class BotService:
         request_no = result['request_no']
         owner = result['owner_open_id']
         title = result.get('title') or command.meeting_no
-        self._reply(message_id, f'已向组织者申请订阅《{title}》（#{request_no}），等待审批。')
+        self._reply(message_id, f'已提交「{title}」的订阅申请，等待会议负责人同意。')
         try:
             if self.transport is None:
                 raise RuntimeError('no im transport wired')
+            applicant = result.get('subscriber_display') or sender
             self.transport.send_dm(
-                owner, f'有参会者申请接收会议《{title}》的会参谋回答。\n'
+                owner, f'{applicant} 申请接收「{title}」的会参谋回答。\n'
                        f'回复「同意 #{request_no}」或「拒绝 #{request_no}」。')
         except Exception:
             LOG.exception('approval request delivery failed (best-effort by design)')

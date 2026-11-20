@@ -611,9 +611,14 @@ class AdvisorApi:
                            'multiple active sessions share this meeting number')
         target = targets[0]
         try:
-            return self.store.create_subscription_request(
+            result = self.store.create_subscription_request(
                 target['session_id'], subscriber, now=self.clock(),
                 approval_ttl_s=self.approval_ttl_s)
+            if not result['existing']:
+                profile = self._identity_directory({subscriber}).get(subscriber) or {}
+                result['subscriber_display'] = (profile.get('user_id') or profile.get('name')
+                                                or subscriber)
+            return result
         except StateError as exc:
             failure = _state_error(exc)
             if failure.code == 'claim_conflict':

@@ -401,7 +401,8 @@ class FanOutTests(Base):
         self.store.decide_subscription(request['request_no'], 'ou_A', 'approve', now=self.now)
         self.decide_reply(sid, 'k2', '第二句')
         # 新决策会取消旧 pending（取代语义）：当前 pending = k2 的双收件人
-        self.assertEqual(sorted(r['recipient_id'] for r in self.rows(sid, channel='im', state='pending')),
+        self.assertEqual(sorted(r['recipient_id'] for r in self.rows(sid, channel='im', state='pending')
+                                if r['kind'] == 'reply'),
                          ['ou_A', 'ou_B'])
         # 仅前向：k1 的回答从未生成 ou_B 行（无补发）
         self.assertEqual([r['recipient_id'] for r in self.rows(sid, channel='im')
@@ -410,13 +411,14 @@ class FanOutTests(Base):
         # 撤销即刻止血：ou_B 的 pending 行被 cancel，不再进入后续 fan-out
         self.store.revoke_subscription(request['request_no'], 'ou_A', now=self.now)
         pending_b = [r for r in self.rows(sid, channel='im', state='pending')
-                     if r['recipient_id'] == 'ou_B']
+                     if r['kind'] == 'reply' and r['recipient_id'] == 'ou_B']
         self.assertEqual(pending_b, [])
         cancelled_b = [r for r in self.rows(sid, channel='im', state='cancelled')
-                       if r['recipient_id'] == 'ou_B']
+                       if r['kind'] == 'reply' and r['recipient_id'] == 'ou_B']
         self.assertEqual(len(cancelled_b), 1)
         self.decide_reply(sid, 'k3', '第三句')
-        k3 = self.rows(sid, channel='im', state='pending')
+        k3 = [r for r in self.rows(sid, channel='im', state='pending')
+              if r['kind'] == 'reply']
         self.assertEqual([r['recipient_id'] for r in k3], ['ou_A'])
 
 

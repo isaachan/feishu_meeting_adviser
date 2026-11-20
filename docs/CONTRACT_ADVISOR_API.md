@@ -1,5 +1,7 @@
 # Advisor 内部 API 契约（bot ↔ advisor）
 
+> **v2.8（2026-11-20）**：§1.1 `claim_conflict` 可附 `conflicting_title`；§4.1 新申请响应新增 `subscriber_display`（user_id → 姓名 → open_id）；§5–§7 审批同意、拒绝、过期及撤销通知以 `subscription_notice` 进入 IM outbox（additive，advisor/bot 同仓同步）。
+>
 > **v2.7（2026-11-19）**：§9.7 新增会话任务耗时导出 `GET /admin/sessions/{id}/timings`（每任务阶段 timings 明细，gateway 阶段 + advisor 衔接点，additive，仅 admin-site 使用；指标定义见 [LLM_GATEWAY_PERFORMANCE_MEASUREMENT](LLM_GATEWAY_PERFORMANCE_MEASUREMENT.md)）。同批非契约变更：gateway 任务响应新增 `finished_at`、`timings` 字段扩展（advisor 侧消费，不经本契约面）。
 >
 > **v2.6（2026-11-19）**：§2 小C 邀请名单语义扩展——邀请名单 = user 直接参与人 ∪ **受邀 chat（群组）参与人的群成员**。直接命中失败后，advisor 按场经专用接口 `GET /calendars/{id}/events/{event_id}/attendees/{attendee_id}/chat_members`（ attendee_id 为 attendees 接口返回的 `chat_*`）分页展开群成员匹配调用者身份；组织者路径与直接命中路径不发起该调用（沿用 v2.5 懒调用）。修复小C 是受邀群组成员却报 `not_invited`。失败语义：飞书侧确定性拒绝（调用者不在群内/参与人列表不可见）视为该群不构成邀请证明；传输/认证故障与分页截断 fail-closed 为 `auth_unavailable`。响应结构不变（additive）。调研：studies/calendar-group-attendee（live 验证待补）。
@@ -142,13 +144,14 @@
 ```json
 {"request_no": 7, "session_id": "s-3f9c", "state": "requested",
   "approval_deadline_at": 1762801800.0,
-  "owner_open_id": "ou_A", "title": "周会"}
+  "owner_open_id": "ou_A", "title": "周会", "subscriber_display": "kai.han"}
 ```
 
 - 会议号解析到唯一实例的 `running`/`paused` 会话才受理（v2：**paused 也受理**，已定 2026-11-16）；未命中 / draining / ended → `not_found`（bot 回"未找到该会议或会议已结束"）。
 - 申请人在任何**非 ended** 会话已有归属（owner/订阅，`requested` 也算占位）→ `claim_conflict`（STATE_MACHINES §3.1）。
 - `request_no`（即 #rN）**全局唯一**、单调递增，advisor 分配；`approval_deadline_at`（Unix 秒）为持久化审批截止，到期未决自动 `expired`。
 - 审批请求的 IM 投递由 bot 直接完成（不走 outbox，不承诺可靠投递——bot 离线期间申请可丢，小B 重发即可）。
+- 新申请响应附 `subscriber_display`：飞书 `user_id` 优先，缺失时用姓名，最后回退 `subscriber_open_id`；仅供审批通知显示。已存在申请的幂等响应不含该字段。
 
 ## 5. 审批与撤销（S3.3–S3.5）
 
@@ -162,6 +165,7 @@
 
 - 仅 `requested` 可 decide；重复 decide（含各终态行）幂等返回当前状态；**对 `expired` 行 decide → `invalid_state`**（逾期审批不得复活，重申请走新行）；非该会话 owner → `not_owner`。
 - `approve` 生效口径：**从下一条决策起**该收件人进入 fan-out 集合（仅前向，不回溯）。
+- 实际从 `requested` 决定为 `approved` / `denied` 时，同事务为申请人生成一条 `subscription_notice` IM 通知；重复 decide 不重复通知。
 
 ### 5.2 `POST /subscriptions/{request_no}/revoke`
 
@@ -177,6 +181,7 @@
 
 - 终态行重复 revoke → `200 {request_no, state: <当前终态>}`（幂等回显，含旧 `revoked` 历史行）。
 - 撤销/退订即刻止血：该收件人 pending 的 IM 行置 `cancelled`，后续决策不再 fan-out；已 `sent`/`uncertain` 不追回。
+- owner 撤销时取消尚未发送的批准提醒，并为申请人生成撤销通知；本人退订时取消尚未发送的批准提醒。
 
 ## 6. 与 REQUIREMENTS S3 边界的逐条对应
 
@@ -216,7 +221,7 @@ v1 中「revoked 终态再申请 → 409」作废（已定 2026-11-16）；旧 `
 
 ### 6.4 审批超时（v2 新增）
 
-`requested` 行到期未决 → 系统 `expired` 并释放占位；bot 对 subscriber 的「状态」查询显示过期状态；逾期的 decide 返回 `invalid_state`，subscriber 重新申请即可。
+`requested` 行到期未决 → 系统 `expired` 并释放占位，同时为申请人生成一条 `subscription_notice` IM 通知；逾期的 decide 返回 `invalid_state`，subscriber 重新申请即可。
 
 ## 7. outbox 拉取与回写（通知面）
 
@@ -238,6 +243,7 @@ v1 中「revoked 终态再申请 → 409」作废（已定 2026-11-16）；旧 `
 ```
 
 - 只返回 `channel=im` 且 `state=pending` 的行（`local` 行是决策事实来源，不经传输）；按 created_at 升序、limit 上限 50。
+- 行种类包括模型回答 `reply` 与审批结果/过期提醒 `subscription_notice`；后者不包含字幕或录音。
 - `owner_open_id` 可选：缺省返回全部 owner 的待发行（bot 单实例拉全量）。
 
 ### 7.2 `POST /outbox/{uuid}/result`

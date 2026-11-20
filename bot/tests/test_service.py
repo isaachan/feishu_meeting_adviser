@@ -160,7 +160,7 @@ class FakeAdvisor:
         if self.error:
             raise self.error
         return {'request_no': 7, 'state': 'requested', 'existing': False,
-                'owner_open_id': 'ou_A', 'title': '周会'}
+                'owner_open_id': 'ou_A', 'title': '周会', 'subscriber_display': 'kai.han'}
 
     def decide_subscription(self, request_no, owner, decision, *, message_id=''):
         self.calls.append(('decide', request_no, owner, decision))
@@ -312,11 +312,13 @@ class BotServiceTests(unittest.TestCase):
 
     def test_subscribe_flow_notifies_owner(self):
         reply = self.handle('我想收到会议 123456789 的信息', sender='ou_B', message_id='om-4')
-        self.assertIn('#7', reply)
+        self.assertIn('已提交「周会」的订阅申请', reply)
         self.assertEqual(len(self.transport.dms), 1)
         owner_dm = self.transport.dms[0]
         self.assertEqual(owner_dm[0], 'ou_A')
+        self.assertIn('kai.han 申请接收「周会」', owner_dm[1])
         self.assertIn('同意 #7', owner_dm[1])
+        self.assertIn('等待会议负责人同意', reply)
 
     def test_approve_flow(self):
         self.handle('同意 #7', message_id='om-5')
@@ -428,6 +430,16 @@ class BotServiceTests(unittest.TestCase):
         self.service.poll_once()
         self.assertEqual(self.transport.dms[-1], ('ou_A', '回答内容'))
         self.assertIn(('result', 'u-1', 'sent'), self.advisor.calls)
+
+    def test_subscription_result_notice_reaches_applicant(self):
+        self.advisor.pending = [{'uuid': 'sub-7-approved',
+                                 'kind': 'subscription_notice', 'channel': 'im',
+                                 'recipient_open_id': 'ou_B', 'session_id': 's-abc123',
+                                 'payload': {'text': '你订阅的「周会」已获同意，之后会收到会参谋的回答。'}}]
+        self.service.poll_once()
+        self.assertEqual(self.transport.dms[-1][0], 'ou_B')
+        self.assertIn('已获同意', self.transport.dms[-1][1])
+        self.assertIn(('result', 'sub-7-approved', 'sent'), self.advisor.calls)
 
     def test_outbox_poll_uncertain_on_failure(self):
         class BrokenTransport(FakeTransport):

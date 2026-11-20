@@ -139,6 +139,22 @@ class ClaimConflictMessageTests(ApiBase):
         self.assertEqual(body['error']['conflicting_title'], '会议 987654321')
 
 
+class SubscriptionIdentityTests(ApiBase):
+    def test_requester_display_priority_and_fallback(self):
+        self.join()
+        for open_id, profile, expected in (
+                ('ou_B', {'name': '韩锴', 'user_id': 'kai.han'}, 'kai.han'),
+                ('ou_C', {'name': '韩锴', 'user_id': None}, '韩锴'),
+                ('ou_D', None, 'ou_D')):
+            if profile is not None:
+                self.auth.profiles[open_id] = profile
+            status, body = self.post('/subscription-requests',
+                                     {'subscriber_open_id': open_id,
+                                      'meeting_no': '123456789'}, key=f'identity-{open_id}')
+            self.assertEqual(status, 200)
+            self.assertEqual(body['subscriber_display'], expected)
+
+
 class CAdmissionTests(ApiBase):
     """SM-04: supervisor (小C) admission via grant list + occurrence invite."""
 
@@ -544,10 +560,17 @@ class SubscriptionApiTests(ApiBase):
             f"/subscription-requests/{request_row['request_no']}/decide",
             {'owner_open_id': 'ou_A', 'decision': 'approve'}, key='decide-1')
         self.assertEqual(decided['state'], 'approved')
+        _, pending_notices = self.get('/outbox/pending')
+        self.assertEqual(len(pending_notices['rows']), 1)
+        self.assertEqual(pending_notices['rows'][0]['recipient_open_id'], 'ou_B')
+        self.assertIn('已获同意', pending_notices['rows'][0]['payload']['text'])
         status, revoked = self.post(
             f"/subscriptions/{request_row['request_no']}/revoke",
             {'owner_open_id': 'ou_A'}, key='revoke-1')
         self.assertEqual(revoked['state'], 'owner_revoked')
+        _, pending_notices = self.get('/outbox/pending')
+        self.assertEqual(len(pending_notices['rows']), 1)
+        self.assertIn('已被会议负责人取消', pending_notices['rows'][0]['payload']['text'])
         status, again = self.subscribe(session, key='sub-2')
         self.assertEqual((status, again['state']), (200, 'requested'))
         self.assertGreater(again['request_no'], request_row['request_no'])

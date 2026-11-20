@@ -68,11 +68,47 @@ class StateMachineSpecTests(unittest.TestCase):
             'SELECT state,closed_by FROM subscriptions WHERE request_no=?',
             (first['request_no'],)).fetchone()
         self.assertEqual(tuple(state), ('expired', 'system'))
+        notices = self.store.pending_im_rows()
+        self.assertEqual(len(notices), 1)
+        self.assertEqual(notices[0]['recipient_id'], 'ou_B')
+        self.assertIn('「周会」的申请已过期', notices[0]['content'])
+        self.assertEqual(self.store.expire_subscription_requests(now=self.now + 3), 0)
+        self.assertEqual(len(self.store.pending_im_rows()), 1)
         with self.assertRaises(StateError):
             self.store.decide_subscription(first['request_no'], 'ou_A', 'approve',
                                            now=self.now + 3)
         new = self.store.create_subscription_request(self.sid, 'ou_B', now=self.now + 3)
         self.assertGreater(new['request_no'], first['request_no'])
+
+    def test_decision_queues_one_notice_for_subscriber(self):
+        first = self.subscribe()
+        result = self.store.decide_subscription(first['request_no'], 'ou_A', 'approve',
+                                                now=self.now + 1)
+        self.assertEqual(result['state'], 'approved')
+        notices = self.store.pending_im_rows()
+        self.assertEqual(len(notices), 1)
+        self.assertEqual(notices[0]['kind'], 'subscription_notice')
+        self.assertEqual(notices[0]['recipient_id'], 'ou_B')
+        self.assertIn('「周会」已获同意', notices[0]['content'])
+        self.store.decide_subscription(first['request_no'], 'ou_A', 'approve', now=self.now + 2)
+        self.assertEqual(len(self.store.pending_im_rows()), 1)
+
+        second = self.subscribe('ou_C')
+        self.store.decide_subscription(second['request_no'], 'ou_A', 'deny', now=self.now + 3)
+        notices = self.store.pending_im_rows()
+        self.assertEqual(len(notices), 2)
+        self.assertEqual(notices[-1]['recipient_id'], 'ou_C')
+        self.assertIn('申请未获同意', notices[-1]['content'])
+
+    def test_revoke_replaces_unsent_approval_notice(self):
+        request = self.subscribe()
+        self.store.decide_subscription(request['request_no'], 'ou_A', 'approve',
+                                       now=self.now + 1)
+        self.store.revoke_subscription(request['request_no'], 'ou_A', now=self.now + 2)
+        notices = [r for r in self.store.pending_im_rows()
+                   if r['kind'] == 'subscription_notice']
+        self.assertEqual(len(notices), 1)
+        self.assertIn('已被会议负责人取消', notices[0]['content'])
 
     def test_expiry_and_approval_boundary_are_atomic(self):
         first = self.store.create_subscription_request(
@@ -148,7 +184,7 @@ class StateMachineSpecTests(unittest.TestCase):
         result = self.store.revoke_subscription(request['request_no'], 'ou_A', now=self.now)
         self.assertEqual(result['state'], 'owner_revoked')
         pending = [r for r in self.store.db.execute(
-            "SELECT recipient_id,state FROM outbox WHERE channel='im'")]
+            "SELECT recipient_id,state FROM outbox WHERE channel='im' AND kind='reply'")]
         states = {r['recipient_id']: r['state'] for r in pending}
         self.assertEqual(states.get('ou_B'), 'cancelled')
         self.assertEqual(states.get('ou_A'), 'pending')
