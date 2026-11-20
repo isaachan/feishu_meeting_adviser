@@ -96,7 +96,7 @@ class AutoConsumeTests(SupervisorBase):
             {'remote_timings': {'tool_events': ['jira_authorization_required']}})
         rows = self.im_rows(session['session_id'])
         self.assertEqual(len(rows), 2)
-        self.assertTrue(any('Jira PAT' in row['content'] and 'jira/submit' in row['content']
+        self.assertTrue(any('Jira' in row['content'] and 'jira/submit' in row['content']
                             for row in rows))
 
     def test_tool_authorization_event_notifies_organizer(self):

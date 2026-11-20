@@ -196,7 +196,7 @@ class FeishuMeetingObserver:
             url = self.auth.authorize_url(session['owner_open_id'], 'meeting:observe')
             self.store.insert_owner_notice(
                 session['session_id'], session['owner_open_id'],
-                '会参谋无法观察你的飞书会议在会状态，请重新授权飞书：' + url,
+                '会参谋暂时无法确认你是否在会。请打开链接重新授权飞书：\n' + url,
                 now=now, dedupe_s=3600, provider='meeting-observer')
             self._notified_at[session['session_id']] = now
         except (AuthUnavailable, error.HTTPError, error.URLError, OSError, KeyError):

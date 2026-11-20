@@ -11,13 +11,18 @@ from typing import Protocol
 
 from .advisor_client import AdvisorApiError, AdvisorClient
 from .commands import Command, CommandError, parse_command
-from .recorder_command import CommandRenderError, render
 
 LOG = logging.getLogger(__name__)
 
-HELP = ('会参谋指令：会议列表 / 入会 <会议号|链接> / 结束会议 [会议号] / 状态 / '
-        '同意 [编号] / 拒绝 [编号]（不带编号=最新待审批）/ 撤销 [编号]（撤销已批准的订阅）。'
-        '参会者可发：我想收到会议 <会议号> 的信息 / 取消订阅 [会议号]')
+HELP = ('你可以这样发消息：\n'
+        '会议列表\n'
+        '入会 123456789\n'
+        '结束会议（也可加会议号）\n'
+        '状态\n'
+        '同意 #7 / 拒绝 #7（也可不带编号，处理最新申请）\n'
+        '撤销 #7（取消已批准的订阅）\n'
+        '我想收到会议 123456789 的信息\n'
+        '取消订阅（也可加会议号）')
 
 
 class ImTransport(Protocol):
@@ -61,9 +66,6 @@ class BotService:
                 except AdvisorApiError as exc:
                     LOG.warning('slow command failed: %s %s', exc.code, exc.message)
                     self._dm(sender, self._advisor_error_text(exc))
-                except CommandRenderError as exc:
-                    LOG.warning('command render failed: %s', exc)
-                    self._dm(sender, f'采集命令渲染失败（{exc}）；请联系管理员')
                 except Exception:
                     LOG.exception('slow command crashed')
                     self._dm(sender, '操作失败，请稍后重试')
@@ -100,9 +102,6 @@ class BotService:
                         exc.extra if exc.code in ('authorization_required',
                                                   'advisor_unreachable') else '')
             self._reply(message_id, self._advisor_error_text(exc))
-        except CommandRenderError as exc:
-            LOG.warning('command render failed: %s', exc)
-            self._reply(message_id, f'采集命令渲染失败（{exc}）；请联系管理员')
 
     def _reply(self, message_id, text):
         try:
@@ -115,27 +114,27 @@ class BotService:
         if exc.code == 'authorization_required':
             missing = exc.extra.get('missing_credentials')
             if isinstance(missing, list) and missing:
-                lines = ['入会前请完成以下授权或凭据提交：']
-                labels = {'feishu': '飞书授权', 'nsdp': 'NSDP token', 'jira': 'Jira PAT'}
+                lines = ['入会前，请先完成以下操作：']
+                labels = {'feishu': '授权飞书', 'nsdp': '提交版本计划凭据',
+                          'jira': '提交 Jira 凭据'}
                 for item in missing:
                     if not isinstance(item, dict) or item.get('provider') not in labels:
                         continue
                     url = item.get('authorize_url') or item.get('submit_url')
                     if isinstance(url, str) and url:
                         lines.append(f"{labels[item['provider']]}：{url}")
-                lines.append('提交链接 10 分钟内有效；完成后请重新发送入会指令。请勿在聊天中发送 token。')
+                lines.append('链接 10 分钟内有效。完成后，请重新发送「入会」。')
                 return '\n'.join(lines)
             if exc.extra.get('provider') == 'jira':
-                return ('请先提交你的 Jira PAT（链接 10 分钟内有效）：\n'
+                return ('请打开链接提交 Jira 凭据（10 分钟内有效）：\n'
                         + exc.extra.get('submit_url', ''))
             if exc.extra.get('provider') == 'nsdp':
                 url = exc.extra.get('submit_url', '')
-                return ('听会需要查询 NSDP 版本计划，请先提交你的 NSDP token'
-                        '（打开链接粘贴即可，电脑/手机均可，需内网/VPN；10 分钟内有效）：\n' + url)
+                return ('请打开链接提交版本计划凭据（10 分钟内有效）：\n' + url)
             url = exc.extra.get('authorize_url', '')
-            return f'需要先完成授权，请点击链接（电脑/手机均可）：\n{url}'
+            return f'请先打开链接完成飞书授权：\n{url}'
         if exc.code == 'nsdp_unavailable':
-            return 'NSDP 服务暂时不可用，请稍后重试。'
+            return '版本计划暂时无法查询，请稍后重试。'
         if exc.code == 'meeting_not_found':
             return '未在日历中找到这场会议'
         if exc.code == 'not_organizer':
@@ -143,40 +142,41 @@ class BotService:
         if exc.code == 'meeting_ambiguous':
             return '该会议号当前对应多个场次，请稍后在目标场次的时间窗内重试'
         if exc.code == 'session_claimed':
-            return '该会议已由其他人启动会参谋，本场由其负责（先到先得，不可转移）'
+            return '这场会议的会参谋已由其他人开启。'
         if exc.code == 'instance_ended':
-            return ('该场会议的辅助已结束，本场不可重新开始'
-                    '（每场会议只能有一个会话，请等待下一次会议）')
+            return '这场会议的会参谋已结束，无法再次开启。'
         if exc.code == 'claim_conflict':
-            return '你已归属另一场未结束的会议（发起人或订阅均占名额），请先结束/退出后再试'
+            title = exc.extra.get('conflicting_title')
+            meeting = f'（「{title}」）' if title else ''
+            return f'你已有一场会参谋会议{meeting}，请先结束或退出。'
         if exc.code == 'not_supervisor':
-            return '仅会议组织者或管理员授权的参会者可以启动会参谋'
+            return '只有会议组织者或获授权的参会者可以开启会参谋。'
         if exc.code == 'not_invited':
-            return '你不在该场会议的日历邀请名单（直接或所在受邀群组）中，无法启动会参谋'
+            return '你不在这场会议的邀请名单中，无法开启会参谋。'
         if exc.code == 'outside_window':
-            return '当前不在会议时间窗内'
+            return '现在还不能入会，请在会议开始前后再试。'
         if exc.code == 'not_found':
             return '未找到该会议或会议已结束'
         if exc.code == 'invalid_state':
             if 'revoked' in (exc.message or ''):
                 return '该订阅已被组织者撤销'
-            return exc.message or '当前状态不允许该操作'
+            if 'expired' in (exc.message or ''):
+                return '这条订阅申请已过期，请重新申请。'
+            return '现在无法完成这个操作，请查看「状态」后再试。'
         if exc.code == 'not_owner':
-            return '只有组织者可以执行该操作'
+            return '只有这场会参谋会议的负责人可以操作。'
         if exc.code == 'advisor_unreachable':
-            return ('连接云端超时，操作可能仍在后台进行——请等 1 分钟后发「状态」'
-                    '确认结果，先不要重发指令。')
+            return '暂时没有收到结果。请等 1 分钟后发送「状态」确认，先不要重复操作。'
         if exc.code == 'auth_unavailable':
-            return '云端凭据服务暂时不可达（fail-closed），请稍后重试。'
-        return '操作失败：' + (exc.message or exc.code)
+            return '授权服务暂时不可用，请稍后重试。'
+        return '操作没成功，请稍后重试。'
 
     # -- command handlers --------------------------------------------------------
 
     def _cmd_join(self, sender, command, message_id):
-        """T6：慢指令——立即回执，建会放后台，完成后主动 DM 启动命令。"""
+        """慢指令：立即回执，建会放后台，完成后主动通知。"""
         self._reply(message_id,
-                    '正在入会：校验日历并准备会话中…完成或失败都会另行通知'
-                    '（首次可能需要几十秒，期间无需重发）。')
+                    '正在入会…首次可能需要几十秒，期间无需重发。')
         self._spawn_slow(self._user_lock(sender), sender,
                          lambda: self._join_now(sender, command, message_id))
 
@@ -184,15 +184,7 @@ class BotService:
         result = self.advisor.create_session(
             sender, command.meeting_no, password=command.password,
             message_id=message_id)
-        args = dict(result['recorder_command_args'])
-        args['mic'] = bool(command.kind == 'join' and False)  # mic opt-in lands with S1 UX
-        command_text = render(args)
-        hint = '（该会议已在服务中，沿用原会话）' if result.get('existing') else ''
-        self._dm(sender,
-                 f'已入会《{result["title"]}》{hint}\n在 laptop 终端粘贴执行：\n\n'
-                 f'{command_text}\n\n启动后我会开始听会。（也可打开 GUI 客户端，'
-                 f'会话出现后点「开始采集」即可，无需粘贴命令。）\n'
-                 f'注意：请在建会后 15 分钟内开始采集，超时本场辅助将失效且不可重建。')
+        self._dm(sender, f'已入会「{result["title"]}」。\n请确保会参谋客户端已开启。')
 
     def _cmd_end(self, sender, command, message_id):
         listing = self.advisor.list_sessions(sender).get('sessions', [])
@@ -210,7 +202,8 @@ class BotService:
         result = self.advisor.end_session(target['session_id'], sender,
                                           message_id=message_id)
         phase = result['phase']
-        text = '会话已结束。' if phase == 'ended' else '正在排空收尾（draining），在途回答发完即结束。'
+        text = (f'「{target["title"]}」已结束。' if phase == 'ended'
+                else f'正在结束「{target["title"]}」，处理完成后会自动结束。')
         self._reply(message_id, text)
 
     def _pending_request_no(self, owner, state='requested'):
@@ -304,7 +297,7 @@ class BotService:
                 flags.append('进行中')
             flags.append('你是组织者' if row.get('is_organizer') else '非组织者')
             lines.append(f'《{row["title"]}》 {no_text} · {span} · {" · ".join(flags)}')
-        self._reply(message_id, '近期会议（入会请直接发：入会 <会议号>）：\n' + '\n'.join(lines))
+        self._reply(message_id, '近期会议（例如：入会 123456789）：\n' + '\n'.join(lines))
 
     def _cmd_status(self, sender, command, message_id):
         listing = self.advisor.list_sessions(sender).get('sessions', [])
@@ -318,13 +311,12 @@ class BotService:
                           'denied': '已拒绝', 'revoked': '已撤销',
                           'expired': '已过期', 'subscriber_cancelled': '申请人已撤回',
                           'owner_revoked': '已撤销'}
-            phase_text = {'running': '进行中', 'paused': '已暂停（owner 离会）',
-                          'draining': '排空中', 'ended': '已结束'}
-            subs = [f'#{s["request_no"]} {state_text.get(s["state"], s["state"])}'
+            phase_text = {'running': '进行中', 'paused': '已暂停',
+                          'draining': '结束中', 'ended': '已结束'}
+            subs = [f'#{s["request_no"]} {state_text.get(s["state"], "已结束")}'
                     for s in status.get('subscriptions', [])]
-            lines.append(f'《{session["title"]}》 '
-                         f'{phase_text.get(session["phase"], session["phase"])} · '
-                         f'模型 {status.get("model_state", "?")} · 订阅 {" ".join(subs) or "无"}')
+            lines.append(f'「{session["title"]}」：{phase_text.get(session["phase"], "状态未知")}\n'
+                         f'订阅：{"、".join(subs) if subs else "无"}')
         self._reply(message_id, '\n'.join(lines))
 
     def _cmd_subscribe(self, sender, command, message_id):

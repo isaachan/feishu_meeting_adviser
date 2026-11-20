@@ -219,10 +219,8 @@ class BotServiceTests(unittest.TestCase):
     def test_join_round_trip_renders_command(self):
         ack, done = self.join_and_wait()
         self.assertIn('正在入会', ack)
-        self.assertIn('已入会《周会》', done)
-        self.assertIn('15 分钟内开始采集', done)
-        self.assertIn("recorder real --session 's-3f9c2a'", done)
-        self.assertNotIn('--mic', done)
+        self.assertEqual(done, '已入会「周会」。\n请确保会参谋客户端已开启。')
+        self.assertNotIn('recorder real', done)
         self.assertEqual(self.advisor.calls[0][:3], ('create_session', 'ou_A', '123456789'))
 
     def test_join_duplicate_message_ignored(self):
@@ -247,17 +245,17 @@ class BotServiceTests(unittest.TestCase):
         self.assertEqual(len(self.transport.dms), 0)  # not finished yet
         # a second (fast) command completes while the join is still running
         other = self.handle('结束会议', sender='ou_B', message_id='om-other')
-        self.assertIn('排空', other)
+        self.assertIn('正在结束', other)
         gate.set()
         done = self.wait_dm()[-1]
-        self.assertIn('已入会《周会》', done)
+        self.assertIn('已入会「周会」', done)
 
     def test_join_same_user_resends_serialize(self):
         """重发入会按用户串行，最终各收到一次完成 DM。"""
         self.handle('入会 123456789', message_id='om-r1')
         self.handle('入会 123456789', message_id='om-r2')
         dms = self.wait_dm(count=2)
-        self.assertTrue(all('已入会《周会》' in text for text in dms))
+        self.assertTrue(all('已入会「周会」' in text for text in dms))
 
     def test_authorization_required_sends_link(self):
         self.advisor.error = AdvisorApiError(
@@ -271,7 +269,7 @@ class BotServiceTests(unittest.TestCase):
             409, 'authorization_required', '',
             {'provider': 'nsdp', 'submit_url': 'https://x/nsdp/submit?state=9'})
         _, done = self.join_and_wait(message_id='om-2n')
-        self.assertIn('NSDP', done)
+        self.assertIn('版本计划凭据', done)
         self.assertIn('https://x/nsdp/submit?state=9', done)
         self.assertNotIn('authorize_url', done)
 
@@ -282,20 +280,20 @@ class BotServiceTests(unittest.TestCase):
                 {'provider': 'nsdp', 'submit_url': 'https://x/nsdp'},
                 {'provider': 'jira', 'submit_url': 'https://x/jira'}]})
         _, done = self.join_and_wait(message_id='om-all')
-        for text in ('飞书授权', 'NSDP token', 'Jira PAT', 'https://x/oauth',
-                     'https://x/nsdp', 'https://x/jira', '重新发送入会'):
+        for text in ('授权飞书', '版本计划凭据', 'Jira 凭据', 'https://x/oauth',
+                      'https://x/nsdp', 'https://x/jira', '重新发送「入会」'):
             self.assertIn(text, done)
 
     def test_nsdp_unavailable_message(self):
         self.advisor.error = AdvisorApiError(409, 'nsdp_unavailable', '')
         _, done = self.join_and_wait(message_id='om-2u')
-        self.assertIn('NSDP 服务暂时不可用', done)
+        self.assertIn('版本计划暂时无法查询', done)
 
     def test_four_rejections_have_reasons(self):
         for code, word in (('meeting_not_found', '未在日历中找到'),
                            ('not_organizer', '组织者'),
-                           ('outside_window', '时间窗'),
-                           ('auth_unavailable', '凭据服务暂时不可达')):
+                           ('outside_window', '会议开始前后'),
+                           ('auth_unavailable', '授权服务暂时不可用')):
             self.advisor.error = AdvisorApiError(409, code, '')
             self.transport.dms.clear()
             _, done = self.join_and_wait(message_id=f'om-{code}')
@@ -305,12 +303,12 @@ class BotServiceTests(unittest.TestCase):
         self.advisor.error = AdvisorApiError(503, 'advisor_unreachable', 'TimeoutError')
         self.transport.dms.clear()
         _, done = self.join_and_wait(message_id='om-unreach')
-        self.assertIn('操作可能仍在后台进行', done)
+        self.assertIn('暂时没有收到结果', done)
         self.assertIn('状态', done)
 
     def test_end_picks_latest_session(self):
         reply = self.handle('结束会议', message_id='om-3')
-        self.assertIn('排空', reply)
+        self.assertIn('正在结束「周会」', reply)
 
     def test_subscribe_flow_notifies_owner(self):
         reply = self.handle('我想收到会议 123456789 的信息', sender='ou_B', message_id='om-4')
@@ -349,17 +347,24 @@ class BotServiceTests(unittest.TestCase):
         from bot.advisor_client import AdvisorApiError
         cases = {
             'meeting_ambiguous': '多个场次',
-            'session_claimed': '已由其他人启动',
-            'instance_ended': '不可重新开始',
-            'claim_conflict': '已归属另一场',
-            'not_supervisor': '管理员授权的参会者',
-            'not_invited': '日历邀请名单',
+            'session_claimed': '已由其他人开启',
+            'instance_ended': '无法再次开启',
+            'claim_conflict': '已有一场会参谋会议',
+            'not_supervisor': '获授权的参会者',
+            'not_invited': '邀请名单',
         }
         for code, keyword in cases.items():
             self.advisor.error = AdvisorApiError(409, code, 'state machine rejected')
+            self.transport.dms.clear()
             self.handle('入会 123456789', message_id=f'om-{code}')
             reply = self.wait_dm()[-1]
             self.assertIn(keyword, reply)
+
+    def test_claim_conflict_names_occupied_meeting(self):
+        error = AdvisorApiError(409, 'claim_conflict', '',
+                                {'conflicting_title': '周会'})
+        self.assertEqual(self.service._advisor_error_text(error),
+                         '你已有一场会参谋会议（「周会」），请先结束或退出。')
 
     def test_duplicate_requested_does_not_notify_owner_again(self):
         self.advisor.create_subscription = lambda *args, **kwargs: {
@@ -406,10 +411,14 @@ class BotServiceTests(unittest.TestCase):
 
     def test_status_lists_sessions(self):
         reply = self.handle('状态', message_id='om-8')
-        self.assertIn('《周会》', reply)
+        self.assertIn('「周会」：进行中', reply)
+        self.assertNotIn('idle', reply)
 
     def test_help_on_unknown(self):
-        self.assertIn('会参谋指令', self.handle('随便聊聊', message_id='om-9'))
+        help_text = self.handle('随便聊聊', message_id='om-9')
+        self.assertIn('入会 123456789\n', help_text)
+        self.assertIn('我想收到会议 123456789 的信息', help_text)
+        self.assertNotIn('链接', help_text)
 
     def test_outbox_poll_delivers_and_acks(self):
         self.advisor.pending = [{'uuid': 'u-1', 'kind': 'reply', 'channel': 'im',
