@@ -20,13 +20,14 @@ class BedTests(unittest.TestCase):
         from urllib import request
         opener = request.build_opener(request.ProxyHandler({}))
         canonical = jsonlib.dumps({'system': 'r', 'input': {}, 'output': 'decision-v1',
-                                   'backend': 'fake', 'model': None},
+                                   'backend': 'fake', 'model': None,
+                                   'owner_open_id': 'ou_A'},
                                   sort_keys=True, ensure_ascii=False, separators=(',', ':'))
         content_hash = hashlib.sha256(canonical.encode()).hexdigest()
         body = {'schema_version': 1, 'request_id': 'rm' + content_hash,
                 'content_hash': content_hash, 'backend': 'fake', 'model': None,
                 'system': 'r', 'input': {}, 'output': 'decision-v1',
-                'deadline_seconds': 10}
+                'deadline_seconds': 10, 'metadata': {'owner_open_id': 'ou_A'}}
         req = request.Request(f'http://127.0.0.1:{bed.ports["gateway"]}/v1/inference-jobs',
                               data=jsonlib.dumps(body).encode(), method='POST',
                               headers={'Content-Type': 'application/json'})
