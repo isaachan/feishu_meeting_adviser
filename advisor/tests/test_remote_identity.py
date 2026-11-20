@@ -11,10 +11,14 @@ class RemoteIdentityTests(unittest.TestCase):
         first = remote_identity('role', {'generation': 1}, settings, 'ou_A')
         self.assertEqual(first, remote_identity('role', {'generation': 1}, settings, 'ou_A'))
         self.assertNotEqual(first, remote_identity('role', {'generation': 1}, settings, 'ou_B'))
-        self.assertNotEqual(first, remote_identity('role', {'generation': 1}, settings))
         meeting_a = remote_identity('role', {'generation': 1}, settings, 'ou_A', 's-a')
         meeting_b = remote_identity('role', {'generation': 1}, settings, 'ou_A', 's-b')
         self.assertNotEqual(meeting_a, meeting_b)
+
+    def test_owner_is_mandatory(self):
+        settings = AdviserSettings()
+        with self.assertRaises(TypeError):
+            remote_identity('role', {'generation': 1}, settings)
 
 
 if __name__ == '__main__':
