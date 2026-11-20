@@ -6,7 +6,7 @@ from dataclasses import dataclass
 class AdviserSettings:
     remote_url: str = 'http://127.0.0.1:8377'
     remote_backend: str = 'opencode'
-    model_timeout_seconds: float = 90
+    model_timeout_seconds: float = 220
     batch_seconds: float = 2
     context_characters: int = 30000
     freshness_seconds: int = 240
