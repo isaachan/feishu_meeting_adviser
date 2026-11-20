@@ -52,7 +52,8 @@ def succeeded_task(decision=None) -> dict:
 class GatewayClientTests(unittest.TestCase):
     def make_client(self, script, **kwargs):
         opener = StubOpener(script)
-        return GatewayClient('http://127.0.0.1:8377/', opener=opener, **kwargs), opener
+        return GatewayClient('http://127.0.0.1:8377/', owner='ou_A',
+                             opener=opener, **kwargs), opener
 
     def test_submit_then_poll_to_success(self):
         client, opener = self.make_client([
@@ -68,7 +69,7 @@ class GatewayClientTests(unittest.TestCase):
         self.assertEqual(body['schema_version'], 1)
         self.assertEqual(body['system'], 'meeting-snapshot-v1')
         self.assertEqual(body['output'], 'decision-v1')
-        self.assertEqual(body['metadata'], {'client': 'llm-harness'})
+        self.assertEqual(body['metadata'], {'client': 'llm-harness', 'owner_open_id': 'ou_A'})
         self.assertEqual(body['content_hash'], client.content_hash({'generation': 1}))
         self.assertTrue(body['request_id'].startswith('rm'))
         self.assertIn(body['request_id'], opener.calls[1][1])
@@ -148,10 +149,18 @@ class GatewayClientTests(unittest.TestCase):
 
     def test_backend_in_hash(self):
         client, _ = self.make_client([])
-        opencode = GatewayClient('http://x', backend='opencode', opener=StubOpener([]))
-        fake = GatewayClient('http://x', backend='fake', opener=StubOpener([]))
+        opencode = GatewayClient('http://x', owner='ou_A', backend='opencode',
+                                 opener=StubOpener([]))
+        fake = GatewayClient('http://x', owner='ou_A', backend='fake', opener=StubOpener([]))
         self.assertNotEqual(opencode.content_hash({}), fake.content_hash({}))
         self.assertEqual(opencode.content_hash({}), client.content_hash({}))
+
+    def test_owner_in_hash_and_required(self):
+        first, _ = self.make_client([])
+        second = GatewayClient('http://x', owner='ou_B', opener=StubOpener([]))
+        self.assertNotEqual(first.content_hash({}), second.content_hash({}))
+        with self.assertRaises(TypeError):
+            GatewayClient('http://x', opener=StubOpener([]))
 
 
 if __name__ == '__main__':

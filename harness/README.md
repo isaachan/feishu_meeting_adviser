@@ -12,8 +12,10 @@ advisor 不是逐句触发 LLM：supervisor 每 0.5s 轮询，仅当"无运行�
 cd harness
 python3 -m venv .venv
 .venv/bin/python -m pip install -e '.[dev]'
-.venv/bin/llm-harness --url http://127.0.0.1:8377 [--backend opencode|fake] [--deadline 90]
+.venv/bin/llm-harness --owner ou_xxxxxxxx --url http://127.0.0.1:8377 [--backend opencode|fake] [--deadline 90]
 ```
+
+`--owner` 必填（`ou_` 开头的 open_id）：网关按 `CONTRACT_INFERENCE_IDENTITY` v2 要求组织者身份，NSDP/Jira 工具以该身份授权。
 
 ## REPL
 
@@ -28,7 +30,7 @@ python3 -m venv .venv
 
 - caption 时间戳用输入时刻生成（freshness/reply-evidence 窗口 240s/600s 与真实默认一致）
 - decision 的 reply 直接记入 `sent_replies`（真实链路经 pending_reply → bot 发送）
-- 不含组织者身份/NSDP/Jira 工具、meeting_context 材料、上下文预算的 result 级裁剪（仅逐句跳过 + `context_omitted` 标记）
+- 组织者身份经 `--owner` 传入并绑定推理任务（NSDP/Jira 工具以该身份执行），但不做会话预热（`context-sessions`）与 meeting_context 材料、上下文预算的 result 级裁剪（仅逐句跳过 + `context_omitted` 标记）
 
 ## 开发与测试
 

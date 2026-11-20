@@ -32,9 +32,10 @@ class GatewayError(Exception):
 
 
 class GatewayClient:
-    def __init__(self, url: str, *, backend: str = 'opencode', deadline_seconds: float = 90,
-                 timeout_seconds: float = 10.0, opener=None):
+    def __init__(self, url: str, *, owner: str, backend: str = 'opencode',
+                 deadline_seconds: float = 90, timeout_seconds: float = 10.0, opener=None):
         self.url = url.rstrip('/')
+        self.owner = owner
         self.backend = backend
         self.deadline_seconds = deadline_seconds
         self.timeout_seconds = timeout_seconds
@@ -42,7 +43,7 @@ class GatewayClient:
 
     def content_hash(self, snapshot: dict) -> str:
         identity = {'system': ROLE, 'input': snapshot, 'output': 'decision-v1',
-                    'backend': self.backend, 'model': None}
+                    'backend': self.backend, 'model': None, 'owner_open_id': self.owner}
         canonical = json.dumps(identity, sort_keys=True, ensure_ascii=False,
                                separators=(',', ':'))
         return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
@@ -96,7 +97,7 @@ class GatewayClient:
                 'content_hash': content_hash, 'backend': self.backend, 'model': None,
                 'system': ROLE, 'input': snapshot, 'output': 'decision-v1',
                 'deadline_seconds': int(self.deadline_seconds),
-                'metadata': {'client': 'llm-harness'}}
+                'metadata': {'client': 'llm-harness', 'owner_open_id': self.owner}}
         deadline = time.monotonic() + self.deadline_seconds + 2.0
         task = self._submit(body)
         expired_once = False
