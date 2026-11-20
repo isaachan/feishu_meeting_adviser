@@ -419,6 +419,7 @@ class BotServiceTests(unittest.TestCase):
     def test_help_on_unknown(self):
         help_text = self.handle('随便聊聊', message_id='om-9')
         self.assertIn('入会 123456789\n', help_text)
+        self.assertIn('同意 #7\n拒绝 #7\n', help_text)
         self.assertIn('我想收到会议 123456789 的信息', help_text)
         self.assertNotIn('链接', help_text)
 
