@@ -269,7 +269,10 @@ class AdvisorApi:
                     binding.get('start') or 0),
                 organizer_open_id=binding.get('organizer') or owner)
         except StateError as exc:
-            raise _state_error(exc) from None
+            failure = _state_error(exc)
+            if failure.code == 'claim_conflict':
+                failure.extra['conflicting_title'] = self.store.claimed_session_title(owner)
+            raise failure from None
         assert session is not None
         if not existing:
             self.supervisor.start_session(session['session_id'])
@@ -612,7 +615,10 @@ class AdvisorApi:
                 target['session_id'], subscriber, now=self.clock(),
                 approval_ttl_s=self.approval_ttl_s)
         except StateError as exc:
-            raise _state_error(exc) from None
+            failure = _state_error(exc)
+            if failure.code == 'claim_conflict':
+                failure.extra['conflicting_title'] = self.store.claimed_session_title(subscriber)
+            raise failure from None
         except StorageError:
             raise ApiError(500, 'internal', 'storage') from None
 

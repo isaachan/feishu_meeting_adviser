@@ -43,7 +43,7 @@
 | `meeting_ambiguous`（v2） | 同会议号有多个**独立**场次同时覆盖当前时间窗（循环系列已按 occurrence 归并解析，同系列 master+例外场不算多场次），无法消歧 | 请用户稍后在目标场次时间窗内重试 |
 | `session_claimed`（v2） | 该实例已有**他人**的非 ended 会话（先到先得，归属不可转移） | 告知"该会议已由他人启动会参谋" |
 | `instance_ended`（v2） | 该实例已有会话且已 ended/draining（每实例一生一个 session，不可复建） | 告知"该场会议的辅助已结束，不可重新开始" |
-| `claim_conflict`（v2） | 申请人在其他非 ended 会话已有归属（owner 或订阅，requested 也算占位）；或 owner 申请订阅自己的会话 | 告知"你已归属另一场未结束的会议，先结束/退出后再试" |
+| `claim_conflict`（v2） | 申请人在其他非 ended 会话已有归属（owner 或订阅，requested 也算占位）；或 owner 申请订阅自己的会话。错误体可附 `conflicting_title`（当前占用会议标题；无占用则为 null） | 带会议名称提示先结束/退出；无标题时使用通用提示 |
 | `not_supervisor`（v2） | 既非该日历事件组织者，也不在 supervisor（小C）名单 | 告知"仅组织者或管理员授权的参会者可启动" |
 | `not_invited`（v2） | 名单内小C 但不在该场日历邀请名单（也非组织者） | 告知原因 |
 | `identity_unresolved`（v2） | supervisor 名单配置时身份无法唯一解析（§9.4） | 面向 admin 显示，不转发用户 |

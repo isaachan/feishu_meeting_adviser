@@ -388,6 +388,13 @@ class SessionStore:
         return [dict(row) for row in self.db.execute(query, params)]
 
     @_locked
+    def claimed_session_title(self, open_id):
+        row = self.db.execute(
+            'SELECT s.title FROM session_claims c JOIN sessions s ON s.session_id=c.session_id '
+            'WHERE c.user_open_id=? AND c.active=1 LIMIT 1', (open_id,)).fetchone()
+        return row['title'] if row else None
+
+    @_locked
     def list_sessions_all(self, limit=500):
         """Admin face (CONTRACT_ADVISOR_API §9): every owner, every phase."""
         rows = self.db.execute(

@@ -120,6 +120,25 @@ class ApiBase(unittest.TestCase):
                          key=key or f'join-{self.counter}-{no}')
 
 
+class ClaimConflictMessageTests(ApiBase):
+    def test_join_conflict_carries_existing_meeting_title(self):
+        self.join()
+        status, body = self.post_error('/sessions',
+                                       {'owner_open_id': 'ou_A',
+                                        'meeting_ref': {'no': '987654321'}}, key='other-meeting')
+        self.assertEqual((status, body['error']['code']), (409, 'claim_conflict'))
+        self.assertEqual(body['error']['conflicting_title'], '会议 123456789')
+
+    def test_subscribe_conflict_carries_existing_meeting_title(self):
+        self.join(owner='ou_B', no='987654321')
+        self.join()
+        status, body = self.post_error('/subscription-requests',
+                                       {'subscriber_open_id': 'ou_B',
+                                        'meeting_no': '123456789'}, key='sub-other')
+        self.assertEqual((status, body['error']['code']), (409, 'claim_conflict'))
+        self.assertEqual(body['error']['conflicting_title'], '会议 987654321')
+
+
 class CAdmissionTests(ApiBase):
     """SM-04: supervisor (小C) admission via grant list + occurrence invite."""
 
