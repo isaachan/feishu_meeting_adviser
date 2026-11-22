@@ -1,5 +1,7 @@
 # 方案 C 待办
 
+- [ ] **T17 · LLM 回答改飞书富文本（reply-md-v1）**（2026-11-22 立项，设计稿见 [FEISHU_RICH_TEXT_REPLY.md](docs/FEISHU_RICH_TEXT_REPLY.md)）：当前 `reply` 经 outbox 以 `msg_type=text` 发送，会议建议中的结论/要点/链接可读性差。方案：LLM 只产受限 Markdown（`reply-md-v1`），渲染收敛在 bot `ImTransport` 边界，advisor/gateway 保持与飞书解耦；推理输出升 `decision-v2`（字段不变，仅改 `reply` 语义），outbox payload 对 `kind=reply` 增加 `"format": "markdown"`。需守住幂等键基于原始文本、4000 字节预算、链接/@ 安全与纯文本回退。任务拆分 D1–D5 见文档 §10，每项独立提交；建议首期用 `interactive` 卡片承载 Markdown。
+
 - [ ] **T16 · 即时/临时会议无法入会（日历校验找不到）**（2026-11-22 立项，待方案评审）：小A/小C 用飞书客户端直接发起（非日历预约）的即时会议没有日历事件，入会流程在 [calendar.py](advisor/src/advisor/calendar.py) `validate()` 的 events 列表匹配处直接 `meeting_not_found`，bot 回「未在日历中找到这场会议」。REQUIREMENTS v0.4 §4 把「即时会议（无日历事件）的采集与订阅」列为非目标，先做需求变更评审再定方案。候选方向（见本期分析）：① VC 兜底链路——`list_by_no` / `user_active_meeting` 解析会议号→meeting_id，以 VC 参会人/主持信息做准入，合成绑定（非日历事件 id），需确认应用/用户身份 `vc:meeting.meetingid:read` scope 与"仅调用者在会时可查"的限制；② 仅组织者（小A）路径的弱校验兜底（VC 存在/在会校验后信任）；③ 维持现状、只改话术引导先建日程。同步评估：无事件时的实例键（VC start_time）、空材料、observer 绑定、recorder `--event` 与 stt-server 校验的合成 event 形态。另排查非即时场景的"搜不到"：`_window_events()` 只查 primary 日历且未分页，共享/订阅日历或大日历截断也会漏。
 
 - [ ] **T15 · OpenCode token usage 可得性验证**（2026-11-19 立项，自性能观测方案移出）：验证 OpenCode HTTP API 的 message/session 是否暴露可验证的 token 计数（半小时级小任务，fake peer + 一次真实会话抽查）。可得则在 gateway `timings` 增记每轮输入/输出/上下文 token，支撑成本与长会话分析；不可得标注 `unavailable`，禁止字符数估算。背景见 [LLM_GATEWAY_PERFORMANCE_MEASUREMENT.md](docs/LLM_GATEWAY_PERFORMANCE_MEASUREMENT.md)。
