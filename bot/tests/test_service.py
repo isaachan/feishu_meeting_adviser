@@ -432,6 +432,16 @@ class BotServiceTests(unittest.TestCase):
         self.assertEqual(self.transport.dms[-1], ('ou_A', '回答内容'))
         self.assertIn(('result', 'u-1', 'sent'), self.advisor.calls)
 
+    def test_outbox_poll_preserves_markdown_format(self):
+        self.advisor.pending = [{'uuid': 'u-md', 'kind': 'reply', 'channel': 'im',
+                                 'recipient_open_id': 'ou_A', 'session_id': 's-abc123',
+                                 'payload': {'text': '**回答**', 'format': 'markdown'},
+                                 'created_at': 1, 'attempts': 0}]
+        self.service.poll_once()
+        delivered = self.transport.dms[-1][1]
+        self.assertEqual(delivered, '**回答**')
+        self.assertEqual(delivered.msg_format, 'markdown')
+
     def test_subscription_result_notice_reaches_applicant(self):
         self.advisor.pending = [{'uuid': 'sub-7-approved',
                                  'kind': 'subscription_notice', 'channel': 'im',

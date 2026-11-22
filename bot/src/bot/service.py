@@ -11,8 +11,14 @@ from typing import Protocol
 
 from .advisor_client import AdvisorApiError, AdvisorClient
 from .commands import Command, CommandError, parse_command
+from .render import OutboundMessage
 
 LOG = logging.getLogger(__name__)
+
+
+def _message(text, format='text') -> OutboundMessage:
+    return text if isinstance(text, OutboundMessage) else OutboundMessage(text, format)
+
 
 HELP = ('你可以这样发消息：\n'
         '会议列表\n'
@@ -28,8 +34,8 @@ HELP = ('你可以这样发消息：\n'
 
 
 class ImTransport(Protocol):
-    def send_dm(self, open_id: str, text: str) -> str: ...
-    def send_reply(self, message_id: str, text: str) -> str: ...
+    def send_dm(self, open_id: str, message: OutboundMessage) -> str: ...
+    def send_reply(self, message_id: str, message: OutboundMessage) -> str: ...
 
 
 class BotService:
@@ -73,10 +79,10 @@ class BotService:
                     self._dm(sender, '操作失败，请稍后重试')
         threading.Thread(target=guarded, name='bot-slow', daemon=True).start()
 
-    def _dm(self, open_id, text):
+    def _dm(self, open_id, text, *, format='text'):
         try:
             if self.transport is not None:
-                self.transport.send_dm(open_id, text)
+                self.transport.send_dm(open_id, _message(text, format))
         except Exception:
             LOG.exception('dm failed')
 
@@ -105,10 +111,10 @@ class BotService:
                                                   'advisor_unreachable') else '')
             self._reply(message_id, self._advisor_error_text(exc))
 
-    def _reply(self, message_id, text):
+    def _reply(self, message_id, text, *, format='text'):
         try:
             if self.transport is not None:
-                self.transport.send_reply(message_id, text)
+                self.transport.send_reply(message_id, _message(text, format))
         except Exception:
             LOG.exception('reply failed')
 
@@ -338,8 +344,9 @@ class BotService:
                 raise RuntimeError('no im transport wired')
             applicant = result.get('subscriber_display') or sender
             self.transport.send_dm(
-                owner, f'{applicant} 申请接收「{title}」的会参谋回答。\n'
-                       f'回复「同意 #{request_no}」或「拒绝 #{request_no}」。')
+                owner, OutboundMessage(
+                    f'{applicant} 申请接收「{title}」的会参谋回答。\n'
+                    f'回复「同意 #{request_no}」或「拒绝 #{request_no}」。', 'text'))
         except Exception:
             LOG.exception('approval request delivery failed (best-effort by design)')
 
@@ -370,9 +377,12 @@ class BotService:
         pending = self.advisor.pending_outbox(limit=self.outbox_limit).get('rows', [])
         for row in pending:
             open_id = row.get('recipient_open_id')
-            text = (row.get('payload') or {}).get('text', '')
+            payload = row.get('payload') or {}
+            text = payload.get('text', '')
+            format = payload.get('format', 'text')
             if not open_id or not text:
                 continue
+            message = _message(text, format)
             # Two-phase send (STATE_MACHINES v2 §1.3): claim `sending` before
             # touching Feishu so a crash mid-send lands in recoverable state
             # instead of an untracked duplicate.
@@ -381,12 +391,12 @@ class BotService:
             except AdvisorApiError as exc:
                 LOG.info('outbox claim skipped: uuid=%s (%s)', row['uuid'], exc.code)
                 continue
-            LOG.info('outbox delivering: uuid=%s -> %s text="%s"', row['uuid'],
-                     open_id, text[:120])
+            LOG.info('outbox delivering: uuid=%s -> %s format=%s text="%s"', row['uuid'],
+                     open_id, message.msg_format, text[:120])
             try:
                 if self.transport is None:
                     raise RuntimeError('no im transport wired')
-                self.transport.send_dm(open_id, text)
+                self.transport.send_dm(open_id, message)
             except Exception as exc:
                 LOG.warning('outbox delivery failed: uuid=%s -> %s (%s)',
                             row['uuid'], open_id, exc.__class__.__name__)

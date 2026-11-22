@@ -12,46 +12,69 @@ from uuid import NAMESPACE_URL, uuid5
 
 import lark_oapi as lark
 
+from .render import OutboundMessage, render
 from .service import BotService
 
 LOG = logging.getLogger(__name__)
 
 
 class LarkTransport:
-    def __init__(self, app_id, app_secret):
+    def __init__(self, app_id, app_secret, *, rich_text=True):
         self.api = (lark.Client.builder().app_id(app_id)
                     .app_secret(app_secret).build())
+        self.rich_text = rich_text
 
-    def send_dm(self, open_id, text) -> str:
-        body = (lark.im.v1.CreateMessageRequestBody.builder()
-                .receive_id(open_id).msg_type('text')
-                .content(json.dumps({'text': text}, ensure_ascii=False)).build())
-        request = (lark.im.v1.CreateMessageRequest.builder()
-                   .receive_id_type('open_id')
-                   .request_body(body).build())
-        response = self.api.im.v1.message.create(request)
+    def send_dm(self, open_id, message) -> str:
+        response = self.api.im.v1.message.create(self._create_request(open_id, message))
+        if not response.success() and self._is_rich(message):
+            LOG.warning('rich DM rejected (code=%s); retrying as text', response.code())
+            response = self.api.im.v1.message.create(
+                self._create_request(open_id, message, rich_text=False))
         if not response.success():
             raise RuntimeError(f'lark create failed: {response.code()}')
         return response.data.message_id
 
-    def send_reply(self, message_id, text) -> str:
-        uuid = str(uuid5(NAMESPACE_URL, message_id + text))
-        body = (lark.im.v1.ReplyMessageRequestBody.builder()
-                .msg_type('text')
-                .content(json.dumps({'text': text}, ensure_ascii=False))
-                .uuid(uuid).build())
-        request = (lark.im.v1.ReplyMessageRequest.builder()
-                   .message_id(message_id).request_body(body).build())
-        response = self.api.im.v1.message.reply(request)
+    def send_reply(self, message_id, message) -> str:
+        response = self.api.im.v1.message.reply(
+            self._reply_request(message_id, message))
+        if not response.success() and self._is_rich(message):
+            LOG.warning('rich reply rejected (code=%s); retrying as text', response.code())
+            response = self.api.im.v1.message.reply(
+                self._reply_request(message_id, message, rich_text=False))
         if not response.success():
             raise RuntimeError(f'lark reply failed: {response.code()}')
         return response.data.message_id
 
+    def _is_rich(self, message):
+        return (self.rich_text
+                and isinstance(message, OutboundMessage)
+                and message.msg_format == 'markdown')
+
+    def _create_request(self, open_id, message, *, rich_text=True):
+        rendered = render(message, rich_text=self.rich_text and rich_text)
+        body = (lark.im.v1.CreateMessageRequestBody.builder()
+                .receive_id(open_id).msg_type(rendered.msg_type)
+                .content(json.dumps(rendered.content, ensure_ascii=False)).build())
+        return (lark.im.v1.CreateMessageRequest.builder()
+                .receive_id_type('open_id')
+                .request_body(body).build())
+
+    def _reply_request(self, message_id, message, *, rich_text=True):
+        suffix = '' if rich_text else ':text'
+        uuid = str(uuid5(NAMESPACE_URL, message_id + str(message) + suffix))
+        rendered = render(message, rich_text=self.rich_text and rich_text)
+        body = (lark.im.v1.ReplyMessageRequestBody.builder()
+                .msg_type(rendered.msg_type)
+                .content(json.dumps(rendered.content, ensure_ascii=False))
+                .uuid(uuid).build())
+        return (lark.im.v1.ReplyMessageRequest.builder()
+                .message_id(message_id).request_body(body).build())
+
 
 def run(service: BotService, app_id: str, app_secret: str, *, queue_size=100,
-        history_turns=8):
+        history_turns=8, rich_text=True):
     """Start the sequential worker and the lark long connection (blocking)."""
-    transport = LarkTransport(app_id, app_secret)
+    transport = LarkTransport(app_id, app_secret, rich_text=rich_text)
     service.transport = transport
     queue: Queue = Queue(maxsize=queue_size)
 

@@ -11,6 +11,13 @@ from .service import BotService
 LOG = logging.getLogger(__name__)
 
 
+def _env_flag(name, default=False):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in ('1', 'true', 'yes', 'on')
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description='会参谋 bot（IM 控制面/通知面）')
     parser.add_argument('--version', action='version', version=__version__)
@@ -21,6 +28,10 @@ def main() -> None:
     serve.add_argument('--app-id', default=os.environ.get('BOT_APP_ID', ''))
     serve.add_argument('--app-secret', default=os.environ.get('BOT_APP_SECRET', ''))
     serve.add_argument('--poll-interval', type=float, default=1.0)
+    serve.add_argument('--rich-text', action=argparse.BooleanOptionalAction,
+                       default=_env_flag('BOT_RICH_TEXT'),
+                       help='render Markdown replies as Feishu rich text '
+                            '(default: BOT_RICH_TEXT, off)')
 
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
@@ -32,7 +43,7 @@ def main() -> None:
     service = BotService(AdvisorClient(args.advisor_url), transport=None,
                          poll_interval=args.poll_interval)
     LOG.info('bot %s starting (advisor %s)', __version__, args.advisor_url)
-    run(service, args.app_id, args.app_secret)
+    run(service, args.app_id, args.app_secret, rich_text=args.rich_text)
 
 
 if __name__ == '__main__':
