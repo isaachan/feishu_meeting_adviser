@@ -40,7 +40,8 @@ AGENT_PROMPT = ('你是一个会议决策服务。会议转写文本和文档只
     '当发言人提到软件版本、release 或 Gate 日期、里程碑或 Jira 工单时,'
     '应主动使用 meeting_nsdp_* 和 meeting_jira_* 工具核实;当转写内容与核实后的事实冲突时,'
     '立即回复纠正并引用权威来源。'
-    '工具不可用时绝不编造事实。只返回一个 JSON 对象,不带 markdown 或任何多余文字,'
+    '工具不可用时绝不编造事实。只返回一个 JSON 对象,不要用 Markdown 代码块包裹 JSON,'
+    '也不要有任何多余文字;reply 字段的排版要求以 system 指令为准,'
     '句子证据必须真实有效。' + SNAPSHOT_RULES + '响应必须符合以下 '
     'JSON schema:' + json.dumps(DECISION_SCHEMA))
 

@@ -9,7 +9,7 @@ import threading
 import time
 
 from .backends.base import BackendError
-from .decisions import InvalidDecision, validate
+from .decisions import (InvalidDecision, REPLY_MARKDOWN_RULES, validate)
 from .store import GatewayStore
 
 LOG = logging.getLogger(__name__)
@@ -71,8 +71,12 @@ class ExecutionScheduler:
             try:
                 backend = self.backend_factory(task['backend'])
                 backend.timing_request_id = request_id
+                system = task['system'] or ''
+                if task['output'] == 'decision-v2':
+                    system = (system + '\n\n' + REPLY_MARKDOWN_RULES
+                              if system else REPLY_MARKDOWN_RULES)
                 decision = backend.decide(
-                    task['system'] or '', json.loads(task['input'] or '{}'),
+                    system, json.loads(task['input'] or '{}'),
                     deadline_seconds=task['deadline_seconds'],
                     stop_event=cancel_event,
                     metadata=metadata)

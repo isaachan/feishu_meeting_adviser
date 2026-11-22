@@ -1,5 +1,7 @@
-"""decision-v1 output validation, mirroring the adviser-side decision schema.
+"""decision-v1/v2 output validation, mirroring the adviser-side decision schema.
 
+Both versions share the same four-field structure. decision-v2 reinterprets
+``reply`` as reply-md-v1: restricted Markdown that the bot renders for Feishu.
 The gateway validates structure only; evidence and freshness remain the
 adviser's responsibility (contract section 1).
 """
@@ -7,6 +9,13 @@ adviser's responsibility (contract section 1).
 
 class InvalidDecision(Exception):
     pass
+
+
+REPLY_MARKDOWN_RULES = (
+    '回复的 reply 字段使用受限 Markdown:允许 **加粗**、`行内代码`、'
+    '- 无序列表、1. 有序列表和 [文本](https://...) 链接;'
+    '禁止表格、图片、HTML、@提及和多级嵌套,不要在行首单独使用 #;'
+    '首行先给结论,段落之间用空行分隔。')
 
 
 DECISION_SCHEMA = {

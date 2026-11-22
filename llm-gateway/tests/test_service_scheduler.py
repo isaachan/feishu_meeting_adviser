@@ -7,7 +7,7 @@ from pathlib import Path
 
 from llm_gateway.backends.base import BackendError
 from llm_gateway.backends.fake import FakeBackend, SleepingBackend
-from llm_gateway.decisions import InvalidDecision, validate
+from llm_gateway.decisions import REPLY_MARKDOWN_RULES, InvalidDecision, validate
 from llm_gateway.scheduler import ExecutionScheduler
 from llm_gateway.service import GatewayService, Limits, RequestError, canonical_hash
 from llm_gateway.store import GatewayStore
@@ -248,6 +248,22 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(timings['tool_calls'][0]['tool'], 'meeting_jira_get_issue')
         self.assertEqual(timings['peak_rss_kb'], 12345)
         self.assertIn('finished_at', self.service.represent(row))
+
+    def test_decision_v2_appends_markdown_rules_to_system(self):
+        systems = []
+
+        class CaptureBackend(FakeBackend):
+            def decide(self, system, *args, **kwargs):
+                systems.append(system)
+                return super().decide(system, *args, **kwargs)
+
+        self.scheduler(lambda backend: CaptureBackend())
+        self.service.submit(payload('req-0001', output='decision-v1'))
+        self.wait_state('req-0001', 'succeeded')
+        self.service.submit(payload('req-0002', output='decision-v2'))
+        self.wait_state('req-0002', 'succeeded')
+        self.assertNotIn(REPLY_MARKDOWN_RULES, systems[0])
+        self.assertIn(REPLY_MARKDOWN_RULES, systems[1])
 
     def test_invalid_output_is_recorded_as_output_invalid(self):
         self.scheduler(lambda backend: FakeBackend())
