@@ -40,6 +40,32 @@ class UseAudioProbeTest(unittest.TestCase):
         self.assertEqual(record['response']['data']['meeting']['participants'][0]['name'], 'Kai')
         self.assertEqual(record['response']['data']['meeting']['extra_field'], {'nested': 42})
 
+    def test_dump_prints_raw_active_meeting_response(self):
+        stdout, stderr = io.StringIO(), io.StringIO()
+        active = {'code': 0, 'msg': 'success', 'data': {'meetings': [
+            {'meeting_id': 'meeting-id', 'meeting_no': '123456789',
+             'extra_field': {'nested': 7}}]}}
+        detail = {'code': 0, 'data': {'meeting': {
+            'meeting_no': '123456789', 'status': 2}}}
+
+        def fetch(url, token):
+            return active if 'user_active_meeting' in url else detail
+
+        with patch.dict('os.environ', {'BOT_APP_ID': 'app', 'BOT_APP_SECRET': 'secret'},
+                        clear=True), \
+                patch('sys.argv', ['probe_use_audio.py', '123456789', '--once', '--dump']), \
+                patch('probe_use_audio.authorize', return_value='user-token'), \
+                patch('probe_use_audio.fetch_full', side_effect=fetch), \
+                patch('probe_use_audio.active_ids', return_value=['meeting-id']), \
+                patch('probe_use_audio.details', return_value=detail):
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                self.assertEqual(main(), 0)
+        records = [json.loads(line) for line in stdout.getvalue().splitlines()]
+        self.assertEqual([row['phase'] for row in records],
+                         ['user_active_meeting', 'preflight'])
+        self.assertEqual(records[0]['response']['data']['meetings'][0]['extra_field'],
+                         {'nested': 7})
+
     def test_details_requests_ability_and_participants(self):
         result = {'code': 0, 'msg': 'success', 'data': {'meeting': {'status': 2}}}
         with patch('probe_use_audio.fetch_full', return_value=result) as fetch:

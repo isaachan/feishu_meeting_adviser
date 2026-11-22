@@ -58,6 +58,8 @@ python3 studies/meeting-events/probe_use_audio.py 123456789
 python3 studies/meeting-events/probe_use_audio.py 123456789 --once
 ```
 
+再加上 `--dump` 会先输出一行 `phase=user_active_meeting`，原样打印 `user_active_meeting` 的完整响应，用于核对会议号解析字段（`meeting_id` / `meeting_no`）和同号多场时的返回形态；其余流程不变。临时发起（无日历事件）的即时会议可用这条路径验证。
+
 不加 `--once` 时，即使响应缺少 `use_audio`，也会继续按提示采集“静音 → 开麦 → 再次静音”各阶段的完整响应；每行保留 `phase` 和 `sample` 供对照。末尾的自动判断只读取 `use_audio`，不影响原始响应的输出。缺失字段不会被当作 `false`。
 
 判读口径：三个阶段均稳定且 `use_audio` 不变，说明它不能反映**这次主持人麦克风切换**。若值按 `false → true → false` 变化，也只说明会议级字段与这次操作同步；应让另一名参会人保持音频连接并独立切换麦克风，进一步排除“会议中是否有音频”等会议级含义。字段缺失、值非布尔、阶段内不稳定或会议中途结束时，实验结果视为未知。此探针只读，不修改会议设置或现有服务。

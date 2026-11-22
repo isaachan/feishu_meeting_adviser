@@ -110,6 +110,8 @@ def main():
     parser.add_argument('--meeting-id', help='已知会议 ID 时跳过会议号查询')
     parser.add_argument('--port', type=int, default=8767, help='本机 OAuth 回调端口，默认 8767')
     parser.add_argument('--once', action='store_true', help='只打印一次完整响应，不进入切换实验')
+    parser.add_argument('--dump', action='store_true',
+                        help='额外打印 user_active_meeting 的完整响应，用于核对字段形态')
     parser.add_argument('--samples', type=int, default=2, help='每阶段采样次数，默认 2')
     parser.add_argument('--interval', type=float, default=2.0, help='阶段内采样间隔秒数，默认 2')
     args = parser.parse_args()
@@ -126,6 +128,9 @@ def main():
 
     try:
         token = token or authorize(app_id, app_secret, args.port)
+        if args.dump:
+            print_response('user_active_meeting', 0,
+                           fetch_full(API + '/vc/v1/bots/user_active_meeting', token))
         if args.meeting_id:
             meeting_id = args.meeting_id
             result = details(meeting_id, token)
