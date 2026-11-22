@@ -48,6 +48,9 @@ def main() -> None:
     serve.add_argument('--model', choices=['remote', 'rule'], default='remote')
     serve.add_argument('--remote-backend', choices=['fake', 'opencode'], default='opencode',
                        help='gateway backend tag sent with inference jobs')
+    serve.add_argument('--decision-output', choices=['decision-v1', 'decision-v2'],
+                       default='decision-v1',
+                       help='inference output contract; v2 asks for reply-md-v1 Markdown')
     serve.add_argument('--calendar', choices=['stub', 'feishu'], default='feishu',
                        help='calendar validation mode (default: real Feishu reads)')
     serve.add_argument('--calendar-stub', action='store_true',
@@ -86,6 +89,7 @@ def main() -> None:
         parser.error('meeting observation budgets must be positive')
     settings = AdviserSettings(remote_url=args.gateway_url,
                                 remote_backend=args.remote_backend,
+                                decision_output=args.decision_output,
                                 observe_poll_s=args.observe_poll_s,
                                 observe_timeout_s=args.observe_timeout_s,
                                 max_observation_age_s=args.max_observation_age_s,

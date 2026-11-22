@@ -46,15 +46,15 @@ class DecisionValidationTests(unittest.TestCase):
 
 
 def payload(request_id='req-0001', backend='fake', system='角色', input_value=None,
-            metadata=None, deadline=30, content_hash=None):
+            metadata=None, deadline=30, content_hash=None, output='decision-v1'):
     if metadata is None:
         metadata = {}
     metadata = {'owner_open_id': 'ou_A'} | metadata
     body = {'schema_version': 1, 'request_id': request_id, 'backend': backend,
             'model': None, 'system': system, 'input': input_value or {'input': 1},
-            'output': 'decision-v1', 'deadline_seconds': deadline,
+            'output': output, 'deadline_seconds': deadline,
             'content_hash': content_hash or canonical_hash(
-                system, input_value or {'input': 1}, 'decision-v1', backend, None,
+                system, input_value or {'input': 1}, output, backend, None,
                 metadata['owner_open_id'], metadata.get('session_id'))}
     body['metadata'] = metadata
     return body
@@ -73,6 +73,18 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual((status, body['state']), (202, 'queued'))
         self.assertEqual(body['request']['content_hash'],
                          payload()['content_hash'])
+
+    def test_decision_v2_is_accepted_and_version_is_persisted(self):
+        status, body = self.service.submit(payload(output='decision-v2'))
+        self.assertEqual((status, body['state']), (202, 'queued'))
+        row = self.store.get('req-0001')
+        self.assertEqual(row['output'], 'decision-v2')
+        self.store.claim('req-0001')
+        self.store.finish('req-0001', 'succeeded', result_json=json.dumps(
+            decision_body('**回答**')))
+        represented = self.service.represent(self.store.get('req-0001'))
+        self.assertEqual(represented['result']['output'], 'decision-v2')
+        self.assertEqual(represented['result']['decision']['reply'], '**回答**')
 
     def test_owner_is_bound_to_task_identity(self):
         body = payload(metadata={'owner_open_id': 'ou_A'})

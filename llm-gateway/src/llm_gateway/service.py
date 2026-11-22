@@ -15,6 +15,7 @@ MAX_METADATA_BYTES = 4096
 MAX_SYSTEM_CHARACTERS = 100_000
 MAX_DEADLINE_SECONDS = 240
 SUPPORTED_BACKENDS = ('fake', 'opencode')
+SUPPORTED_OUTPUTS = ('decision-v1', 'decision-v2')
 REQUEST_ID_PATTERN = re.compile(r'[A-Za-z0-9-]{8,160}')
 
 
@@ -68,8 +69,10 @@ def validate_request(payload: dict, *, limits: Limits) -> dict:
         raise RequestError(422, 'invalid_request', 'input must be a JSON object')
     if 'reference_context' in input_value:
         raise RequestError(422, 'invalid_request', 'reference_context is reserved for gateway')
-    if payload.get('output') != 'decision-v1':
-        raise RequestError(422, 'invalid_request', 'output must be decision-v1')
+    output = payload.get('output')
+    if output not in SUPPORTED_OUTPUTS:
+        raise RequestError(422, 'invalid_request',
+                           f'output must be one of {"/".join(SUPPORTED_OUTPUTS)}')
     deadline = payload.get('deadline_seconds')
     if (not isinstance(deadline, int) or isinstance(deadline, bool) or deadline < 1):
         raise RequestError(422, 'invalid_request', 'deadline_seconds must be a positive integer')
@@ -89,11 +92,11 @@ def validate_request(payload: dict, *, limits: Limits) -> dict:
     if session_id is not None and (not isinstance(session_id, str)
                                    or not re.fullmatch(r's-[A-Za-z0-9_-]{1,128}', session_id)):
         raise RequestError(422, 'invalid_request', 'session_id is invalid')
-    expected = canonical_hash(system, input_value, 'decision-v1', backend, model, owner, session_id)
+    expected = canonical_hash(system, input_value, output, backend, model, owner, session_id)
     if payload.get('content_hash') != expected:
         raise RequestError(422, 'invalid_request', 'content_hash does not match the payload')
     return {'request_id': request_id, 'backend': backend, 'model': model, 'system': system,
-            'input': input_value, 'metadata': metadata,
+            'input': input_value, 'output': output, 'metadata': metadata,
             'deadline_seconds': min(deadline, limits.deadline_cap)}
 
 
@@ -139,7 +142,7 @@ class GatewayService:
             request_id=request['request_id'], content_hash=payload['content_hash'],
             backend=request['backend'], model=request['model'],
             system=request['system'], input_json=json.dumps(request['input'], ensure_ascii=False),
-            output='decision-v1', deadline_seconds=request['deadline_seconds'],
+            output=request['output'], deadline_seconds=request['deadline_seconds'],
             metadata_json=json.dumps(metadata, ensure_ascii=False))
         LOG.info('task submitted: request_id=%s backend=%s deadline=%ss '
                  'input_chars=%s', request['request_id'], request['backend'],
@@ -180,7 +183,7 @@ class GatewayService:
             value['finished_at'] = _iso(row['finished_ns'])
         if row['state'] == 'succeeded' and row['result']:
             value['result'] = {
-                'output': 'decision-v1',
+                'output': row['output'],
                 'decision': json.loads(row['result']),
                 'timings': _timings(row),
             }

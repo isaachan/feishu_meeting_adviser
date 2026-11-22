@@ -92,8 +92,8 @@ ERROR_MAP = {
 def remote_identity(system: str, input_value: dict, settings: AdviserSettings,
                     owner_open_id: str, session_id: str | None = None) -> tuple[str, str]:
     identity = {'system': system, 'input': input_value,
-                'output': 'decision-v1', 'backend': settings.remote_backend, 'model': None,
-                'owner_open_id': owner_open_id}
+                'output': settings.decision_output, 'backend': settings.remote_backend,
+                'model': None, 'owner_open_id': owner_open_id}
     if session_id is not None:
         identity['session_id'] = session_id
     canonical = json.dumps(identity,
@@ -161,7 +161,7 @@ class RemoteModelBackend:
             metadata['session_id'] = self.session_id
         body = {'schema_version': 1, 'request_id': request_id, 'content_hash': content_hash,
                 'backend': self.settings.remote_backend, 'model': None,
-                'system': role, 'input': snapshot, 'output': 'decision-v1',
+                'system': role, 'input': snapshot, 'output': self.settings.decision_output,
                 'deadline_seconds': int(self.settings.model_timeout_seconds),
                 'metadata': metadata}
         deadline = time.monotonic() + self.settings.model_timeout_seconds + 2.0
