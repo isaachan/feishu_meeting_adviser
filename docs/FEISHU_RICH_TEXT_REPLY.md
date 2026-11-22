@@ -1,6 +1,10 @@
 # 飞书富文本回答设计（reply-md-v1）
 
-状态：设计稿，待方案评审（2026-11-22 立项）。本文只定义架构与契约边界，不包含实现。
+状态：已实现（2026-11-22 立项并落地）。实现要点：gateway 接受 `decision-v1|v2`
+（`llm-gateway/src/llm_gateway/service.py`）；advisor `--decision-output` 选择版本，
+outbox `payload.format` 标记 `reply`（`advisor/src/advisor/api.py`）；bot
+`--rich-text`/`BOT_RICH_TEXT` 开启卡片渲染，`bot/src/bot/render.py` 做方言清洗与
+纯文本回退。灰度顺序见 §9 与 [DEPLOYMENT](DEPLOYMENT.md) §5。
 
 ## 1. 背景
 

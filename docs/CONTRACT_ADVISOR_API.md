@@ -1,5 +1,7 @@
 # Advisor 内部 API 契约（bot ↔ advisor）
 
+> **v2.9（2026-11-22）**：§7.1 outbox `payload` 新增 `format: text|markdown`（additive）：模型回答 `reply` 为 `markdown`（`reply-md-v1`，见 [FEISHU_RICH_TEXT_REPLY](FEISHU_RICH_TEXT_REPLY.md)），审批/过期通知仍为 `text`。bot 按该字段决定是否渲染飞书富文本；忽略该字段的消费端按纯文本处理即可。advisor/bot 同仓同步。
+>
 > **v2.8（2026-11-20）**：§1.1 `claim_conflict` 可附 `conflicting_title`；§4.1 新申请响应新增 `subscriber_display`（user_id → 姓名 → open_id）；§5–§7 审批同意、拒绝、过期及撤销通知以 `subscription_notice` 进入 IM outbox（additive，advisor/bot 同仓同步）。
 >
 > **v2.7（2026-11-19）**：§9.7 新增会话任务耗时导出 `GET /admin/sessions/{id}/timings`（每任务阶段 timings 明细，gateway 阶段 + advisor 衔接点，additive，仅 admin-site 使用；指标定义见 [LLM_GATEWAY_PERFORMANCE_MEASUREMENT](LLM_GATEWAY_PERFORMANCE_MEASUREMENT.md)）。同批非契约变更：gateway 任务响应新增 `finished_at`、`timings` 字段扩展（advisor 侧消费，不经本契约面）。
@@ -239,11 +241,13 @@ v1 中「revoked 终态再申请 → 409」作废（已定 2026-11-16）；旧 `
 ```json
 {"rows": [{"uuid": "u-1a2b", "kind": "reply", "channel": "im",
   "recipient_open_id": "ou_A", "session_id": "s-3f9c",
-  "payload": {"text": "建议补充预算数据…"}, "created_at": "…", "attempts": 0}]}
+  "payload": {"text": "**结论**：建议补充预算数据…", "format": "markdown"},
+  "created_at": "…", "attempts": 0}]}
 ```
 
 - 只返回 `channel=im` 且 `state=pending` 的行（`local` 行是决策事实来源，不经传输）；按 created_at 升序、limit 上限 50。
 - 行种类包括模型回答 `reply` 与审批结果/过期提醒 `subscription_notice`；后者不包含字幕或录音。
+- `payload.format` 为 `text | markdown`（v2.9，2026-11-22）：`kind=reply` 恒为 `markdown`，内容遵循 `reply-md-v1`（见 [FEISHU_RICH_TEXT_REPLY.md](FEISHU_RICH_TEXT_REPLY.md)）；其余行恒为 `text`。消费端可忽略该字段按纯文本处理。
 - `owner_open_id` 可选：缺省返回全部 owner 的待发行（bot 单实例拉全量）。
 
 ### 7.2 `POST /outbox/{uuid}/result`

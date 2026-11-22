@@ -16,6 +16,8 @@ REMOTE_BACKEND="${REMOTE_BACKEND:-fake}"
 AUTH_BASE_URL="${AUTH_BASE_URL:-http://127.0.0.1:8381}"
 NOAM_BIN="${NOAM_BIN:-$HOME/.local/bin/noam}"   # NSDP 取数（--nsdp noam）
 NSDP_MODE="${NSDP_MODE:-noam}"                   # noam | off（本地测 GUI/主链路可 off 跳过 NSDP 门与取数）
+DECISION_OUTPUT="${DECISION_OUTPUT:-decision-v2}" # decision-v1 | decision-v2（v2 reply 为受限 Markdown）
+BOT_RICH_TEXT="${BOT_RICH_TEXT:-1}"              # 1 开启飞书富文本渲染，0 全纯文本
 
 # 对外可达地址：默认自动探测本机 IP（en0 -> en1），可用 HOST_IP 覆盖。
 # 服务全部绑定 0.0.0.0，录制器/调试可从局域网其它机器通过 ws://$HOST_IP:8400/ingest 连入。
@@ -87,11 +89,13 @@ start advisor 8380 "$VENV/bin/advisor" serve --data-dir "$DATA/advisor" \
   --ingest-url "$INGEST_URL" \
   --stt-url ws://127.0.0.1:8392 --gateway-url http://127.0.0.1:8377 \
   --auth-url http://127.0.0.1:8381 --model remote --remote-backend "$REMOTE_BACKEND" \
+  --decision-output "$DECISION_OUTPUT" \
   --calendar feishu --nsdp "$NSDP_MODE" $( [ "$NSDP_MODE" = noam ] && echo --noam-bin "$NOAM_BIN" )
 
 # 飞书长连接直连，避免 macOS 系统 SOCKS 代理导致 WebSocket 握手超时。
 BOT_NO_PROXY="${no_proxy:-},${NO_PROXY:-},feishu.cn,.feishu.cn"
 start bot     -    env BOT_APP_ID="$BOT_APP_ID" BOT_APP_SECRET="$BOT_APP_SECRET" \
+                     BOT_RICH_TEXT="$BOT_RICH_TEXT" \
                      no_proxy="$BOT_NO_PROXY" NO_PROXY="$BOT_NO_PROXY" \
   "$VENV/bin/bot" serve --advisor-url http://127.0.0.1:8380
 

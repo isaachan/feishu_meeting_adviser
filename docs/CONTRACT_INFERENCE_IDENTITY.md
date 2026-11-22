@@ -6,6 +6,15 @@
 **v2 变更（2026-11-20）**：`metadata.owner_open_id` 由可选改为**必填**；网关删除了
 无组织者的降级链路（无工具 prompt），缺省或格式非法的请求一律 422 `invalid_request`。
 
+## 输出契约版本（decision-v2，2026-11-22）
+
+- `output` 允许 `decision-v1 | decision-v2`，字段集合不变；`decision-v2` 仅重定义
+  `reply` 的语义为 `reply-md-v1` 受限 Markdown（见 [FEISHU_RICH_TEXT_REPLY](FEISHU_RICH_TEXT_REPLY.md)）。
+- 两版 `output` 均参与 `content_hash`，并随任务持久化、在成功响应 `result.output` 回显；
+  同一 `request_id` 不能在不同版本间复用。
+- gateway 在 `decision-v2` 任务的 system 指令中追加 Markdown 排版要求；`decision-v1`
+  行为保持不变。版本切换由 advisor `--decision-output` 显式控制，迁移期两版并存。
+
 ## 任务身份
 
 - advisor 在 `metadata.owner_open_id` 中发送当前会话的** advisor session owner** open_id（组织者小A 或名单内小C，先到先得；语义见 [STATE_MACHINES](STATE_MACHINES.md) v2 §0）；它来自服务端会话记录，不能由会议文字或模型选择。
