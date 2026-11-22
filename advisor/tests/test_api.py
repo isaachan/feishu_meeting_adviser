@@ -563,6 +563,7 @@ class SubscriptionApiTests(ApiBase):
         _, pending_notices = self.get('/outbox/pending')
         self.assertEqual(len(pending_notices['rows']), 1)
         self.assertEqual(pending_notices['rows'][0]['recipient_open_id'], 'ou_B')
+        self.assertEqual(pending_notices['rows'][0]['payload']['format'], 'text')
         self.assertIn('已获同意', pending_notices['rows'][0]['payload']['text'])
         status, revoked = self.post(
             f"/subscriptions/{request_row['request_no']}/revoke",
@@ -633,7 +634,7 @@ class OutboxApiTests(ApiBase):
         self.assertEqual(len(pending['rows']), 1)
         row = pending['rows'][0]
         self.assertEqual(row['recipient_open_id'], 'ou_A')
-        self.assertEqual(row['payload']['text'], '回答文本')
+        self.assertEqual(row['payload'], {'text': '回答文本', 'format': 'markdown'})
         status, result = self.post(f"/outbox/{row['uuid']}/result",
                                    {'status': 'sent'}, key='send-1')
         self.assertEqual(result['state'], 'acknowledged')

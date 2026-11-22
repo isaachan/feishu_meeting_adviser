@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from advisor.decision import reply_identity_marker
 from advisor.errors import StateError, StorageError
 from advisor.model_backend import Decision, load_role
 from advisor.models import Caption
@@ -420,6 +421,13 @@ class FanOutTests(Base):
         k3 = [r for r in self.rows(sid, channel='im', state='pending')
               if r['kind'] == 'reply']
         self.assertEqual([r['recipient_id'] for r in k3], ['ou_A'])
+
+
+class ReplyIdentityTests(unittest.TestCase):
+    def test_dialect_is_part_of_reply_identity(self):
+        self.assertEqual(reply_identity_marker('decision-v1'), 'adviser-reply-v1')
+        self.assertNotEqual(reply_identity_marker('decision-v1'),
+                            reply_identity_marker('decision-v2'))
 
 
 if __name__ == '__main__':

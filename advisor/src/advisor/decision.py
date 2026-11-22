@@ -19,6 +19,12 @@ from .persistence import encode
 LOG = logging.getLogger(__name__)
 
 
+def reply_identity_marker(decision_output: str) -> str:
+    """Keep decision-v1 digests stable; separate v2 replies by dialect."""
+    return ('adviser-reply-v1' if decision_output == 'decision-v1'
+            else f'adviser-reply-{decision_output}')
+
+
 class DecisionData(Protocol):
     def context_row(self, session_id: str, sentence_key: str, /) -> dict | None: ...
     def unit_of_work(self, *, fault=None) -> Any: ...
@@ -83,8 +89,10 @@ class DecisionApplier:
             tx.outbox.cancel_pending(job['session_id'])
             if reply_valid and not (control_valid and decision.control == 'cancel'):
                 basis = {key: valid_reply[key] for key in decision.reply_sentence_keys}
+                marker = reply_identity_marker(
+                    getattr(settings, 'decision_output', 'decision-v1'))
                 message_uuid = str(uuid5(NAMESPACE_URL, digest([
-                    'adviser-reply-v1', job['session_id'], job['role_version'], basis,
+                    marker, job['session_id'], job['role_version'], basis,
                     decision.reply])))
                 recipients = tx.subscriptions.approved_recipients(
                     job['session_id'], session['owner_open_id'])
