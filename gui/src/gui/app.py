@@ -276,11 +276,11 @@ def _default_capture_root():
     """Whole-session audio retention root (same layout as the recorder CLI)."""
     import sys
     if sys.platform == 'darwin':
-        base = Path.home() / 'Library' / 'Application Support' / 'macos-gui'
+        base = Path.home() / 'Library' / 'Application Support' / 'gui'
     elif sys.platform == 'win32':
-        base = Path.home() / 'AppData' / 'Local' / 'macos-gui'
+        base = Path.home() / 'AppData' / 'Local' / 'gui'
     else:
-        base = Path.home() / '.local' / 'state' / 'macos-gui'
+        base = Path.home() / '.local' / 'state' / 'gui'
     return base / 'recorder' / 'audio'
 
 

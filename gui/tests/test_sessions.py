@@ -1,8 +1,8 @@
 """Session snapshot normalization."""
 import unittest
 
-from macos_gui.api import NetworkError
-from macos_gui.sessions import normalize_sessions
+from gui.api import NetworkError
+from gui.sessions import normalize_sessions
 
 
 class NormalizeTests(unittest.TestCase):

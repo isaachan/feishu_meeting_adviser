@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "macos-gui"
+name = "gui"
 version = "0.1.0"
 description = "Organizer GUI: QR login, session discovery, capture control"
 requires-python = ">=3.11"
@@ -14,7 +14,7 @@ ui = ["PySide6>=6.6,<7", "segno>=1.6"]
 dev = ["coverage==7.16.2", "pyright==1.1.414", "ruff==0.17.0", "PySide6>=6.6,<7", "segno>=1.6"]
 
 [project.scripts]
-macos-gui = "macos_gui.__main__:main"
+gui = "gui.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -26,13 +26,13 @@ target-version = "py311"
 select = ["E9", "F63", "F7", "F82"]
 
 [tool.pyright]
-include = ["src/macos_gui"]
+include = ["src/gui"]
 pythonVersion = "3.11"
 typeCheckingMode = "basic"
 
 [tool.coverage.run]
 branch = true
-source = ["macos_gui"]
+source = ["gui"]
 
 [tool.coverage.report]
 excludeAlso = ["if __name__ == .__main__.:", "if TYPE_CHECKING:", '\.\.\.']

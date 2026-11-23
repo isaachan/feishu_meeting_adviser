@@ -43,12 +43,12 @@ if ! "$VENV/bin/python" -c "from python_socks.async_.asyncio import Proxy" >/dev
   "$VENV/bin/pip" install --timeout 60 --retries 2 -e "$ROOT/bot"
 fi
 # GUI 客户端（含 PySide6/segno，体积较大，首次安装慢）。
-# 注意：仅检查 editable marker 不够——若曾为跑单测装过不带 [ui] 的 macos-gui，
+# 注意：仅检查 editable marker 不够——若曾为跑单测装过不带 [ui] 的 gui，
 # marker 已存在但缺 PySide6，需一并检测。
-if ! ls "$VENV/lib/"*"/site-packages/__editable__.macos_gui"*-*.pth >/dev/null 2>&1 \
+if ! ls "$VENV/lib/"*"/site-packages/__editable__.gui"*-*.pth >/dev/null 2>&1 \
    || ! "$VENV/bin/python" -c "import PySide6" >/dev/null 2>&1; then
-  echo "[setup] 安装模块 macos-gui[ui] …"
-  "$VENV/bin/pip" install --timeout 60 --retries 2 -e "$ROOT/macos-gui[ui]"
+  echo "[setup] 安装模块 gui[ui] …"
+  "$VENV/bin/pip" install --timeout 60 --retries 2 -e "$ROOT/gui[ui]"
 fi
 echo "[setup] 依赖就绪"
 
@@ -110,5 +110,5 @@ echo "  gateway: http://$HOST_IP:8377"
 echo "  advisor: http://$HOST_IP:8380  ingest $INGEST_URL"
 echo "  bot: 飞书长连接（无监听端口）"
 echo "  admin:  http://127.0.0.1:8390  （运维台：会话列表/手工停止 + 五节点日志流）"
-echo "  GUI:    $VENV/bin/macos-gui   （服务器地址填 http://127.0.0.1:8380）"
+echo "  GUI:    $VENV/bin/gui   （服务器地址填 http://127.0.0.1:8380）"
 echo "日志：$DATA/logs/   停止：scripts/local-down.sh"

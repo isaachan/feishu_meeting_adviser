@@ -1,4 +1,4 @@
-# macos-gui 客户端设计（v2 UI）
+# gui 客户端设计（v2 UI）
 
 状态：2026-11-12 立项；2026-11-19 单会话低存在感 UI 修订。§2、§5 的旧 API 设计决策保留为历史背景，界面与交互以 §6.4 和 [图 4](design/monitor-concept.png) 为准。
 上游：[ARCHITECTURE](../docs/ARCHITECTURE.md)、[DEPLOYMENT](../docs/DEPLOYMENT.md)、[CONTRACT_ADVISOR_API](../docs/CONTRACT_ADVISOR_API.md)、[CONTRACT_AUTH](../docs/CONTRACT_AUTH.md)、[CONTRACT_RECORDER_STREAM](../docs/CONTRACT_RECORDER_STREAM.md)。
@@ -29,13 +29,13 @@ GUI 客户端 = recorder 的图形分发形态：**同样的采集与上行能�
 | D6 | 单会话 | 主界面不提供选择；意外返回多个会话时拒绝任意连接并显示错误 |
 | D7 | 关窗语义 | 采集中关窗 = 隐藏窗口继续采集（Dock 图标恢复）；无采集关窗 = 退出；Cmd-Q 采集中 = 确认「停止采集并退出？」→ 干净收尾后退出 |
 | D8 | 托盘 | v1 不做 |
-| D9 | 命名 | 目录 `macos-gui`（按需保留），Python 包名 `macos_gui` |
+| D9 | 命名 | 目录与 Python 包名于 2026-11-23 由 `macos-gui`/`macos_gui` 统一更名为 `gui`/`gui`（跨平台形态；windows-gui 共用主体） |
 
 ## 3. 架构
 
 ```
 ┌── 组织者 laptop ──────────────────────┐   ┌── 云端单机 ──────────────────────┐
-│  macos_gui (PySide6, 同进程)          │   │  advisor                          │
+│  gui (PySide6, 同进程)          │   │  advisor                          │
 │  ├─ ui/ 单会话主页·设置页·登录页    │   │  ├─ /gui/* ──(HTTPS 反代, 新)───┐ │
 │  ├─ core api/login/poller/config      │◄─┼─┼─ login/start·poll·sessions·   │ │
 │  ├─ capture (import recorder)         │   │  │  logout + devices 表          │ │
@@ -46,7 +46,7 @@ GUI 客户端 = recorder 的图形分发形态：**同样的采集与上行能�
 ```
 
 - 新增交互只有一条：GUI ↔ advisor `/gui/*`（HTTPS）。采集上行、入会、决策、通知全部沿用既有契约，零改动。
-- 模块依赖纪律的显式例外：`macos_gui` **直接依赖 recorder 包**（它是 recorder 的 UI 壳，同属 laptop 侧分发形态）；对 advisor/auth 仍只走契约 HTTP。
+- 模块依赖纪律的显式例外：`gui` **直接依赖 recorder 包**（它是 recorder 的 UI 壳，同属 laptop 侧分发形态）；对 advisor/auth 仍只走契约 HTTP。
 
 ## 4. 身份与登录（device-flow 扫码）
 
@@ -112,17 +112,17 @@ GUI                    advisor /gui                auth                     飞�
 
 - §2 组件表新增：advisor GUI 面 `https://<域名>/gui/*`（反代 → 127.0.0.1:8380），GUI/浏览器可达。对外入口由两个变**三个**（OAuth 回调、ingest WS、GUI API）。
 - §3 凭据表新增：device_token（laptop Keychain 明文 + advisor devices 表哈希；非用户 OAuth 凭据，泄露影响面见 §9）。
-- §1 节点表「组织者 laptop」承载由 `recorder` 更新为 `recorder / macos-gui（GUI 分发形态）`。
+- §1 节点表「组织者 laptop」承载由 `recorder` 更新为 `recorder / gui（GUI 分发形态）`。
 
 ## 6. GUI 设计
 
 ### 6.1 模块结构
 
 ```
-macos-gui/
+gui/
   pyproject.toml          # 依赖: pyside6, keyring, recorder(本地 whl 路径依赖)
-  src/macos_gui/
-    __main__.py           # python -m macos_gui 入口
+  src/gui/
+    __main__.py           # python -m gui 入口
     config.py             # server_url/device_token 读写（keyring + QSettings 兜底）
     api.py                # /gui/* 客户端（stdlib urllib，超时/线性退避）
     login.py              # device-flow 控制器（QR pixmap、poll 循环、token 落库）
@@ -163,8 +163,8 @@ boot → 无 device_token：扫码登录 → 单会话主页
 
 ## 7. 运行与分发形态
 
-- **命令行形态（开发/验收先行）**：venv 安装 macos_gui（含 recorder 路径依赖）→ `python -m macos_gui` 或 console 入口 `macos-gui` 直接运行。SCK helper 首次使用 swiftc 现场编译（recorder 既有行为）。功能验收先在此形态完成。
-- PyInstaller onedir `.app`（PySide6 + macos_gui + recorder 包 + 预编译 SCK helper；打包时 swiftc 编译 helper 放入 bundle，经 `LOCAL_MEETING_RECORDER_SCK_BIN` 指向——recorder 已支持该覆盖）。
+- **命令行形态（开发/验收先行）**：venv 安装 gui（含 recorder 路径依赖）→ `python -m gui` 或 console 入口 `gui` 直接运行。SCK helper 首次使用 swiftc 现场编译（recorder 既有行为）。功能验收先在此形态完成。
+- PyInstaller onedir `.app`（PySide6 + gui + recorder 包 + 预编译 SCK helper；打包时 swiftc 编译 helper 放入 bundle，经 `LOCAL_MEETING_RECORDER_SCK_BIN` 指向——recorder 已支持该覆盖）。
 - 不签名/不公证：README 引导右键打开绕 Gatekeeper；TCC 弹窗（屏幕录制=SCK、麦克风=开 mic 时）一次授权长期有效（TCC 记 .app）。
 - Windows：同代码 `pyinstaller onedir .exe`；loopback 源缺失时启动采集显式报「该平台暂不支持内录」（mic 可用）——WASAPI loopback 属 recorder 后续任务（G7）。
 
@@ -177,7 +177,7 @@ boot → 无 device_token：扫码登录 → 单会话主页
 | G3 | advisor GUI 面 | devices 表 + 四端点（login/start·poll·sessions·logout），args 组装复用建会逻辑 | 单测：冒充 bad_token/poll 冒领防护/draining 无 args/响应无用户凭据（红线断言） |
 | G4 | GUI 骨架 | PySide6 壳 + 设置/登录/列表 + api/poller（对桩 server） | 桩模式登录→列表全流程；401 重扫码（命令行形态） |
 | G5 | 采集集成 | capture.py + 监控页 + 停止/会话结束联动 + 关窗语义（D7） | 桩 ingest 端到端：发现→采集→ack 增长→干净停止；合盖/断网重连（命令行形态） |
-| G6a | 命令行形态验收 | 干净 venv + `python -m macos_gui` 跑真实链路 | §10 阶段一取证 |
+| G6a | 命令行形态验收 | 干净 venv + `python -m gui` 跑真实链路 | §10 阶段一取证 |
 | G6b | 打包验收 | PyInstaller .app + 文档 + 干净 Mac 实测 | §10 阶段二取证（重点 TCC/Gatekeeper/打包差异） |
 | G7 | Windows（后续） | recorder WASAPI loopback + win 打包 | 独立立项，不阻塞 G1–G6 |
 
@@ -194,7 +194,7 @@ boot → 无 device_token：扫码登录 → 单会话主页
 
 ## 10. 验收口径（G6a 命令行形态 → G6b 打包形态）
 
-**阶段一（G6a，命令行）**：干净 venv 安装 → `python -m macos_gui` → 设置页输入服务器地址 → 扫码登录（顶栏出现身份）→ 飞书发「入会」→ 主页 ≤10s 显示唯一会话 → 手动／自动连接 → 绿色「已入会」与静音图标 → bot 收到决策通知 → 关窗采集继续（Dock 恢复）→ 断开连接干净收尾（`stopped` 确认）→ 飞书「结束会议」→ 会话 ended、GUI 自动回主页。
+**阶段一（G6a，命令行）**：干净 venv 安装 → `python -m gui` → 设置页输入服务器地址 → 扫码登录（顶栏出现身份）→ 飞书发「入会」→ 主页 ≤10s 显示唯一会话 → 手动／自动连接 → 绿色「已入会」与静音图标 → bot 收到决策通知 → 关窗采集继续（Dock 恢复）→ 断开连接干净收尾（`stopped` 确认）→ 飞书「结束会议」→ 会话 ended、GUI 自动回主页。
 
 **阶段二（G6b，打包 .app）**：干净 Mac 装 .app → 右键打开（Gatekeeper 引导）→ TCC 授权一次 → 重复阶段一关键路径（登录/发现/采集/干净停止/关窗继续）；对比确认打包形态无行为差异。
 

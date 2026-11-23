@@ -9,7 +9,7 @@ on:
       - "recorder/**"
       - "stt-server/**"
       - "llm-gateway/**"
-      - "macos-gui/**"
+      - "gui/**"
       - "admin-site/**"
       - "integrations/**"
       - ".github/workflows/quality.yml"
@@ -21,7 +21,7 @@ on:
       - "recorder/**"
       - "stt-server/**"
       - "llm-gateway/**"
-      - "macos-gui/**"
+      - "gui/**"
       - "admin-site/**"
       - "integrations/**"
       - ".github/workflows/quality.yml"
@@ -35,7 +35,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        module: [recorder, advisor, bot, auth, stt-server, llm-gateway, macos-gui, admin-site]
+        module: [recorder, advisor, bot, auth, stt-server, llm-gateway, gui, admin-site]
         python-version: ["3.11", "3.14"]
         exclude:
           # stt-server's migrated sync-client WS test harness is flaky on 3.11
@@ -54,7 +54,7 @@ jobs:
           cache: pip
           cache-dependency-path: ${{ matrix.module }}/pyproject.toml
       - run: python -m pip install -e '.[dev]'
-      - if: matrix.module == 'macos-gui'
+      - if: matrix.module == 'gui'
         run: python -m pip install -e ../recorder
       - run: ruff check src tests
       - run: pyright

@@ -10,7 +10,7 @@ if (-not (Test-Path $pythonExe)) {
 }
 & $pythonExe -m pip install --upgrade pip
 if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed" }
-& $pythonExe -m pip install -e "$root\recorder[windows]" -e "$root\macos-gui[ui]" pyinstaller
+& $pythonExe -m pip install -e "$root\recorder[windows]" -e "$root\gui[ui]" pyinstaller
 if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed" }
 
 & $pythonExe -m PyInstaller --noconfirm --clean --onefile --windowed `

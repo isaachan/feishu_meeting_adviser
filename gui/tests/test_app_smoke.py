@@ -12,13 +12,13 @@ try:
 except ImportError:
     PYSIDE_READY = False
 
-from macos_gui import config as config_mod
-from macos_gui.api import ApiError
+from gui import config as config_mod
+from gui.api import ApiError
 
 if PYSIDE_READY:
     from PySide6.QtWidgets import QApplication, QLabel, QPushButton
-    from macos_gui.app import Controller, MainWindow
-    from macos_gui.ui.pages import (DashboardPage, LoginPage, SettingsPage,
+    from gui.app import Controller, MainWindow
+    from gui.ui.pages import (DashboardPage, LoginPage, SettingsPage,
                                     StatusOrb, qr_pixmap)
 
 

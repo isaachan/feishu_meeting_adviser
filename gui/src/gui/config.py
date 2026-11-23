@@ -6,7 +6,7 @@ unchanged. Storage goes through the OS keychain (macOS Keychain / Windows
 Credential Manager via keyring); nothing is written to plain files.
 """
 
-SERVICE = 'macos-gui'
+SERVICE = 'gui'
 KEY_SERVER_URL = 'server_url'
 KEY_DEVICE_TOKEN = 'device_token'
 KEY_AUTO_CONNECT = 'auto_connect'

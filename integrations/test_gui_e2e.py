@@ -1,4 +1,4 @@
-"""T5 GUI e2e：macos_gui 客户端 ↔ 真 advisor/auth 进程（集成床）。
+"""T5 GUI e2e：gui 客户端 ↔ 真 advisor/auth 进程（集成床）。
 
 覆盖：device-flow 扫码登录（stub OAuth，code 即 open_id，discovery 采纳）→
 /gui/sessions 发现会话（args 指向床 ingest，流令牌与建会一致）→
@@ -12,8 +12,8 @@ import unittest
 from pathlib import Path
 from urllib import error, parse, request
 
-from macos_gui.api import ApiError, GuiApiClient
-from macos_gui.capture import CaptureJob
+from gui.api import ApiError, GuiApiClient
+from gui.capture import CaptureJob
 from recorder.audio import FakeSource
 from test_bed import TestBed
 

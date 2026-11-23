@@ -9,7 +9,7 @@ if sys.stdout is None:
 if sys.stderr is None:
     sys.stderr = open(os.devnull, 'w', encoding='utf-8')
 
-from macos_gui.__main__ import main
+from gui.__main__ import main
 
 if __name__ == '__main__':
     sys.exit(main())

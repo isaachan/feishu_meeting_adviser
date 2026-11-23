@@ -16,7 +16,7 @@ from tempfile import TemporaryDirectory
 try:
     import websockets
     from recorder.audio import FakeSource
-    from macos_gui.capture import CaptureJob
+    from gui.capture import CaptureJob
     RECORDER_READY = True
 except ImportError:
     RECORDER_READY = False
@@ -168,15 +168,15 @@ class CaptureJobTests(unittest.TestCase):
         self.assertIn('source unavailable', job.result['error'])
 
     def test_windows_selects_platform_sources(self):
-        from macos_gui.capture import default_source_factory
-        with patch('macos_gui.capture.sys.platform', 'win32'):
+        from gui.capture import default_source_factory
+        with patch('gui.capture.sys.platform', 'win32'):
             sources = default_source_factory(True)
         self.assertEqual([type(source).__name__ for source in sources],
                          ['WindowsLoopbackSource', 'WindowsMicSource'])
 
     def test_mac_selects_mute_gated_microphone(self):
-        from macos_gui.capture import default_source_factory
-        with patch('macos_gui.capture.sys.platform', 'darwin'):
+        from gui.capture import default_source_factory
+        with patch('gui.capture.sys.platform', 'darwin'):
             sources = default_source_factory(True)
         self.assertEqual([type(source).__name__ for source in sources],
                          ['SwiftLoopbackSource', 'MacFeishuMicSource'])

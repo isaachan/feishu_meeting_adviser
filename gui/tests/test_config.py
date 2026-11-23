@@ -2,7 +2,7 @@ import sys
 import unittest
 from unittest import mock
 
-from macos_gui import config
+from gui import config
 
 
 class _BrokenKeyring:

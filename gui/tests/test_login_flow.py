@@ -1,8 +1,8 @@
 """LoginFlow state machine with a scripted fake client."""
 import unittest
 
-from macos_gui.api import ApiError, NetworkError
-from macos_gui.login import LoginFlow
+from gui.api import ApiError, NetworkError
+from gui.login import LoginFlow
 
 
 class FakeClient:

@@ -1,11 +1,11 @@
-# macos-gui（会参谋采集客户端）
+# gui（会参谋采集客户端）
 
 recorder 的图形分发形态：QR 扫码登录 → 单会话连接监视器。界面以 [图 4](design/monitor-concept.png) 为准；云端契约：CONTRACT_ADVISOR_API §8、CONTRACT_AUTH v1.2。
 
 ## 安装（命令行形态）
 
 ```sh
-cd macos-gui
+cd gui
 python3 -m venv .venv
 .venv/bin/pip install -e '.[dev]'   # 含 PySide6 + segno（QR 渲染）
 # 采集能力（G5+）需要 recorder 包：
@@ -17,7 +17,7 @@ python3 -m venv .venv
 ## 运行
 
 ```sh
-.venv/bin/python -m macos_gui        # 或 .venv/bin/macos-gui
+.venv/bin/python -m gui        # 或 .venv/bin/gui
 ```
 
 首次运行默认连接 `http://meeting-advisor.nioint.com`（免配置）→ 飞书扫码登录 → 之后直接进入单会话监视器。主界面无会话选择：灰色为无会话，红色为会话存在但连接断开，绿色“已入会”为连接正常。飞书静音时图标加斜杠，界面不显示音频采集文案。
@@ -29,10 +29,10 @@ python3 -m venv .venv
 在装有 Python 3.11+ 与 Xcode Command Line Tools（swiftc）的 Mac 上，从仓库任意位置运行：
 
 ```sh
-sh macos-gui/build.sh    # 或 ./macos-gui/build.sh
+sh gui/build.sh    # 或 ./gui/build.sh
 ```
 
-脚本建立独立虚拟环境、预编译 Swift helper（SCK 采集 + 静音检测）并运行 PyInstaller。结果为 `macos-gui/dist/MeetingAdvisor.app`（onedir，架构跟随构建机），以及可直接分发的 `dist/MeetingAdvisor-macos-<arch>.zip`（ditto 压缩，保留可执行位）。也可在 GitHub Actions 中手动运行 `macOS GUI build` workflow，下载产物。
+脚本建立独立虚拟环境、预编译 Swift helper（SCK 采集 + 静音检测）并运行 PyInstaller。结果为 `gui/dist/MeetingAdvisor.app`（onedir，架构跟随构建机），以及可直接分发的 `dist/MeetingAdvisor-macos-<arch>.zip`（ditto 压缩，保留可执行位）。也可在 GitHub Actions 中手动运行 `macOS GUI build` workflow，下载产物。
 
 不签名/不公证（v1 接受项，DESIGN §7）：首次运行请**右键打开**绕过 Gatekeeper 引导；TCC 授权（屏幕录制 = SCK 采集、麦克风 = 开 mic 时）一次授权长期有效。打包机无需在目标机安装任何依赖。
 

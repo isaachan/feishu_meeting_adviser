@@ -5,7 +5,7 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib import error, parse, request
 
-from macos_gui.api import ApiError, GuiApiClient, NetworkError
+from gui.api import ApiError, GuiApiClient, NetworkError
 
 OPENER = request.build_opener(request.ProxyHandler({}))
 

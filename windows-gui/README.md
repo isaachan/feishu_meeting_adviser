@@ -1,6 +1,6 @@
 # Windows 会参谋采集客户端
 
-Windows GUI 与 `macos-gui` 共用 PySide6 主体和 recorder 上行。支持 Windows 10 2004 及以上、Windows 11，需使用飞书桌面客户端。
+Windows GUI 与 `gui` 共用 PySide6 主体和 recorder 上行。支持 Windows 10 2004 及以上、Windows 11，需使用飞书桌面客户端。
 
 ## 构建 exe
 
@@ -24,4 +24,4 @@ powershell -ExecutionPolicy Bypass -File .\windows-gui\build.ps1
 
 ## 真机验收
 
-在能访问会参谋服务的 Windows 机器上测试：扫码登录、发现会话、只采飞书声音；勾选 mic 后切换飞书静音/开麦，验证暂停和恢复；最小化/关闭会议窗口、设备热插拔与默认 mic 切换，确认状态提示和实际采集结果。检查本地保存目录 `%LOCALAPPDATA%\macos-gui\recorder\audio` 中的音频及云端上行；长时间静音后确认恢复仍可上行。
+在能访问会参谋服务的 Windows 机器上测试：扫码登录、发现会话、只采飞书声音；勾选 mic 后切换飞书静音/开麦，验证暂停和恢复；最小化/关闭会议窗口、设备热插拔与默认 mic 切换，确认状态提示和实际采集结果。检查本地保存目录 `%LOCALAPPDATA%\gui\recorder\audio` 中的音频及云端上行；长时间静音后确认恢复仍可上行。

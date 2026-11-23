@@ -4,7 +4,7 @@
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
-gui=$root/macos-gui
+gui=$root/gui
 venv=$gui/.venv
 
 if [ ! -x "$venv/bin/python" ]; then
