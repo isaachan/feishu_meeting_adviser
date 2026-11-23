@@ -378,6 +378,91 @@ class SessionOpsTests(ApiBase):
         self.assertEqual((status, body['error']['code']), (404, 'not_found'))
 
 
+class EndPermissionTests(ApiBase):
+    """CONTRACT_ADVISOR_API v2.10 §3.3/§3.4: end = owner ∪ organizer ∪
+    enabled supervisor; discovery via /sessions/endable with end_role."""
+
+    def put(self, path, body):
+        # §9.4 route is served by the POST handler in api.py
+        self.counter += 1
+        return self.post(path, body, key=f'put-{self.counter}')
+
+    def c_owned_session(self, no='123456789'):
+        session, _existing = self.store.create_session(
+            owner_open_id='ou_C', meeting_no=no, title='周会',
+            event_calendar_id='cal_x', event_id='evt_y',
+            organizer_open_id='ou_A')
+        return session
+
+    def enable_supervisor(self, open_id, enabled=True):
+        status, body = self.put('/admin/supervisors',
+                                {'login_name': open_id, 'enabled': enabled})
+        self.assertEqual(body['open_id'], open_id)
+
+    def test_organizer_ends_c_owned_session(self):
+        session = self.c_owned_session()
+        status, result = self.post(f"/sessions/{session['session_id']}/end",
+                                   {'owner_open_id': 'ou_A'}, key='end-org')
+        self.assertEqual(result['phase'], 'draining')
+
+    def test_enabled_supervisor_ends_others_session(self):
+        _, body = self.join()  # owner ou_A
+        self.enable_supervisor('ou_C')
+        status, result = self.post(f"/sessions/{body['session_id']}/end",
+                                   {'owner_open_id': 'ou_C'}, key='end-sup')
+        self.assertEqual(result['phase'], 'draining')
+
+    def test_disabled_supervisor_and_stranger_rejected(self):
+        _, body = self.join()
+        self.enable_supervisor('ou_C', enabled=False)
+        status, result = self.post_error(f"/sessions/{body['session_id']}/end",
+                                         {'owner_open_id': 'ou_C'}, key='end-sup-off')
+        self.assertEqual((status, result['error']['code']), (409, 'not_owner'))
+        status, result = self.post_error(f"/sessions/{body['session_id']}/end",
+                                         {'owner_open_id': 'ou_B'}, key='end-stranger')
+        self.assertEqual((status, result['error']['code']), (409, 'not_owner'))
+
+    def test_organizer_and_supervisor_cannot_approve_others_session(self):
+        # §5 stays owner-only despite the §3.3 extension
+        _, body = self.join()
+        self.enable_supervisor('ou_C')
+        self.post('/subscription-requests',
+                  {'subscriber_open_id': 'ou_B', 'meeting_no': body['meeting_no']},
+                  key='end-perm-sub')
+        status, result = self.post_error('/subscription-requests/1/decide',
+                                         {'owner_open_id': 'ou_C', 'decision': 'approve'},
+                                         key='end-perm-decide')
+        self.assertEqual((status, result['error']['code']), (409, 'not_owner'))
+
+    def test_endable_listing_roles_and_filters(self):
+        _, body = self.join()  # owner ou_A, meeting 123456789
+        self.enable_supervisor('ou_C')
+        self.c_owned_session(no='987654321')  # owner ou_C, organizer ou_A
+
+        status, listing = self.get('/sessions/endable?caller_open_id=ou_A')
+        roles = {row['meeting_no']: row['end_role'] for row in listing['sessions']}
+        self.assertEqual(roles, {'123456789': 'owner', '987654321': 'organizer'})
+
+        status, listing = self.get('/sessions/endable?caller_open_id=ou_C')
+        roles = {row['meeting_no']: row['end_role'] for row in listing['sessions']}
+        self.assertEqual(roles, {'987654321': 'owner', '123456789': 'supervisor'})
+
+        status, listing = self.get('/sessions/endable?caller_open_id=ou_B')
+        self.assertEqual(listing['sessions'], [])
+
+    def test_endable_excludes_ended(self):
+        _, body = self.join()
+        self.post(f"/sessions/{body['session_id']}/end",
+                  {'owner_open_id': 'ou_A'}, key='end-x')
+        self.store.set_phase(body['session_id'], 'ended')
+        status, listing = self.get('/sessions/endable?caller_open_id=ou_A')
+        self.assertEqual(listing['sessions'], [])
+
+    def test_endable_requires_caller(self):
+        status, body = self.get_error('/sessions/endable')
+        self.assertEqual((status, body['error']['code']), (400, 'bad_message'))
+
+
 class AdminFaceTests(ApiBase):
     def created(self, owner='ou_A', no='123456789'):
         _, body = self.join(owner=owner, no=no)
