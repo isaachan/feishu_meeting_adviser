@@ -172,7 +172,7 @@ class BotService:
                 return '这条订阅申请已过期，请重新申请。'
             return '现在无法完成这个操作，请查看「状态」后再试。'
         if exc.code == 'not_owner':
-            return '只有这场会参谋会议的负责人可以操作。'
+            return '只有这场会参谋会议的负责人、会议组织者或获授权的参会者可以操作。'
         if exc.code == 'advisor_unreachable':
             return '暂时没有收到结果。请等 1 分钟后发送「状态」确认，先不要重复操作。'
         if exc.code == 'auth_unavailable':
@@ -200,13 +200,27 @@ class BotService:
         if command.meeting_no:
             target = next((s for s in listing if s['meeting_no'] == command.meeting_no), None)
             if target is None:
+                # v2.10: 结束会议 falls back to sessions the caller may end
+                # without owning (organizer / enabled supervisor)
+                endable = self.advisor.list_endable_sessions(sender).get('sessions', [])
+                target = next((s for s in endable if s['meeting_no'] == command.meeting_no),
+                              None)
+            if target is None:
                 self._reply(message_id, '未找到该会议的进行中会话')
                 return
         elif listing:
             target = listing[0]
-        if target is None:
-            self._reply(message_id, '当前没有进行中的会话')
-            return
+        else:
+            endable = self.advisor.list_endable_sessions(sender).get('sessions', [])
+            if len(endable) == 1:
+                target = endable[0]
+            elif len(endable) > 1:
+                items = '、'.join(f'「{s["title"]}」({s["meeting_no"]})' for s in endable)
+                self._reply(message_id, f'你有多场可结束的会话，请指明会议号：{items}')
+                return
+            else:
+                self._reply(message_id, '当前没有进行中的会话')
+                return
         result = self.advisor.end_session(target['session_id'], sender,
                                           message_id=message_id)
         phase = result['phase']

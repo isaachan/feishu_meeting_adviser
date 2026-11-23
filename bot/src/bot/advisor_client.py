@@ -61,6 +61,10 @@ class AdvisorClient:
     def list_sessions(self, owner_open_id):
         return self._call('GET', f'/sessions?owner_open_id={owner_open_id}')
 
+    def list_endable_sessions(self, caller_open_id):
+        """CONTRACT_ADVISOR_API v2.10 §3.4: sessions this caller may end."""
+        return self._call('GET', f'/sessions/endable?caller_open_id={caller_open_id}')
+
     def session_status(self, session_id):
         return self._call('GET', f'/sessions/{session_id}/status')
 

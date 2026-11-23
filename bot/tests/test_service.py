@@ -131,6 +131,8 @@ class FakeAdvisor:
         self.pending = []
         self.meetings = {'now': 0, 'meetings': []}
         self.my_subs = []
+        self.own_sessions = None    # None -> default single owned session
+        self.endable_sessions = []
 
     def create_session(self, owner, meeting_no, *, password='', mic=False, message_id=''):
         self.calls.append(('create_session', owner, meeting_no, message_id))
@@ -142,9 +144,15 @@ class FakeAdvisor:
 
     def list_sessions(self, owner):
         self.calls.append(('list_sessions', owner))
+        if self.own_sessions is not None:
+            return {'sessions': list(self.own_sessions)}
         return {'sessions': [{'session_id': self.session['session_id'],
                               'meeting_no': '123456789', 'title': '周会',
                                'phase': 'running', 'started_at': 1}]}
+
+    def list_endable_sessions(self, caller_open_id):
+        self.calls.append(('list_endable_sessions', caller_open_id))
+        return {'sessions': [dict(row) for row in self.endable_sessions]}
 
     def session_status(self, session_id):
         self.calls.append(('session_status', session_id))
@@ -310,6 +318,57 @@ class BotServiceTests(unittest.TestCase):
         reply = self.handle('结束会议', message_id='om-3')
         self.assertIn('正在结束「周会」', reply)
 
+    def test_end_by_meeting_no_falls_back_to_endable(self):
+        """v2.10：小A/小C 结束非自有会话（organizer/supervisor 角色）。"""
+        self.advisor.own_sessions = []
+        self.advisor.endable_sessions = [
+            {'session_id': 's-c9', 'meeting_no': '123456789', 'title': '周会',
+             'phase': 'running', 'started_at': 2, 'end_role': 'supervisor'}]
+        reply = self.handle('结束会议 123456789', sender='ou_C', message_id='om-end-c')
+        self.assertIn('正在结束「周会」', reply)
+        ends = [call for call in self.advisor.calls if call[0] == 'end_session']
+        self.assertEqual(ends, [('end_session', 's-c9', 'ou_C')])
+
+    def test_end_bare_with_single_endable(self):
+        self.advisor.own_sessions = []
+        self.advisor.endable_sessions = [
+            {'session_id': 's-c9', 'meeting_no': '123456789', 'title': '周会',
+             'phase': 'running', 'started_at': 2, 'end_role': 'organizer'}]
+        reply = self.handle('结束会议', sender='ou_A', message_id='om-end-org')
+        self.assertIn('正在结束「周会」', reply)
+        ends = [call for call in self.advisor.calls if call[0] == 'end_session']
+        self.assertEqual(ends, [('end_session', 's-c9', 'ou_A')])
+
+    def test_end_bare_with_multiple_endable_asks_for_meeting_no(self):
+        self.advisor.own_sessions = []
+        self.advisor.endable_sessions = [
+            {'session_id': 's-1', 'meeting_no': '111111111', 'title': '早会',
+             'phase': 'running', 'started_at': 2, 'end_role': 'supervisor'},
+            {'session_id': 's-2', 'meeting_no': '222222222', 'title': '晚会',
+             'phase': 'running', 'started_at': 1, 'end_role': 'supervisor'}]
+        reply = self.handle('结束会议', sender='ou_C', message_id='om-end-multi')
+        self.assertIn('请指明会议号', reply)
+        self.assertIn('111111111', reply)
+        self.assertFalse([call for call in self.advisor.calls
+                          if call[0] == 'end_session'])
+
+    def test_end_unknown_meeting_still_not_found(self):
+        self.advisor.own_sessions = []
+        self.advisor.endable_sessions = [
+            {'session_id': 's-2', 'meeting_no': '222222222', 'title': '晚会',
+             'phase': 'running', 'started_at': 1, 'end_role': 'supervisor'}]
+        reply = self.handle('结束会议 123456789', sender='ou_C', message_id='om-end-none')
+        self.assertIn('未找到该会议的进行中会话', reply)
+
+    def test_end_bare_prefers_own_session_over_endable(self):
+        self.advisor.endable_sessions = [
+            {'session_id': 's-other', 'meeting_no': '222222222', 'title': '晚会',
+             'phase': 'running', 'started_at': 9, 'end_role': 'supervisor'}]
+        reply = self.handle('结束会议', message_id='om-end-own')
+        self.assertIn('正在结束「周会」', reply)
+        ends = [call for call in self.advisor.calls if call[0] == 'end_session']
+        self.assertEqual(ends, [('end_session', 's-abc123', 'ou_A')])
+
     def test_subscribe_flow_notifies_owner(self):
         reply = self.handle('我想收到会议 123456789 的信息', sender='ou_B', message_id='om-4')
         self.assertIn('已提交「周会」的订阅申请', reply)
@@ -367,6 +426,11 @@ class BotServiceTests(unittest.TestCase):
                                 {'conflicting_title': '周会'})
         self.assertEqual(self.service._advisor_error_text(error),
                          '你已有一场会参谋会议（「周会」），请先结束或退出。')
+
+    def test_not_owner_wording_covers_extended_end_permission(self):
+        error = AdvisorApiError(409, 'not_owner', '')
+        self.assertEqual(self.service._advisor_error_text(error),
+                         '只有这场会参谋会议的负责人、会议组织者或获授权的参会者可以操作。')
 
     def test_duplicate_requested_does_not_notify_owner_again(self):
         self.advisor.create_subscription = lambda *args, **kwargs: {
