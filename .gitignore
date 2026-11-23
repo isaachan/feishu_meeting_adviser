@@ -22,12 +22,3 @@ config.*.yaml
 /scripts/local.env
 /scripts/prod.env
 /.venv-prod/
-
-# 方案 B（legacy/，仅参考）：运行数据
-/legacy/meeting-listener/models/
-/legacy/meeting-listener/reference/spike/output/
-/legacy/data/*
-!/legacy/data/README.md
-!/legacy/data/docs/
-/legacy/local-meeting-recorder/data/
-/legacy/local-meeting-recorder/config.json

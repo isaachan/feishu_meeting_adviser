@@ -1,6 +1,0 @@
-.DS_Store
-__pycache__
-material/monitor_*/
-material/stt_mock_*/
-material/stt_local_*/
-models/

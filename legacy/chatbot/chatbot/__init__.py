@@ -1,1 +1,0 @@
-"""Simple Feishu chat bot."""
