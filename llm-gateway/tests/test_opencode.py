@@ -137,6 +137,20 @@ class OpenCodeBackendTests(unittest.TestCase):
             self.assertIn(name, backend.stage_timings)
         self.assertEqual(backend.failed_stage, 'decision_wait')
 
+    def test_timeout_records_inflight_tool_and_child_stderr(self):
+        backend = self.backend('hang-tool')
+        with self.assertRaises(BackendError) as caught:
+            self.decide(backend, deadline=4)
+        self.assertEqual(caught.exception.code, 'execution_timeout')
+        observation = backend.diagnostics['wait_observation']
+        self.assertTrue(observation['user_message_seen'])
+        self.assertFalse(observation['completed'])
+        self.assertEqual(observation['parts'],
+                         [{'type': 'tool', 'tool': 'meeting_nsdp_lookup_release',
+                           'status': 'running'}])
+        self.assertIn('synthetic provider stalled', backend.diagnostics['stderr_tail'])
+        self.assertGreater(backend.diagnostics['stderr_bytes'], 0)
+
 
 if __name__ == '__main__':
     unittest.main()

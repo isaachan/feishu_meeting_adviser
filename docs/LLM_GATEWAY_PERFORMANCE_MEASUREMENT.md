@@ -64,6 +64,7 @@ advisor 决定调用模型
 - 原始观测事件进入 gateway 结构化日志(JSON,带 `request_id`;会议关联用 metadata 中已有的 `session_id` 作为关联键,不作为监控标签)。advisor 侧对应记录 `end_to_end_ms` 及各衔接点。
 - 日志不包含字幕、prompt、skill 正文、工具结果、组织者 token/PAT 或 OpenCode 凭据。汇总分组仅用低基数维度:backend、模型版本、冷/热启动、工具类型、成功/失败、输入规模分桶。
 - 超时、取消、进程启动失败、工具授权失败同样记录已完成阶段,避免只统计成功样本。计时插桩先用 fake backend 与合成 OpenCode peer(`tests/helpers/fake_opencode_server.py` 已有)验证不改变执行期限与结果语义。
+- 失败样本在 `timings` 内追加 `diagnostics`,用于区分卡在模型还是卡在工具:`wait_observation` 记录最后一条 assistant 消息的 `completed`/`finish`/`error` 与各 part 的 `type`/`tool`/`status`(最多 16 个);`stderr_tail`(≤2 KB)/`stderr_bytes` 记录子进程 stderr 末尾,同一内容另以 WARNING 写入 gateway 日志。stderr 只含 OpenCode/Provider 运行错误,不含 prompt、字幕、skill 正文或工具结果;运行目录仍在关闭时清理。
 
 ## 5. 实施范围
 

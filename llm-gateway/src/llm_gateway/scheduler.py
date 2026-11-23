@@ -143,6 +143,9 @@ class ExecutionScheduler:
             stats = getattr(backend, 'resource_stats', None)
             if isinstance(stats, dict) and stats:
                 result.update(stats)
+            diagnostics = getattr(backend, 'diagnostics', None)
+            if isinstance(diagnostics, dict) and diagnostics:
+                result['diagnostics'] = diagnostics
             events = getattr(backend, 'tool_events', set())
             allowed = sorted(set(events) & {'nsdp_authorization_required',
                                             'jira_authorization_required'})

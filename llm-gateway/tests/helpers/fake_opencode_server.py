@@ -82,6 +82,20 @@ class Handler(BaseHTTPRequestHandler):
                 for _ in range(100):
                     self.wfile.write(b' ');self.wfile.flush();time.sleep(.05)
                 return
+            if mode=='hang-tool':
+                marker=capture.with_suffix('.stderr') if capture else None
+                if marker is None or not marker.exists():
+                    print('synthetic provider stalled after skill call',
+                          file=sys.stderr, flush=True)
+                    if marker:marker.touch()
+                user={'info':{'role':'user','id':'msg_user','sessionID':'ses_fake1'},
+                      'parts':[]}
+                info={'id':'msg_tool','sessionID':'ses_fake1','role':'assistant',
+                      'parentID':'msg_user','providerID':model[0],'modelID':model[1],
+                      'time':{}}
+                part={'type':'tool','tool':'meeting_nsdp_lookup_release',
+                      'callID':'call_inflight','state':{'status':'running'}}
+                return self.send([user,{'info':info,'parts':[part]}])
             if mode=='timeout' or polls<2:return self.send([])
             decision={'control':'none','control_sentence_keys':[],'reply':None,'reply_sentence_keys':[]}
             if mode=='reply':decision.update(reply='SYNTHETIC GLM REPLY',reply_sentence_keys=['s:1'])

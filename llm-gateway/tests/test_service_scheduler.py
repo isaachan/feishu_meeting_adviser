@@ -235,6 +235,7 @@ class SchedulerTests(unittest.TestCase):
                 self.tool_timings = [{'tool': 'meeting_jira_get_issue', 'status': 'ok',
                                       'ms': 120, 'source': 'mcp'}]
                 self.resource_stats = {'peak_rss_kb': 12345, 'process_count': 3}
+                self.diagnostics = {'wait_observation': {'completed': False}}
                 return super().decide(*args, **kwargs)
 
         self.scheduler(lambda backend: MeasuredBackend())
@@ -247,6 +248,8 @@ class SchedulerTests(unittest.TestCase):
         self.assertNotIn('attempts', timings)
         self.assertEqual(timings['tool_calls'][0]['tool'], 'meeting_jira_get_issue')
         self.assertEqual(timings['peak_rss_kb'], 12345)
+        self.assertEqual(timings['diagnostics'],
+                         {'wait_observation': {'completed': False}})
         self.assertIn('finished_at', self.service.represent(row))
 
     def test_decision_v2_appends_markdown_rules_to_system(self):

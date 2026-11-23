@@ -181,6 +181,9 @@ class OpenCodeBackend:
         self.failed_stage: str | None = None
         self.tool_timings: list[dict] = []
         self.resource_stats: dict = {}
+        self.diagnostics: dict = {}
+        self.stderr_log: Path | None = None
+        self._stderr_file = None
         self.attempts = 0
         self.timing_request_id: str | None = None
         self._log_session_id: str | None = None
@@ -217,8 +220,65 @@ class OpenCodeBackend:
         self.failed_stage = None
         self.tool_timings = []
         self.resource_stats = {}
+        self.diagnostics = {}
+        self.stderr_log = None
+        self._close_stderr()
         self._tool_obs = {}
         self._sampler = None
+
+    def _observe_wait(self, messages, message_id):
+        """Remember the newest assistant message so a timeout shows where it stopped."""
+        assistants = [message for message in messages
+                      if isinstance(message, dict) and isinstance(message.get('info'), dict)
+                      and message['info'].get('role') == 'assistant'
+                      and message['info'].get('parentID') == message_id]
+        if not assistants:
+            self.diagnostics['wait_observation'] = {
+                'assistant_messages': 0, 'user_message_seen': message_id is not None}
+            return
+        info = assistants[-1]['info']
+        parts = assistants[-1].get('parts')
+        observed = []
+        for part in parts if isinstance(parts, list) else []:
+            if not isinstance(part, dict):
+                continue
+            state = part.get('state')
+            observed.append({'type': part.get('type'), 'tool': part.get('tool'),
+                             'status': state.get('status') if isinstance(state, dict)
+                             else None})
+        completed = info.get('time')
+        self.diagnostics['wait_observation'] = {
+            'assistant_messages': len(assistants),
+            'user_message_seen': message_id is not None,
+            'completed': bool(completed.get('completed'))
+            if isinstance(completed, dict) else False,
+            'finish': info.get('finish'),
+            'error': bool(info.get('error')),
+            'parts': observed[:16]}
+
+    def _capture_stderr(self):
+        """Keep the child's stderr tail when a stage fails; the runtime is cleaned."""
+        if self.stderr_log is None:
+            return
+        try:
+            data = self.stderr_log.read_bytes()
+        except OSError:
+            return
+        if not data:
+            return
+        text = data[-16384:].decode('utf-8', 'replace')
+        self.diagnostics['stderr_bytes'] = len(data)
+        self.diagnostics['stderr_tail'] = text[-2000:]
+        LOG.warning('opencode stderr at failure: stage=%s attempt=%s bytes=%s\n%s',
+                    self.failed_stage, self.attempts, len(data), text[-8000:].rstrip())
+
+    def _close_stderr(self):
+        handle, self._stderr_file = self._stderr_file, None
+        if handle is not None:
+            try:
+                handle.close()
+            except OSError:
+                pass
 
     def _observe_tool_part(self, part):
         """Poll-observed skill bounds; precision is the 0.2s message poll."""
@@ -349,12 +409,18 @@ class OpenCodeBackend:
                                    '--hostname', '127.0.0.1', '--port', '0']
         guardian = [sys.executable, '-m', 'llm_gateway.backends.opencode_guard',
                     str(self.runtime), '--', *command]
+        self.stderr_log = self.runtime / 'opencode.stderr.log'
+        try:
+            self._stderr_file = open(self.stderr_log, 'ab')
+        except OSError:
+            raise BackendError('backend_unavailable') from None
         try:
             self.process = subprocess.Popen(guardian, stdin=subprocess.PIPE,
                                             stdout=subprocess.PIPE,
-                                            stderr=subprocess.DEVNULL, cwd=str(self.runtime),
+                                            stderr=self._stderr_file, cwd=str(self.runtime),
                                             env=env, bufsize=0, start_new_session=True)
         except OSError:
+            self._close_stderr()
             raise BackendError('backend_unavailable') from None
         self._sampler = _ResourceSampler(self.process.pid)
         self._sampler.start()
@@ -412,6 +478,8 @@ class OpenCodeBackend:
         if self._sampler is not None:
             self.resource_stats.update(self._sampler.finish() or {})
             self._sampler = None
+        if self.failed_stage is not None:
+            self._capture_stderr()
         process, self.process = self.process, None
         if process:
             if process.stdin:
@@ -429,6 +497,7 @@ class OpenCodeBackend:
             stdout = process.stdout
             if stdout:
                 stdout.close()
+        self._close_stderr()
         self._read_tool_timing_file()
         self._finalize_measurements()
         if self.runtime and self.runtime.exists():
@@ -651,6 +720,7 @@ class OpenCodeBackend:
                             (time.monotonic() - scan_started) * 1000)
                         decision = decisions[0]
                         continue
+                    self._observe_wait(messages, message_id)
                     assert self.stop_event is not None
                     deadline = self.deadline or time.monotonic()
                     self.stop_event.wait(min(0.2, max(0.0, deadline - time.monotonic())))
