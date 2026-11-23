@@ -9,6 +9,7 @@ import json
 import re
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 
@@ -29,10 +30,11 @@ class NsdpQuery:
         self.timeout_s = timeout_s
         self.run = run
 
-    def releases(self, owner: str, release: str) -> str:
+    def releases(self, owner: str, release: str, *, token=None, on_noam=None) -> str:
         if not isinstance(release, str) or not _RELEASE.fullmatch(release):
             raise QueryError('invalid_release')
-        return self._execute(owner, ['nsdp', 'releases', '--release', release])[:100_000]
+        return self._execute(owner, ['nsdp', 'releases', '--release', release],
+                             token=token, on_noam=on_noam)[:100_000]
 
     def info(self, owner: str) -> dict:
         """Fetch the organizer's complete NSDP catalog without truncating JSON."""
@@ -49,10 +51,11 @@ class NsdpQuery:
             raise QueryError('output_invalid')
         return value
 
-    def _execute(self, owner: str, args: list[str]) -> str:
+    def _execute(self, owner: str, args: list[str], *, token=None, on_noam=None) -> str:
         if not isinstance(owner, str) or not owner:
             raise QueryError('owner_missing')
-        token = self.credential_provider(owner)
+        if token is None:
+            token = self.credential_provider(owner)
         if not isinstance(token, str) or not token:
             raise QueryError('authorization_required')
         # noam may cache responses. Isolate both its configuration and cache
@@ -63,15 +66,25 @@ class NsdpQuery:
             for category in ('CONFIG', 'DATA', 'CACHE', 'STATE'):
                 env['XDG_' + category + '_HOME'] = str(Path(directory) / category.lower())
             env['NSDP_TOKEN'] = token
+            started = time.monotonic()
+            if on_noam is not None:
+                on_noam('start', None, None)
             try:
                 result = self.run(
                     [self.noam_bin, *args],
                     env=env, capture_output=True, text=True, encoding='utf-8',
                     errors='replace', timeout=self.timeout_s, stdin=subprocess.DEVNULL)
             except subprocess.TimeoutExpired:
+                if on_noam is not None:
+                    on_noam('done', 'timeout', int((time.monotonic() - started) * 1000))
                 raise QueryError('timeout') from None
             except OSError:
+                if on_noam is not None:
+                    on_noam('done', 'unavailable', int((time.monotonic() - started) * 1000))
                 raise QueryError('unavailable') from None
+            if on_noam is not None:
+                on_noam('done', 'ok' if result.returncode == 0 else 'error',
+                        int((time.monotonic() - started) * 1000))
         stdout, stderr = result.stdout or '', result.stderr or ''
         if result.returncode:
             # Preserve the existing noam integration's 401 detection behavior;

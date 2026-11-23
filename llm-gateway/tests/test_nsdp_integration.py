@@ -47,6 +47,8 @@ class NsdpIntegrationTests(unittest.TestCase):
                              '"versions":["BL1.5.0"]}]}\')\n'
                              ' sys.exit(0)\n'
                              'assert sys.argv[1:] == ["nsdp", "releases", "--release", "BL1.5.0"]\n'
+                             'if os.environ.get("NOAM_TEST_COUNT_FILE"):\n'
+                             ' with open(os.environ["NOAM_TEST_COUNT_FILE"], "a") as out: out.write("1\\n")\n'
                              'print("BL1.5.0 G4 2026-12-01")\n')
         self.noam.chmod(0o700)
         AuthHandler.paths = []
@@ -71,6 +73,36 @@ class NsdpIntegrationTests(unittest.TestCase):
         self.assertIn('2026-12-01', result['content'][0]['text'])
         self.assertNotIn('synthetic-token', stdout + stderr)
         self.assertEqual(AuthHandler.paths, ['/credentials/ou_A/token?provider=nsdp'])
+
+    def test_mcp_subprocess_reuses_owner_result_and_records_stages(self):
+        cache_db = self.root / 'catalog.sqlite3'
+        counter = self.root / 'noam-count'
+        message = {'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call', 'params': {
+            'name': 'lookup_release', 'arguments': {'release': 'BL1.5.0'}}}
+        for index in (1, 2):
+            timing_file = self.root / f'timings-{index}.jsonl'
+            process = subprocess.Popen(
+                [sys.executable, '-m', 'llm_gateway.nsdp_tool_server',
+                 '--owner', 'ou_A', '--auth-url', self.auth_url,
+                 '--noam-bin', str(self.noam), '--cache-db', str(cache_db),
+                 '--timing-file', str(timing_file)],
+                env={**os.environ, 'NOAM_TEST_COUNT_FILE': str(counter)},
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=True)
+            stdout, stderr = process.communicate(json.dumps(message) + '\n', timeout=10)
+            self.assertEqual(process.returncode, 0, stderr)
+            self.assertFalse(json.loads(stdout)['result']['isError'])
+            lines = [json.loads(line) for line in timing_file.read_text().splitlines()]
+            timing = next(line for line in lines if line.get('tool') ==
+                          'meeting_nsdp_lookup_release')
+            self.assertEqual(timing['cache_hit'], index == 2)
+            stages = [line['stage'] for line in lines if line.get('event') == 'nsdp_stage']
+            self.assertIn('auth_start', stages)
+            self.assertIn('auth_done', stages)
+            self.assertIn('mcp_response_ready', stages)
+            self.assertEqual('noam_start' in stages, index == 1)
+        self.assertEqual(counter.read_text().splitlines(), ['1'])
+        self.assertEqual(len(AuthHandler.paths), 2)
 
     @unittest.skipUnless(os.environ.get('LIVE_OPENCODE_TEST') == '1', 'requires real OpenCode model')
     def test_real_opencode_calls_scoped_tool(self):

@@ -23,6 +23,19 @@ class NsdpQueryTests(unittest.TestCase):
         self.assertNotIn('secret-token', argv)
         self.assertNotEqual(kwargs['env']['HOME'], __import__('os').path.expanduser('~'))
 
+    def test_prefetched_token_reports_noam_start_and_completion(self):
+        events = []
+
+        def run(*args, **kwargs):
+            return SimpleNamespace(returncode=0, stdout='data', stderr='')
+
+        query = NsdpQuery(lambda _: self.fail('credential fetched twice'), run=run)
+        self.assertEqual(query.releases('ou_a', 'BL1.5.0', token='prefetched',
+                                        on_noam=lambda *event: events.append(event)), 'data')
+        self.assertEqual(events[0], ('start', None, None))
+        self.assertEqual(events[1][:2], ('done', 'ok'))
+        self.assertGreaterEqual(events[1][2], 0)
+
     def test_invalid_release_is_rejected_before_fetching_credentials(self):
         query = NsdpQuery(lambda _: self.fail('unexpected credential lookup'))
         with self.assertRaises(QueryError) as caught:
@@ -44,6 +57,19 @@ class NsdpQueryTests(unittest.TestCase):
         with self.assertRaises(QueryError) as caught:
             NsdpQuery(lambda _: 'secret-token', run=run).releases('ou_a', 'BL1.5.0')
         self.assertEqual(str(caught.exception), 'timeout')
+
+    def test_timeout_reports_noam_done(self):
+        events = []
+
+        def run(*args, **kwargs):
+            raise subprocess.TimeoutExpired('private', 1)
+
+        query = NsdpQuery(lambda _: 'token', run=run)
+        with self.assertRaises(QueryError):
+            query.releases('ou_a', 'BL1.5.0',
+                           on_noam=lambda *event: events.append(event))
+        self.assertEqual(events[0], ('start', None, None))
+        self.assertEqual(events[1][:2], ('done', 'timeout'))
 
     def test_info_returns_valid_catalog_using_owner_credentials(self):
         catalog = {'tenants': ['NIO'], 'platforms': [{'versions': ['BL1.7.0']}]}

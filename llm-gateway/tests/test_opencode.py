@@ -49,6 +49,35 @@ class OpenCodeBackendTests(unittest.TestCase):
         self.assertEqual(config['provider'], spec)
         self.assertEqual(config['enabled_providers'], ['synthetic'])
 
+    def test_nsdp_mcp_receives_trusted_cache_path(self):
+        backend = self.backend('reply')
+        backend.nsdp_cache_db = self.root / 'catalog.sqlite3'
+        backend.runtime = self.root / 'runtime' / 'run-test'
+        backend.runtime.mkdir(parents=True)
+        backend.password = 'synthetic-password'
+        backend.owner_open_id = 'ou_A'
+        backend.deadline = 12345.0
+        config = json.loads(backend._environment()['OPENCODE_CONFIG_CONTENT'])
+        command = config['mcp']['meeting_nsdp']['command']
+        self.assertIn('--cache-db', command)
+        self.assertIn(str(backend.nsdp_cache_db), command)
+        self.assertIn('--deadline-monotonic', command)
+
+    def test_nsdp_stage_file_is_exposed_in_task_diagnostics(self):
+        backend = self.backend('reply')
+        backend.runtime = self.root / 'runtime' / 'run-test'
+        backend.runtime.mkdir(parents=True)
+        (backend.runtime / 'tool-timings.jsonl').write_text(
+            json.dumps({'event': 'nsdp_stage', 'call_id': 'abc123',
+                        'stage': 'noam_start', 'at_ns': 123}) + '\n' +
+            json.dumps({'tool': 'meeting_nsdp_lookup_release', 'status': 'ok',
+                        'ms': 42, 'cache_hit': False, 'auth_ms': 2,
+                        'noam_ms': 40}) + '\n')
+        backend._read_tool_timing_file()
+        self.assertEqual(backend.diagnostics['nsdp_stages'][0]['stage'], 'noam_start')
+        self.assertEqual(backend.tool_timings[0]['cache_hit'], False)
+        self.assertEqual(backend.tool_timings[0]['noam_ms'], 40)
+
     def test_provider_config_must_define_the_selected_provider(self):
         provider_config = self.root / 'provider.json'
         provider_config.write_text(json.dumps({'other': {}}))

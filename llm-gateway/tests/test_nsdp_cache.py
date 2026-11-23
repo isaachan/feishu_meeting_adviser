@@ -94,6 +94,25 @@ class OwnerReleaseCacheTests(unittest.TestCase):
         self.assertFalse(cache.lookup('ou_A', 'BL1.5.0', 'token',
                                       lambda: 'recovered')[1])
 
+    def test_expiry_sweep_does_not_discard_an_inflight_first_result(self):
+        cache = self.cache()
+
+        def fetch():
+            cache.expire()
+            return 'completed after sweep'
+
+        self.assertFalse(cache.lookup('ou_A', 'BL1.5.0', 'token', fetch)[1])
+        self.assertTrue(cache.lookup('ou_A', 'BL1.5.0', 'token',
+                                     lambda: self.fail('unexpected refetch'))[1])
+
+    def test_lost_hmac_key_discards_persisted_results(self):
+        first = self.cache()
+        first.lookup('ou_A', 'BL1.5.0', 'token', lambda: 'old data')
+        self.path.with_name(self.path.name + '.hmac').unlink()
+        second = self.cache()
+        self.assertFalse(second.lookup('ou_A', 'BL1.5.0', 'token',
+                                       lambda: 'fresh data')[1])
+
 
 if __name__ == '__main__':
     unittest.main()

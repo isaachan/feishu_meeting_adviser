@@ -68,7 +68,8 @@ def backend_factory(options):
                 provider_config=options.opencode_provider_config,
                 runtime_base=options.runtime_dir,
                 skills_dir=options.skills_dir, auth_url=options.auth_url,
-                noam_bin=options.noam_bin, jira_url=options.jira_url)
+                noam_bin=options.noam_bin, jira_url=options.jira_url,
+                nsdp_cache_db=getattr(options, 'nsdp_cache_db', None))
         raise ValueError('unsupported backend')
     return factory
 
@@ -85,11 +86,15 @@ def main(argv=None):
         store = GatewayStore(database)
         recovered = store.recover_interrupted()
         from .catalog import MeetingCatalogs
+        from .nsdp_cache import OwnerReleaseCache
         from .nsdp_query import NsdpQuery
         from .nsdp_tool_server import credential_provider
-        catalogs = MeetingCatalogs(database.with_name(database.name + '.catalog.sqlite3'),
+        catalog_path = database.with_name(database.name + '.catalog.sqlite3')
+        catalogs = MeetingCatalogs(catalog_path,
                                    NsdpQuery(credential_provider(args.auth_url),
                                              noam_bin=args.noam_bin, timeout_s=120))
+        release_cache = OwnerReleaseCache(catalog_path)
+        args.nsdp_cache_db = catalog_path
         service = GatewayService(store, limits=Limits(queue=args.queue), catalogs=catalogs)
         scheduler = ExecutionScheduler(store, backend_factory(args), workers=args.workers)
         scheduler.start()
@@ -101,6 +106,7 @@ def main(argv=None):
             while not expiry_stop.wait(600):
                 store.expire(retention_hours=args.retention_hours)
                 catalogs.expire(retention_hours=args.retention_hours)
+                release_cache.expire()
 
         sweeper = threading.Thread(target=sweep, name='gateway-expiry', daemon=True)
         sweeper.start()
@@ -123,6 +129,7 @@ def main(argv=None):
             scheduler.stop()
             server.server_close()
             catalogs.close()
+            release_cache.close()
             store.close()
     except (OSError, ValueError) as exc:
         print('Operation stopped: ' + str(exc), file=sys.stderr)

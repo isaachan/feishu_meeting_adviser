@@ -112,7 +112,8 @@ class OwnerReleaseCache:
                                 'SELECT rowid FROM owner_release_results WHERE owner=? '
                                 'ORDER BY fetched_at ASC LIMIT 1)', (owner,))
 
-    def lookup(self, owner: str, release: str, token: str, fetch, *, deadline=None):
+    def lookup(self, owner: str, release: str, token: str, fetch, *, deadline=None,
+               on_miss=None):
         """Return (content, cache_hit, cache_age_ms, lock_wait_ms)."""
         key = release.casefold()
         fingerprint = self._fingerprint(token)
@@ -131,8 +132,13 @@ class OwnerReleaseCache:
                     hit = self._hit(owner, key, self.clock())
                     if hit is not None:
                         return hit[0], True, hit[1], wait_ms
+                    if on_miss is not None:
+                        on_miss()
                     text = fetch()
-                    self._put(owner, key, fingerprint, text)
+                    try:
+                        self._put(owner, key, fingerprint, text)
+                    except sqlite3.Error:
+                        pass  # a cache write failure must not repeat a successful noam call
                     return text, False, None, wait_ms
             except LockBusy:
                 if deadline is not None and time.monotonic() >= deadline:
@@ -144,5 +150,3 @@ class OwnerReleaseCache:
             self.db.execute('BEGIN IMMEDIATE')
             self.db.execute('DELETE FROM owner_release_results WHERE expires_at<=?',
                             (self.clock(),))
-            self.db.execute('DELETE FROM owner_release_identity WHERE owner NOT IN '
-                            '(SELECT DISTINCT owner FROM owner_release_results)')

@@ -1,8 +1,12 @@
 """Tool protocol tests: the caller cannot choose the credential owner."""
 import unittest
+from pathlib import Path
+import tempfile
+from types import SimpleNamespace
 
-from llm_gateway.nsdp_query import QueryError
-from llm_gateway.nsdp_tool_server import handle
+from llm_gateway.nsdp_cache import OwnerReleaseCache
+from llm_gateway.nsdp_query import NsdpQuery, QueryError
+from llm_gateway.nsdp_tool_server import handle, timing_recorder
 
 
 class Query:
@@ -49,6 +53,50 @@ class ToolServerTests(unittest.TestCase):
         handle(failing, owner='ou_a', query=Query(),
                record=lambda tool, status, elapsed: recorded.append((tool, status, elapsed)))
         self.assertEqual(recorded[1][:2], ('meeting_nsdp_lookup_release', 'error'))
+
+    def test_cache_rechecks_credentials_and_invalidates_on_401(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache = OwnerReleaseCache(Path(directory) / 'catalog.sqlite3')
+            self.addCleanup(cache.close)
+            credentials = {'ou_a': 'old-token'}
+            calls = []
+
+            def credential(owner):
+                if owner not in credentials:
+                    raise QueryError('authorization_required')
+                return credentials[owner]
+
+            def run(_argv, **kwargs):
+                token = kwargs['env']['NSDP_TOKEN']
+                calls.append(token)
+                return SimpleNamespace(returncode=1 if token == 'bad-token' else 0,
+                                       stdout={'old-token': 'old-data',
+                                               'new-token': 'new-data'}.get(token, ''),
+                                       stderr='401' if token == 'bad-token' else '')
+
+            query = NsdpQuery(credential, run=run)
+            message = {'id': 1, 'method': 'tools/call', 'params': {
+                'name': 'lookup_release', 'arguments': {'release': 'BL1.5.0'}}}
+            record = timing_recorder(None)
+            self.assertEqual(handle(message, owner='ou_a', query=query, cache=cache,
+                                    record=record)['result']['content'][0]['text'], 'old-data')
+            self.assertFalse(handle(message, owner='ou_a', query=query, cache=cache,
+                                    record=record)['result']['isError'])
+            self.assertEqual(calls, ['old-token'])
+            credentials['ou_a'] = 'new-token'
+            self.assertEqual(handle(message, owner='ou_a', query=query, cache=cache,
+                                    record=record)['result']['content'][0]['text'], 'new-data')
+            credentials['ou_a'] = 'bad-token'
+            self.assertTrue(handle(message, owner='ou_a', query=query, cache=cache,
+                                   record=record)['result']['isError'])
+            self.assertEqual(calls, ['old-token', 'new-token', 'bad-token'])
+            credentials.clear()
+            self.assertTrue(handle(message, owner='ou_a', query=query, cache=cache,
+                                   record=record)['result']['isError'])
+            credentials['ou_a'] = 'new-token'
+            self.assertFalse(handle(message, owner='ou_a', query=query, cache=cache,
+                                    record=record)['result']['isError'])
+            self.assertEqual(calls[-1], 'new-token')
 
 
 if __name__ == '__main__':

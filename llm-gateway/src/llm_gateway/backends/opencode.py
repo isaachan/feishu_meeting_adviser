@@ -156,7 +156,8 @@ class OpenCodeBackend:
                  runtime_base: Path | None, command: list | None = None,
                  skills_dir: Path | None = None, auth_url: str = 'http://127.0.0.1:8381',
                  noam_bin: str = 'noam', jira_url: str = '',
-                 provider_config: Path | None = None):
+                 provider_config: Path | None = None,
+                 nsdp_cache_db: Path | None = None):
         self.executable = executable
         self.auth_path = Path(auth_path) if auth_path else None
         self.provider_config = (Path(provider_config) if provider_config else None)
@@ -164,6 +165,7 @@ class OpenCodeBackend:
         self.skills_dir = Path(skills_dir) if skills_dir else Path(__file__).resolve().parents[1] / 'skills'
         self.auth_url = auth_url
         self.noam_bin = noam_bin
+        self.nsdp_cache_db = Path(nsdp_cache_db) if nsdp_cache_db else None
         self.jira_url = jira_url
         self.owner_open_id = None
         self.workdir = Path(runtime_base or (Path(tempfile.gettempdir()) /
@@ -365,12 +367,28 @@ class OpenCodeBackend:
                 item = json.loads(line)
             except ValueError:
                 continue
+            if (isinstance(item, dict) and item.get('event') == 'nsdp_stage'
+                    and isinstance(item.get('at_ns'), int)
+                    and isinstance(item.get('stage'), str)):
+                stages = self.diagnostics.setdefault('nsdp_stages', [])
+                if len(stages) < 128:
+                    stages.append({key: item[key] for key in
+                                   ('call_id', 'stage', 'at_ns', 'status', 'ms')
+                                   if key in item})
+                continue
             if (isinstance(item, dict) and isinstance(item.get('tool'), str)
                     and isinstance(item.get('ms'), int)
                     and item.get('status') in ('ok', 'error')
                     and len(self.tool_timings) < 128):
-                self.tool_timings.append({'tool': item['tool'], 'status': item['status'],
-                                          'ms': item['ms'], 'source': 'mcp'})
+                timing = {'tool': item['tool'], 'status': item['status'],
+                          'ms': item['ms'], 'source': 'mcp'}
+                for key in ('cache_hit', 'cache_age_ms', 'cache_wait_ms',
+                            'auth_ms', 'noam_ms'):
+                    value = item.get(key)
+                    if (isinstance(value, bool) if key == 'cache_hit'
+                            else isinstance(value, int) and not isinstance(value, bool)):
+                        timing[key] = value
+                self.tool_timings.append(timing)
 
     def _finalize_measurements(self):
         for entry in self._tool_obs.values():
@@ -434,12 +452,17 @@ class OpenCodeBackend:
         if not self.owner_open_id:
             raise BackendError('backend_unavailable')
         timing_file = str(self.runtime / 'tool-timings.jsonl')
+        nsdp_command = [sys.executable, '-m', 'llm_gateway.nsdp_tool_server',
+                        '--owner', self.owner_open_id, '--auth-url', self.auth_url,
+                        '--noam-bin', self.noam_bin, '--timing-file', timing_file]
+        if self.nsdp_cache_db is not None:
+            nsdp_command.extend(['--cache-db', str(self.nsdp_cache_db)])
+        if self.deadline is not None:
+            nsdp_command.extend(['--deadline-monotonic', str(self.deadline)])
         permission = {'*': 'deny', 'skill': 'allow', 'meeting_nsdp_*': 'allow',
                       'meeting_jira_*': 'allow'}
         mcp = {'meeting_nsdp': {'type': 'local', 'enabled': True,
-               'command': [sys.executable, '-m', 'llm_gateway.nsdp_tool_server',
-                           '--owner', self.owner_open_id, '--auth-url', self.auth_url,
-                           '--noam-bin', self.noam_bin, '--timing-file', timing_file]},
+               'command': nsdp_command},
                'meeting_jira': {'type': 'local', 'enabled': True,
                 'command': [sys.executable, '-m', 'llm_gateway.jira_tool_server',
                             '--owner', self.owner_open_id, '--auth-url', self.auth_url,
