@@ -1,6 +1,6 @@
 # 方案 C 待办
 
-- [x] **T18 · NSDP release 查询按组织者共享缓存**（2026-11-23 立项并完成，方案与验收见 [NSDP_OWNER_RELEASE_CACHE.md](docs/NSDP_OWNER_RELEASE_CACHE.md)）：gateway 的 `meeting_nsdp_lookup_release` 以组织者为隔离桶、以规范化 release 查询词索引成功结果，跨 advisor session 复用，固定 TTL 60 分钟；命中前复核凭据，凭据变更/删除或 401 使旧结果失效，同键成功查询只执行一次 noam。已补齐 auth/noam/MCP 分段探针，本地 gateway 单测运行 83 项（5 项真实模型用例跳过，其余通过）。**待生产验收**：新 timings 的命中率、端到端时长及首次约 220 秒工具卡顿归因。
+- [x] **T18 · NSDP release 查询按组织者共享缓存**（2026-11-23 立项并完成，方案与验收见 [NSDP_OWNER_RELEASE_CACHE.md](docs/NSDP_OWNER_RELEASE_CACHE.md)）：gateway 的 `meeting_nsdp_lookup_release` 以组织者为隔离桶、以规范化 release 查询词索引成功结果，跨 advisor session 复用，固定 TTL 60 分钟；命中前复核凭据，凭据变更/删除或 401 使旧结果失效，同键成功查询只执行一次 noam。已补齐 auth/noam/MCP 分段探针；本地 gateway 默认单测运行 83 项（5 项真实模型用例按默认配置跳过），另打开真实模型开关运行集成测试 7 项全部通过。**待生产验收**：新 timings 的命中率、端到端时长及首次约 220 秒工具卡顿归因。
 
 - [x] **T17 · LLM 回答改飞书富文本（reply-md-v1）**（2026-11-22 立项并完成，方案见 [FEISHU_RICH_TEXT_REPLY.md](docs/FEISHU_RICH_TEXT_REPLY.md)）：gateway 接受 `decision-v1|v2`（v2 仅重定义 `reply` 为受限 Markdown）；advisor `--decision-output` 选择版本，outbox `payload.format` 标记 `reply`；bot `bot/src/bot/render.py` 将 Markdown 渲染为飞书 interactive 卡片，`--rich-text`/`BOT_RICH_TEXT` 开关，危险语法清洗、超限/空内容自动回退纯文本；幂等键纳入输出方言。测试：gateway 67、advisor 266、bot 51、集成床 `test_rich_text` 通过。**待真实飞书客户端走查**：卡片观感（是否改 `post`）、链接域名白名单、是否允许多行代码块；当前灰度顺序见 DEPLOYMENT §5。
 

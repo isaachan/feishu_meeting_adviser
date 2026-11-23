@@ -43,5 +43,5 @@ gateway 的 `nsdp_cache.py` 在会议目录数据库中建立独立的 owner 凭
 
 `timings.tool_calls[]` 对 NSDP 工具补充 `cache_hit`、`cache_age_ms`、`cache_wait_ms`、`auth_ms`、`noam_ms`；`timings.diagnostics.nsdp_stages[]` 记录 `mcp_received`、`auth_start`/`auth_done`、缓存命中或未命中、`noam_start`/`noam_done`、`mcp_response_ready` 等无正文事件及时间戳。子进程在 noam 启动前写出阶段事件；若调用超时，可以用最后一个事件判断卡在哪一段。`mcp_response_ready` 表示工具已准备好响应，并不等于 OpenCode 已收到或处理完响应。
 
-本地 gateway 全套单测运行 83 项，其中 5 项需要真实 OpenCode 模型的用例按默认配置跳过，其余通过。测试覆盖跨实例复用、owner/查询词隔离、TTL、凭据变更与删除、401、失败不缓存、同键成功查询并发去重、重启恢复、等待超时、清理与首查并发、HMAC 密钥丢失，以及工具阶段数据进入 timings。生产环境尚未部署或取新 timings 验证；上线后应分别比较首次 miss 和重复 hit 的端到端时长，并用 `diagnostics.opencode_trace` 与 `diagnostics.nsdp_stages` 追查此前约 220 秒的首次工具卡顿。
+本地 gateway 全套单测运行 83 项，其中 5 项需要真实 OpenCode 模型的用例按默认配置跳过，其余通过。另以 `LIVE_OPENCODE_TEST=1` 运行 `test_nsdp_integration.py`：7 项全部通过（含上述 5 项真实模型用例，耗时 109 秒）；auth 和 noam 使用本地桩。测试覆盖跨实例复用、owner/查询词隔离、TTL、凭据变更与删除、401、失败不缓存、同键成功查询并发去重、重启恢复、等待超时、清理与首查并发、HMAC 密钥丢失，以及工具阶段数据进入 timings。生产环境尚未部署或取新 timings 验证；上线后应分别比较首次 miss 和重复 hit 的端到端时长，并用 `diagnostics.opencode_trace` 与 `diagnostics.nsdp_stages` 追查此前约 220 秒的首次工具卡顿。
 
