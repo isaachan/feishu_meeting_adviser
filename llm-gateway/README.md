@@ -1,6 +1,6 @@
 # llm-gateway
 
-在服务器（当前基线：本机 localhost）运行 [远程推理契约](../legacy/docs/CONTRACT_REMOTE_INFERENCE.md)：接收 advisor 的推理任务，调度并隔离地执行 OpenCode（GLM），返回结构化决定。网关不解析会议语义，不保存长期会议状态。
+在服务器（当前基线：本机 localhost）运行 [远程推理契约](../docs/CONTRACT_REMOTE_INFERENCE.md)：接收 advisor 的推理任务，调度并隔离地执行 OpenCode（GLM），返回结构化决定。网关不解析会议语义，不保存长期会议状态。
 
 - 首版**无认证**，仅限 localhost/可信内网（见 [plan.md](../plan.md) 已确认方向第 8 条；补认证已列入根 TODO）
 - 后端：`fake`（确定性模拟）与 `opencode`（GLM，进程级隔离：每任务新实例、私有 XDG、guardian EOF 清理）。带组织者身份的任务仅开放 OpenCode `skill`、受控的 NSDP 查询和 Jira 只读查询工具，其余工具拒绝。

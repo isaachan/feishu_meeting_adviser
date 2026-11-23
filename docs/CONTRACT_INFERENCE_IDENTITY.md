@@ -1,7 +1,7 @@
 # 推理任务组织者身份扩展（v2，2026-11-20）
 
 本扩展适用于 advisor → llm-gateway 的内部推理接口；其余行为沿用
-`legacy/docs/CONTRACT_REMOTE_INFERENCE.md`。两个节点须同步部署。
+[CONTRACT_REMOTE_INFERENCE](CONTRACT_REMOTE_INFERENCE.md)。两个节点须同步部署。
 
 **v2 变更（2026-11-20）**：`metadata.owner_open_id` 由可选改为**必填**；网关删除了
 无组织者的降级链路（无工具 prompt），缺省或格式非法的请求一律 422 `invalid_request`。

@@ -1,6 +1,6 @@
 """Cloud-internal STT client: one stt-server session per ingest connection.
 
-Speaks the legacy CONTRACT_STT_STREAM v2 shape against a stt-server running
+Speaks the CONTRACT_STT_STREAM v2 shape (docs/) against a stt-server running
 auth=none (intranet baseline per DEPLOYMENT §2). Finals are delivered through
 the on_final callback supplied by the ingest gateway.
 """

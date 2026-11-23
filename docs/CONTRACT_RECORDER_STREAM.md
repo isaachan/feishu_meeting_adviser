@@ -1,6 +1,6 @@
 # Recorder 流式接入契约（recorder ↔ advisor ingest）
 
-状态：v1 于 2026-11-10 冻结（阶段 0.2）。**v1.1（2026-11-16，SM-01）**：新增错误码 `session_paused`（§3.4）、明确多段采集（§2.5）与 900 秒计时只认真实音频帧（§4.4）；`protocol=1` 不变，属兼容扩展。客户端为 `recorder`（WS 推流），服务端为 `advisor` 的 ingest 网关。变更需 bump `protocol` 版本并同步两侧实现与测试。上游设计：[ARCHITECTURE](ARCHITECTURE.md) D2/D3；语义来源：旧 `legacy/docs/CONTRACT_RECORDER_INPUT.md`（幂等/确认）与旧 `legacy/docs/CONTRACT_STT_STREAM.md`（WS 形态/断连）；会话 phase 语义见 [STATE_MACHINES](STATE_MACHINES.md) v2。
+状态：v1 于 2026-11-10 冻结（阶段 0.2）。**v1.1（2026-11-16，SM-01）**：新增错误码 `session_paused`（§3.4）、明确多段采集（§2.5）与 900 秒计时只认真实音频帧（§4.4）；`protocol=1` 不变，属兼容扩展。客户端为 `recorder`（WS 推流），服务端为 `advisor` 的 ingest 网关。变更需 bump `protocol` 版本并同步两侧实现与测试。上游设计：[ARCHITECTURE](ARCHITECTURE.md) D2/D3；语义来源：旧 [CONTRACT_RECORDER_INPUT](CONTRACT_RECORDER_INPUT.md)（幂等/确认）与旧 [CONTRACT_STT_STREAM](CONTRACT_STT_STREAM.md)（WS 形态/断连）；会话 phase 语义见 [STATE_MACHINES](STATE_MACHINES.md) v2。
 
 ## 1. 传输与基线
 

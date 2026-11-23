@@ -5,7 +5,7 @@
 - **流式 Zipformer transducer**（zh-en-punct int8）：partial + final，内置端点检测；
 - **FireRedASR2 AED**（`sherpa-onnx-fire-red-asr2-zh_en-int8-2026-02-26`，非流式）：silero VAD 切段后整段解码，**仅 final 无 partial**；段落=VAD 停顿边界（最长 15s 强切），输出**无标点**（根 TODO T13）。
 
-协议契约见 [CONTRACT_STT_STREAM](../legacy/docs/CONTRACT_STT_STREAM.md)（v1，方案 B 遗留、方案 C 继续沿用，auth 固定 `none`）。客户端为 `legacy/local-meeting-recorder` 的 `stt: remote-stream` 模式与现根目录 `recorder`；本模块不依赖仓库内其他模块。
+协议契约见 [CONTRACT_STT_STREAM](../docs/CONTRACT_STT_STREAM.md)（v1，方案 B 遗留、方案 C 继续沿用，auth 固定 `none`）。客户端为根目录 `recorder`；本模块不依赖仓库内其他模块。
 
 ## 安装（Ubuntu Server，CPU）
 
