@@ -58,13 +58,19 @@ advisor 决定调用模型
 
 进程树为 guardian(python) → opencode(node) → MCP server(python) → noam。macOS 无 /proc,峰值 RSS 与 CPU 用 `ps` 按固定间隔(建议 250ms)采样进程组;报告注明采样频率与峰值低估的可能;同时记录进程组存活进程数。token usage 的可得性验证已移出本方案(TODO T15),不在本轮指标内。
 
+### 3.4 OpenCode 等待阶段进度探针（2026-11-23）
+
+`decision_wait_ms` 内增加 `timings.diagnostics.opencode_trace`。沿用现有 0.2s 的 `GET /session/{id}/message` 轮询，在提示词提交后记录相对时间（`t_ms`）：首次看到 assistant 消息、reasoning/text part、工具的 pending/running/completed/error 状态、assistant 完成。`events[]` 最多保存 128 条；超出时增加 `dropped_events`。`observed_ms` 为最后一次轮询时间，`last_progress_ms` 为最后一次状态变化时间；`active_tools[]` 在最后一次轮询时列出仍在运行的工具及其已观测运行时长 `running_ms`（最多 16 条）。这些字段在成功和失败任务中均可出现。
+
+探针只记录状态、受控工具名和时间，不记录 reasoning/text 内容、工具输入或输出。时间边界受 0.2s 轮询及 HTTP 耗时影响；如果一次轮询间发生多个变化，它们会有相同的 `t_ms`。`active_tools[].running_ms` 从首次观测到 running 开始，不代表工具真实启动时间。凭这些数据可以区分“尚未看到 assistant”“模型在 reasoning/text 阶段”“工具仍在运行”和“工具结束后仍在等待”，但不能直接拆出模型服务商内部的排队、首 token、纯推理或网络耗时，也不能回填旧任务。
+
 ## 4. 采集与隐私
 
 - 任务结果 `timings` 扩展为上述低基数阶段数字与失败阶段;`timings` 为 JSON 字段,向后兼容。advisor 经 `remote_timings` 自动透传,无需新契约。
 - 原始观测事件进入 gateway 结构化日志(JSON,带 `request_id`;会议关联用 metadata 中已有的 `session_id` 作为关联键,不作为监控标签)。advisor 侧对应记录 `end_to_end_ms` 及各衔接点。
 - 日志不包含字幕、prompt、skill 正文、工具结果、组织者 token/PAT 或 OpenCode 凭据。汇总分组仅用低基数维度:backend、模型版本、冷/热启动、工具类型、成功/失败、输入规模分桶。
 - 超时、取消、进程启动失败、工具授权失败同样记录已完成阶段,避免只统计成功样本。计时插桩先用 fake backend 与合成 OpenCode peer(`tests/helpers/fake_opencode_server.py` 已有)验证不改变执行期限与结果语义。
-- 失败样本在 `timings` 内追加 `diagnostics`,用于区分卡在模型还是卡在工具:`wait_observation` 记录最后一条 assistant 消息的 `completed`/`finish`/`error` 与各 part 的 `type`/`tool`/`status`(最多 16 个);`stderr_tail`(≤2 KB)/`stderr_bytes` 记录子进程 stderr 末尾,同一内容另以 WARNING 写入 gateway 日志。stderr 只含 OpenCode/Provider 运行错误,不含 prompt、字幕、skill 正文或工具结果;运行目录仍在关闭时清理。
+- 成功和失败样本均可含 `diagnostics.opencode_trace`（§3.4）及 `wait_observation`；后者记录最后一条 assistant 消息的 `completed`/`finish`/`error` 与各 part 的 `type`/`tool`/`status`(最多 16 个)。失败样本还可含 `stderr_tail`(≤2 KB)/`stderr_bytes`，记录子进程 stderr 末尾,同一内容另以 WARNING 写入 gateway 日志。stderr 只含 OpenCode/Provider 运行错误,不含 prompt、字幕、skill 正文或工具结果;运行目录仍在关闭时清理。
 
 ## 5. 实施范围
 
