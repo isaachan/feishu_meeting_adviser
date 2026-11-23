@@ -96,6 +96,24 @@ class Handler(BaseHTTPRequestHandler):
                 part={'type':'tool','tool':'meeting_nsdp_lookup_release',
                       'callID':'call_inflight','state':{'status':'running'}}
                 return self.send([user,{'info':info,'parts':[part]}])
+            if mode=='progress-timeline' and polls>=2:
+                user={'info':{'role':'user','id':'msg_user','sessionID':'ses_fake1'},'parts':[]}
+                base={'sessionID':'ses_fake1','role':'assistant','parentID':'msg_user',
+                      'providerID':model[0],'modelID':model[1],'time':{}}
+                if polls==2:
+                    return self.send([user,{'info':dict(base,id='msg_reasoning'),
+                                             'parts':[{'type':'reasoning','text':'private thought'}]}])
+                tool={'type':'tool','tool':'meeting_nsdp_lookup_release','callID':'call_probe',
+                      'state':{'status':'running' if polls==3 else 'completed'}}
+                messages=[user,{'info':dict(base,id='msg_tool'),'parts':[tool]}]
+                if polls==3:
+                    return self.send(messages)
+                decision={'control':'none','control_sentence_keys':[],
+                          'reply':None,'reply_sentence_keys':[]}
+                messages.append({'info':dict(base,id='msg_final',time={'completed':1},
+                                             finish='stop'),
+                                 'parts':[{'type':'text','text':json.dumps(decision)}]})
+                return self.send(messages)
             if mode=='timeout' or polls<2:return self.send([])
             decision={'control':'none','control_sentence_keys':[],'reply':None,'reply_sentence_keys':[]}
             if mode=='reply':decision.update(reply='SYNTHETIC GLM REPLY',reply_sentence_keys=['s:1'])

@@ -156,6 +156,19 @@ class OpenCodeBackendTests(unittest.TestCase):
         self.assertEqual(skill[0]['status'], 'ok')
         self.assertEqual(skill[0]['source'], 'poll')
 
+    def test_opencode_trace_records_progress_without_content(self):
+        backend = self.backend('progress-timeline')
+        self.decide(backend)
+        trace = backend.diagnostics['opencode_trace']
+        kinds = [event['kind'] for event in trace['events']]
+        self.assertLess(kinds.index('reasoning_seen'), kinds.index('tool_running'))
+        self.assertLess(kinds.index('tool_running'), kinds.index('tool_completed'))
+        self.assertLess(kinds.index('tool_completed'), kinds.index('assistant_completed'))
+        self.assertEqual(trace['active_tools'], [])
+        self.assertEqual(trace['source'], 'message_poll')
+        self.assertNotIn('private thought', json.dumps(trace))
+        self.assertTrue(backend.diagnostics['wait_observation']['completed'])
+
     def test_timeout_keeps_completed_stages_and_failed_stage(self):
         backend = self.backend('timeout')
         with self.assertRaises(BackendError) as caught:
@@ -178,6 +191,11 @@ class OpenCodeBackendTests(unittest.TestCase):
         self.assertEqual(observation['parts'],
                          [{'type': 'tool', 'tool': 'meeting_nsdp_lookup_release',
                            'status': 'running'}])
+        trace = backend.diagnostics['opencode_trace']
+        self.assertIn('tool_running', [event['kind'] for event in trace['events']])
+        self.assertEqual(trace['active_tools'][0]['tool'],
+                         'meeting_nsdp_lookup_release')
+        self.assertGreater(trace['active_tools'][0]['running_ms'], 0)
         self.assertIn('synthetic provider stalled', backend.diagnostics['stderr_tail'])
         self.assertGreater(backend.diagnostics['stderr_bytes'], 0)
 

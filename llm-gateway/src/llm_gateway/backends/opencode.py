@@ -191,6 +191,8 @@ class OpenCodeBackend:
         self._log_session_id: str | None = None
         self._tool_obs: dict[str, dict] = {}
         self._sampler: _ResourceSampler | None = None
+        self._trace_seen: set[tuple] = set()
+        self._trace_running: dict[tuple, tuple[str, int]] = {}
 
     # ---- measurement ----
 
@@ -227,13 +229,67 @@ class OpenCodeBackend:
         self._close_stderr()
         self._tool_obs = {}
         self._sampler = None
+        self._trace_seen = set()
+        self._trace_running = {}
 
-    def _observe_wait(self, messages, message_id):
-        """Remember the newest assistant message so a timeout shows where it stopped."""
+    def _observe_wait(self, messages, message_id, posted_at):
+        """Keep a bounded, content-free timeline of OpenCode message progress."""
+        elapsed_ms = int((time.monotonic() - posted_at) * 1000)
+        trace = self.diagnostics.setdefault('opencode_trace', {
+            'source': 'message_poll', 'poll_interval_ms': 200, 'events': []})
+        trace['observed_ms'] = elapsed_ms
+
+        def add_event(key, kind, message_index, tool=None):
+            if key in self._trace_seen:
+                return
+            self._trace_seen.add(key)
+            trace['last_progress_ms'] = elapsed_ms
+            if len(trace['events']) >= 128:
+                trace['dropped_events'] = trace.get('dropped_events', 0) + 1
+                return
+            event = {'t_ms': elapsed_ms, 'kind': kind, 'message': message_index}
+            if tool is not None:
+                event['tool'] = tool
+            trace['events'].append(event)
+
         assistants = [message for message in messages
                       if isinstance(message, dict) and isinstance(message.get('info'), dict)
                       and message['info'].get('role') == 'assistant'
-                      and message['info'].get('parentID') == message_id]
+                      and message_id is not None
+                      and message['info'].get('parentID') == message_id
+                      and message['info'].get('sessionID') == self.session_id]
+        for index, message in enumerate(assistants, start=1):
+            info = message['info']
+            assistant_id = info.get('id')
+            if not isinstance(assistant_id, str):
+                continue
+            add_event((assistant_id, 'assistant'), 'assistant_seen', index)
+            for part_index, part in enumerate(message.get('parts') or []):
+                if not isinstance(part, dict):
+                    continue
+                part_id = part.get('id')
+                part_key = (assistant_id, part_id if isinstance(part_id, str) else part_index)
+                kind = part.get('type')
+                if kind in ('reasoning', 'text'):
+                    add_event((part_key, kind), kind + '_seen', index)
+                elif kind == 'tool':
+                    name = part.get('tool')
+                    tool = name if isinstance(name, str) and self.tools.get(name) else 'other'
+                    state = part.get('state')
+                    status = state.get('status') if isinstance(state, dict) else None
+                    if status in ('pending', 'running', 'completed', 'error'):
+                        add_event((part_key, status), 'tool_' + status, index, tool)
+                        if status == 'running':
+                            self._trace_running.setdefault(part_key, (tool, elapsed_ms))
+                        elif status in ('completed', 'error'):
+                            self._trace_running.pop(part_key, None)
+            if isinstance(info.get('time'), dict) and info['time'].get('completed'):
+                add_event((assistant_id, 'completed'), 'assistant_completed', index)
+        trace['active_tools'] = [
+            {'tool': tool, 'running_ms': max(0, elapsed_ms - started)}
+            for tool, started in list(self._trace_running.values())[:16]]
+
+        # Preserve the final observed message shape for failure diagnosis.
         if not assistants:
             self.diagnostics['wait_observation'] = {
                 'assistant_messages': 0, 'user_message_seen': message_id is not None}
@@ -728,6 +784,7 @@ class OpenCodeBackend:
                         if 'prompt_visible_ms' not in self.stage_timings:
                             self.stage_timings['prompt_visible_ms'] = int(
                                 (time.monotonic() - posted_at) * 1000)
+                    self._observe_wait(messages, message_id, posted_at)
                     scan_started = time.monotonic()
                     decisions = [item for message in messages
                                  if (item := self._result(message, message_id)) is not None]
@@ -738,7 +795,6 @@ class OpenCodeBackend:
                             (time.monotonic() - scan_started) * 1000)
                         decision = decisions[0]
                         continue
-                    self._observe_wait(messages, message_id)
                     assert self.stop_event is not None
                     deadline = self.deadline or time.monotonic()
                     self.stop_event.wait(min(0.2, max(0.0, deadline - time.monotonic())))
