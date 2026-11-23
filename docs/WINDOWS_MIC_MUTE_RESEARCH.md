@@ -93,7 +93,7 @@ Windows 会参谋客户端共享现有 Mac GUI 主体，使用 Windows 平台适
 
 ### 5.1 门控位置必须覆盖本地保存和上行
 
-当前 `macos-gui/src/macos_gui/capture.py` 创建 `CaptureSession`，每源对应一个 `SourceUplink`。`recorder/src/recorder/audio/session.py` 的 writer 从源队列取帧后既分发给订阅者（GUI 再送上行），又写入本地 `<source>.wav`。
+当前 `gui/src/gui/capture.py` 创建 `CaptureSession`，每源对应一个 `SourceUplink`。`recorder/src/recorder/audio/session.py` 的 writer 从源队列取帧后既分发给订阅者（GUI 再送上行），又写入本地 `<source>.wav`。
 
 因此直接照搬参考项目在识别阶段丢弃的门控，或仅在上行前拦截，不能满足本项目的目标：静音期间真实 mic 数据仍可能已被采集或写入本地。Windows 适配需要在音频进入保存和上行的共同路径之前落实门控，并处理启动、状态切换、回调在途和缓冲中的音频。需要区分“停止设备采集”与“设备继续采集但丢弃数据”；用户要求的是前者，参考项目本身实现的是后者。
 

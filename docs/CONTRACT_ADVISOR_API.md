@@ -14,13 +14,13 @@
 >
 > **v2.3（2026-11-18）**：§9.6 新增会话文字记录导出 `GET /admin/sessions/{id}/transcript`（human + LLM 回答合并时间线，additive，仅 admin-site 使用）。
 >
-> **v2.0（2026-11-16，SM-01）**：状态机 v2 落契约——会话 phase `recording→running` 更名并新增 `paused`（语义见 [STATE_MACHINES](STATE_MACHINES.md) v2）；会话按**会议实例唯一**（`meeting_instance_key`），新增单人单占位；订阅新增 `expired`/`subscriber_cancelled`/`owner_revoked`、`requested` 可撤回、`owner_revoked` 后可重申；新增 §9.3/§9.4 supervisor（小C）名单配置面；§1.1 新增错误码；§8.3 GUI 面新增 `paused` 展示。不兼容变更（phase 更名、订阅语义）， advisor/bot/admin-site/macos-gui 同仓同步切换（§10）。
+> **v2.0（2026-11-16，SM-01）**：状态机 v2 落契约——会话 phase `recording→running` 更名并新增 `paused`（语义见 [STATE_MACHINES](STATE_MACHINES.md) v2）；会话按**会议实例唯一**（`meeting_instance_key`），新增单人单占位；订阅新增 `expired`/`subscriber_cancelled`/`owner_revoked`、`requested` 可撤回、`owner_revoked` 后可重申；新增 §9.3/§9.4 supervisor（小C）名单配置面；§1.1 新增错误码；§8.3 GUI 面新增 `paused` 展示。不兼容变更（phase 更名、订阅语义）， advisor/bot/admin-site/gui 同仓同步切换（§10）。
 >
 > **v1.6（2026-11-14）**：`POST /sessions` 入会前检查组织者飞书 OAuth、NSDP token、Jira PAT；缺失时一次返回所有缺失项及链接，bot 转发组织者，完成后重发入会。仅入会设此门，NSDP/Jira 在会中查询失败不暂停其他判断；不在建会时预取数据。飞书 token 可复用 GUI 授权；NSDP/Jira 在入会时仅检查是否已提交，使用时才验证。凭据服务不可用则拒绝入会。以下早期版本中相反的入会规则以本条为准。
 >
 > **v1.5（2026-11-14）**：不在建会时预取 NSDP。gateway 的受控查询工具报告授权缺失或失效时，经 outbox 通知组织者；会议其余判断继续。`nsdp_hold` 为兼容保留字段，正常运行会清除旧 hold。
 
-状态：v1 于 2026-11-10 冻结（阶段 0.3）；**v1.1（2026-11-11）** 新增 NSDP 组织者凭据门（`authorization_required` 增加 `provider`/`submit_url` 变体与 `nsdp_unavailable`；组织者面全部指令前置该门；`GET /sessions/{id}/status` 响应新增 `nsdp_hold`）。**v1.2（2026-11-12）** 新增 §8 GUI 面（`/gui/login/start`·`/gui/login/poll`·`/gui/sessions`·`/gui/logout` + devices 表；经 HTTPS 反代对 laptop GUI 暴露，成为第三个对外入口，见 DEPLOYMENT §2）；**v1.2a（2026-11-13，T7）** NSDP 取数降级语义：`nsdp_unavailable` 不再拒绝入会（见 §1.1）。**v1.3（2026-11-13）** 新增 §9 运维面（admin-site：全量会话列表 + 手工停止）；**v1.4（2026-11-13）** §9.1 响应扩展身份目录与订阅列表（`owner_name`/`owner_email`/`subscriptions[]`，依赖 CONTRACT_AUTH v1.3）。服务端为 `advisor`（会话域 + 一次性操作），客户端为 `bot`（§1–§7）、`macos-gui`（§8）与 `admin-site`（§9）。变更需 bump API 版本并同步两侧实现与测试。上游设计：[ARCHITECTURE](ARCHITECTURE.md) D4/D6、[macos-gui/DESIGN](../macos-gui/DESIGN.md)；outbox 语义沿用旧 advisor（channel=`local`/`im`、uuid 幂等、uncertain 人工裁决）。
+状态：v1 于 2026-11-10 冻结（阶段 0.3）；**v1.1（2026-11-11）** 新增 NSDP 组织者凭据门（`authorization_required` 增加 `provider`/`submit_url` 变体与 `nsdp_unavailable`；组织者面全部指令前置该门；`GET /sessions/{id}/status` 响应新增 `nsdp_hold`）。**v1.2（2026-11-12）** 新增 §8 GUI 面（`/gui/login/start`·`/gui/login/poll`·`/gui/sessions`·`/gui/logout` + devices 表；经 HTTPS 反代对 laptop GUI 暴露，成为第三个对外入口，见 DEPLOYMENT §2）；**v1.2a（2026-11-13，T7）** NSDP 取数降级语义：`nsdp_unavailable` 不再拒绝入会（见 §1.1）。**v1.3（2026-11-13）** 新增 §9 运维面（admin-site：全量会话列表 + 手工停止）；**v1.4（2026-11-13）** §9.1 响应扩展身份目录与订阅列表（`owner_name`/`owner_email`/`subscriptions[]`，依赖 CONTRACT_AUTH v1.3）。服务端为 `advisor`（会话域 + 一次性操作），客户端为 `bot`（§1–§7）、`gui`（§8）与 `admin-site`（§9）。变更需 bump API 版本并同步两侧实现与测试。上游设计：[ARCHITECTURE](ARCHITECTURE.md) D4/D6、[gui/DESIGN](../gui/DESIGN.md)；outbox 语义沿用旧 advisor（channel=`local`/`im`、uuid 幂等、uncertain 人工裁决）。
 
 ## 1. 传输与通用约定
 
@@ -259,9 +259,9 @@ v1 中「revoked 终态再申请 → 409」作废（已定 2026-11-16）；旧 `
 - `sent`：pending→sent；`uncertain`（超时/未知结果）：pending→uncertain，人工裁决后经运维面终定（沿用旧语义）；非 pending 状态收到重复结果 → 幂等忽略（200）。
 - 发送侧幂等：bot 用 `uuid5(NAMESPACE_URL, outbox_uuid)` 作为飞书回复 uuid，重复发送被飞书去重。
 
-## 8. GUI 面（v1.2，macos-gui ↔ advisor）
+## 8. GUI 面（v1.2，gui ↔ advisor）
 
-服务 GUI 客户端（`macos-gui`）的登录与会话发现。与 §1–§7 的差异：**经 TLS 反代对外暴露**（`https://<域名>/gui/*` → `127.0.0.1:8380`，受信网络内 GUI 可达），鉴权用 **device_token**（设备凭据，非用户 OAuth 凭据；身份与登录时序见 CONTRACT_AUTH v1.2 与 [macos-gui/DESIGN](../macos-gui/DESIGN.md) §4）。错误体沿用通用格式；本节专属错误码不进 §1.1 总表。
+服务 GUI 客户端（`gui`）的登录与会话发现。与 §1–§7 的差异：**经 TLS 反代对外暴露**（`https://<域名>/gui/*` → `127.0.0.1:8380`，受信网络内 GUI 可达），鉴权用 **device_token**（设备凭据，非用户 OAuth 凭据；身份与登录时序见 CONTRACT_AUTH v1.2 与 [gui/DESIGN](../gui/DESIGN.md) §4）。错误体沿用通用格式；本节专属错误码不进 §1.1 总表。
 
 ### 8.1 `POST /gui/login/start` —— 生成扫码登录
 
@@ -438,4 +438,4 @@ v1 中「revoked 终态再申请 → 409」作废（已定 2026-11-16）；旧 `
 
 ## 10. 版本
 
-API v1（响应体保留 `"api": 1` 字段位，首版不强制）；v1.1 NSDP 门；v1.2 GUI 面（§8）；v1.3 运维面（§9）；v1.4 §9.1 身份目录与订阅列表（依赖 CONTRACT_AUTH v1.3）；**v2.0（2026-11-16）状态机 v2**：phase 更名/新增 `paused`、实例唯一建会、单人单占位、订阅新状态与重申/撤回、§9.3/§9.4 supervisor 名单面、GUI §8.3 paused 展示；v2.1（2026-11-17）§9.4 bare login 优先按飞书 `user_id`（CONTRACT_AUTH v1.7）解析，email 兜底保留；**v2.2（2026-11-17）§9.5 运行时配置面：`idle_timeout_s` 运维可配（仅新会话生效）**（additive）；**v2.3（2026-11-18）§9.6 会话文字记录导出面：`GET /admin/sessions/{id}/transcript`（human STT final + LLM 回答，additive）**；**v2.4（2026-11-18）§2/§3.0 循环日程 occurrence 解析：RRULE 本地展开、同系列归并、实例 id `<uid>_<start>` 绑定（additive，响应结构不变）**；**v2.5（2026-11-18）§2 小C 邀请名单按场经 attendees 接口拉取（additive）**；**v2.6（2026-11-19）§2 邀请名单扩展为直接参与人 ∪ 受邀群组成员（chat_members 按场展开，additive）**；**v2.7（2026-11-19）§9.7 会话任务耗时导出面：`GET /admin/sessions/{id}/timings`（gateway 阶段 + advisor 衔接点，additive）**。不兼容变更递增版本号并同步 bot/advisor/macos-gui/admin-site 侧实现、测试与 `integrations/` 用例；v2.0 为同仓整体切换（单机 `local-up` 一次拉起全部节点），无 v1/v2 双轨窗口。
+API v1（响应体保留 `"api": 1` 字段位，首版不强制）；v1.1 NSDP 门；v1.2 GUI 面（§8）；v1.3 运维面（§9）；v1.4 §9.1 身份目录与订阅列表（依赖 CONTRACT_AUTH v1.3）；**v2.0（2026-11-16）状态机 v2**：phase 更名/新增 `paused`、实例唯一建会、单人单占位、订阅新状态与重申/撤回、§9.3/§9.4 supervisor 名单面、GUI §8.3 paused 展示；v2.1（2026-11-17）§9.4 bare login 优先按飞书 `user_id`（CONTRACT_AUTH v1.7）解析，email 兜底保留；**v2.2（2026-11-17）§9.5 运行时配置面：`idle_timeout_s` 运维可配（仅新会话生效）**（additive）；**v2.3（2026-11-18）§9.6 会话文字记录导出面：`GET /admin/sessions/{id}/transcript`（human STT final + LLM 回答，additive）**；**v2.4（2026-11-18）§2/§3.0 循环日程 occurrence 解析：RRULE 本地展开、同系列归并、实例 id `<uid>_<start>` 绑定（additive，响应结构不变）**；**v2.5（2026-11-18）§2 小C 邀请名单按场经 attendees 接口拉取（additive）**；**v2.6（2026-11-19）§2 邀请名单扩展为直接参与人 ∪ 受邀群组成员（chat_members 按场展开，additive）**；**v2.7（2026-11-19）§9.7 会话任务耗时导出面：`GET /admin/sessions/{id}/timings`（gateway 阶段 + advisor 衔接点，additive）**。不兼容变更递增版本号并同步 bot/advisor/gui/admin-site 侧实现、测试与 `integrations/` 用例；v2.0 为同仓整体切换（单机 `local-up` 一次拉起全部节点），无 v1/v2 双轨窗口。

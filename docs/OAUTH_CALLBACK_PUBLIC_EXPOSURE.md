@@ -1,8 +1,8 @@
 # OAuth 回调公网暴露 · 部署结构分析（2026-11-19）
 
 状态：分析结论 / 变更提案（未实施）。实施时按 §6 任务拆分逐项 commit。
-背景：macos-gui 扫码登录要求手机（可能在内网/VPN 之外）扫码后能回访 OAuth 回调，需将 `http://meeting-advisor.nioint.com/oauth/callback` 公网化，域名换为 `meeting-advisor.nio.com`；**仅回调公网可达，其余入口维持内网**。
-上游：[DEPLOYMENT](DEPLOYMENT.md) §2/§7、[CONTRACT_AUTH](CONTRACT_AUTH.md) §1、[macos-gui/DESIGN](../macos-gui/DESIGN.md) §4。
+背景：gui 扫码登录要求手机（可能在内网/VPN 之外）扫码后能回访 OAuth 回调，需将 `http://meeting-advisor.nioint.com/oauth/callback` 公网化，域名换为 `meeting-advisor.nio.com`；**仅回调公网可达，其余入口维持内网**。
+上游：[DEPLOYMENT](DEPLOYMENT.md) §2/§7、[CONTRACT_AUTH](CONTRACT_AUTH.md) §1、[gui/DESIGN](../gui/DESIGN.md) §4。
 
 ## 1. 现状梳理（2026-11-16 生产基线）
 

@@ -47,12 +47,12 @@ scripts/local-down.sh        # 停止
 
 > **升级注意（2026-11-12，GUI/schema v3）**：advisor DB schema 升到 v3（新增 `gui_devices` 表），旧的 `data/local/advisor/` 会被 `advisor serve` 拒绝（"schema unsupported; reinitialize"）。本地重置：`rm -rf data/local/advisor`（丢历史会话，凭据不受影响——auth 数据独立）。
 
-## 3a. GUI 客户端（macos-gui，T5）
+## 3a. GUI 客户端（gui，T5）
 
 `local-up.sh` 已顺带安装。启动：
 
 ```bash
-.venv-local/bin/macos-gui        # 或 .venv-local/bin/python -m macos_gui
+.venv-local/bin/gui        # 或 .venv-local/bin/python -m gui
 ```
 
 - 首启设置页填服务器地址：`http://127.0.0.1:8380`（本地无反代，直连 advisor API）。

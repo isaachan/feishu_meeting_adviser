@@ -9,7 +9,7 @@
 >
 > **v1.4（2026-11-14）NSDP 工具凭据边界扩展**：可信 llm-gateway 的受控查询工具可按 advisor 提交并绑定的会话组织者身份调用 §8 的 NSDP token 读取接口。token 仅进入查询子进程的环境变量，不进入 OpenCode 进程、模型输入、推理任务存储或日志。工具按需读取，执行结束即释放；gateway 和 auth 的内部接口仍仅限可信网络。组织者身份传递见 [推理身份扩展](CONTRACT_INFERENCE_IDENTITY.md)。查询遇到缺失或 401 时工具返回结构化授权错误，advisor 负责通知组织者；当前不自动删除凭据，避免并发重新授权时误删新 token。飞书凭据的调用边界不变。
 
-状态：v1 于 2026-11-10 冻结（阶段 0.4）。**v1.1（2026-11-11）** 新增 §8：NSDP token 提交通道（组织者个人 token，表单提交、无刷新语义），凭据存储增加 provider 维度。**v1.2（2026-11-12）** 新增 GUI 发现式登录：`/authorize/start` 允许 `intent:"gui:login"` 时 `open_id` 缺省（discovery state，回调后采纳 user_info 主体）；回调成功后 state 记录补存 `user_info` 摘要；新增内部端点 `GET /authorize/status`（advisor 轮询登录进度，见 [macos-gui/DESIGN](../macos-gui/DESIGN.md)）。**v1.3（2026-11-13）** 新增身份档案：回调持久化 user_info 摘要至 `<数据目录>/profiles/`，新端点 `GET /users/{open_id}/profile`（§2.4，供 advisor 身份目录/运维台显示实名）。服务端为 `auth`。语义自旧方案 B `oauth.py` 平移（2026-11-10 已对真实飞书 API 形状验证；源文件已随 `legacy/` 删除，存 git 历史），改为云端多用户（按 open_id 隔离）+ HTTPS 回调。变更需 bump 版本并同步 advisor/auth 两侧实现与测试。上游设计：[ARCHITECTURE](ARCHITECTURE.md) D3。
+状态：v1 于 2026-11-10 冻结（阶段 0.4）。**v1.1（2026-11-11）** 新增 §8：NSDP token 提交通道（组织者个人 token，表单提交、无刷新语义），凭据存储增加 provider 维度。**v1.2（2026-11-12）** 新增 GUI 发现式登录：`/authorize/start` 允许 `intent:"gui:login"` 时 `open_id` 缺省（discovery state，回调后采纳 user_info 主体）；回调成功后 state 记录补存 `user_info` 摘要；新增内部端点 `GET /authorize/status`（advisor 轮询登录进度，见 [gui/DESIGN](../gui/DESIGN.md)）。**v1.3（2026-11-13）** 新增身份档案：回调持久化 user_info 摘要至 `<数据目录>/profiles/`，新端点 `GET /users/{open_id}/profile`（§2.4，供 advisor 身份目录/运维台显示实名）。服务端为 `auth`。语义自旧方案 B `oauth.py` 平移（2026-11-10 已对真实飞书 API 形状验证；源文件已随 `legacy/` 删除，存 git 历史），改为云端多用户（按 open_id 隔离）+ HTTPS 回调。变更需 bump 版本并同步 advisor/auth 两侧实现与测试。上游设计：[ARCHITECTURE](ARCHITECTURE.md) D3。
 
 ## 1. 范围、端点与角色
 
@@ -49,7 +49,7 @@
 - 生成 PKCE `verifier`/`challenge` 与 `state`；`state` 随机不可猜、**一次性**、TTL 10 min，服务端记录 `(state → open_id, intent, verifier, used)`。
 - `intent` 为待续接意图（如 `join:<会议号>`），仅用于回调成功页提示，不含敏感信息。
 - advisor 将 `authorize_url` 经 CONTRACT_ADVISOR_API 的 `authorization_required` 响应转给 bot → 小A。
-- **发现式登录变体（v1.2）**：`intent` 为 `gui:login` 时允许 `open_id` 缺省（`null`）——state 记录 `discovery=true`、不绑定 open_id；用于 macos-gui 扫码登录（身份即待发现项）。回调时以 user_info 的 open_id **采纳**为主体（跳过防串换相等校验，见 §4.1）；非 discovery state 不受影响。
+- **发现式登录变体（v1.2）**：`intent` 为 `gui:login` 时允许 `open_id` 缺省（`null`）——state 记录 `discovery=true`、不绑定 open_id；用于 gui 扫码登录（身份即待发现项）。回调时以 user_info 的 open_id **采纳**为主体（跳过防串换相等校验，见 §4.1）；非 discovery state 不受影响。
 
 ### 2.2 `GET /credentials/{open_id}/token[?rejected=<token>]`
 

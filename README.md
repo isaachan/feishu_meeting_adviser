@@ -33,7 +33,7 @@
 ├── auth/                  # OAuth 鉴权服务独立节点（用户凭据托管）
 ├── stt-server/            # 流式 STT 服务（自旧 stt-server 平移，退化纯内网）
 ├── llm-gateway/           # 模型执行网关（自旧 llm-gateway 平移）
-├── macos-gui/             # laptop 端 GUI 客户端
+├── gui/             # laptop 端 GUI 客户端
 ├── integrations/          # 跨模块集成测试床
 ├── scripts/               # 本地全栈起停（local-up.sh / local-down.sh）
 └── data/                  # 运行时数据（不入库）

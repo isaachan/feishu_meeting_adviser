@@ -145,7 +145,7 @@
 
 ## 7. 与 v1 的差异与兼容窗口
 
-- `recording→running` 更名 + `paused` 新增：advisor/bot/admin-site/macos-gui 同仓同步切换，无长期双轨；部署顺序 = 单机 `local-up` 整栈一次拉起（CONTRACT_ADVISOR_API §10 v2.0）。
+- `recording→running` 更名 + `paused` 新增：advisor/bot/admin-site/gui 同仓同步切换，无长期双轨；部署顺序 = 单机 `local-up` 整栈一次拉起（CONTRACT_ADVISOR_API §10 v2.0）。
 - 订阅 `revoked` 拆分为 `subscriber_cancelled`/`owner_revoked` + 新增 `expired`；旧 `revoked` 行只读兼容，新写不再产生。
 - 新错误码：`meeting_ambiguous` / `session_claimed` / `instance_ended` / `claim_conflict` / `not_supervisor` / `not_invited` / `identity_unresolved` / `session_paused`（ingest）。
 - recorder 协议 `protocol=1` 不变（新增错误码属兼容扩展，CONTRACT_RECORDER_STREAM v1.1）。
