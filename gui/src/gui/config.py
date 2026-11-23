@@ -7,6 +7,7 @@ Credential Manager via keyring); nothing is written to plain files.
 """
 
 SERVICE = 'gui'
+LEGACY_SERVICE = 'macos-gui'  # 2026-11-23 模块更名前的服务名；仅用于一次性迁移读取
 KEY_SERVER_URL = 'server_url'
 KEY_DEVICE_TOKEN = 'device_token'
 KEY_AUTO_CONNECT = 'auto_connect'
@@ -63,7 +64,29 @@ class KeyringConfigStore:
 
 
 def default_store():
-    return KeyringConfigStore()
+    store = KeyringConfigStore()
+    migrate_legacy_service(store)
+    return store
+
+
+def migrate_legacy_service(store):
+    """把旧服务名（macos-gui）下保存的配置一次性拷贝到新服务名（gui）。
+
+    Best-effort：任何失败（无 keyring 后端、Keychain ACL 拒绝）都只是
+    保持新服务名为空——用户回到首次使用流程重新填写，行为不变。
+    """
+    if not isinstance(store, KeyringConfigStore):
+        return
+    try:
+        import keyring
+        for key in (KEY_SERVER_URL, KEY_DEVICE_TOKEN, KEY_AUTO_CONNECT):
+            if keyring.get_password(SERVICE, key) is not None:
+                continue
+            value = keyring.get_password(LEGACY_SERVICE, key)
+            if value is not None:
+                keyring.set_password(SERVICE, key, value)
+    except Exception:
+        pass
 
 
 def normalize_server_url(url):

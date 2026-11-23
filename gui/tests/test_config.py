@@ -59,6 +59,59 @@ class MemoryStoreTests(unittest.TestCase):
         store.delete('server_url')
         self.assertIsNone(store.get('server_url'))
 
+
+class _FakeKeyring:
+    """Dict-backed keyring stand-in (patched into sys.modules)."""
+
+    def __init__(self):
+        self.items = {}
+
+    def get_password(self, service, key):
+        return self.items.get((service, key))
+
+    def set_password(self, service, key, value):
+        self.items[(service, key)] = value
+
+    def delete_password(self, service, key):
+        self.items.pop((service, key), None)
+
+
+class LegacyServiceMigrationTests(unittest.TestCase):
+    def setUp(self):
+        self.fake = _FakeKeyring()
+        self._saved = sys.modules.get('keyring')
+        sys.modules['keyring'] = self.fake
+
+    def tearDown(self):
+        if self._saved is None:
+            sys.modules.pop('keyring', None)
+        else:
+            sys.modules['keyring'] = self._saved
+
+    def test_migrates_legacy_entries(self):
+        self.fake.items[(config.LEGACY_SERVICE, config.KEY_SERVER_URL)] = \
+            'https://advisor.internal'
+        self.fake.items[(config.LEGACY_SERVICE, config.KEY_DEVICE_TOKEN)] = 'dt-old'
+        store = config.KeyringConfigStore()
+        config.migrate_legacy_service(store)
+        state = config.load_state(store)
+        self.assertEqual(state['server_url'], 'https://advisor.internal')
+        self.assertEqual(state['device_token'], 'dt-old')
+
+    def test_existing_new_service_wins(self):
+        self.fake.items[(config.LEGACY_SERVICE, config.KEY_SERVER_URL)] = 'https://old'
+        self.fake.items[(config.SERVICE, config.KEY_SERVER_URL)] = 'https://new'
+        config.migrate_legacy_service(config.KeyringConfigStore())
+        self.assertEqual(self.fake.items[(config.SERVICE, config.KEY_SERVER_URL)],
+                         'https://new')
+
+    def test_no_legacy_entries_is_noop(self):
+        store = config.KeyringConfigStore()
+        config.migrate_legacy_service(store)
+        self.assertEqual(config.load_state(store),
+                         {'server_url': None, 'device_token': None,
+                          'auto_connect': False})
+
     def test_keyring_failure_falls_back_without_crash(self):
         store = config.KeyringConfigStore()
         with mock.patch.dict(sys.modules, {'keyring': _BrokenKeyring()}):
