@@ -1,7 +1,5 @@
 # Advisor 内部 API 契约（bot ↔ advisor）
 
-> **v2.10（2026-11-23）**：§3.3 结束会话权限扩展——调用者可为 session owner、**该场日历组织者（小A）** 或 **enabled 小C 名单成员**（先到先得的 owner 之外，小A/小C 也能止血结束）；判定只用持久化数据（会话行 `organizer_open_id` + §9.3 名单），不发起日历/attendees 调用。新增 §3.4 `GET /sessions/endable?caller_open_id=`（bot `结束会议` 定位非自有会话的发现面，行附 `end_role`）。`not_owner` 语义见 §1.1。STATE_MACHINES §0「组织者无任何权限」同批修订。additive，advisor/bot 同仓同步。
->
 > **v2.9（2026-11-22）**：§7.1 outbox `payload` 新增 `format: text|markdown`（additive）：模型回答 `reply` 为 `markdown`（`reply-md-v1`，见 [FEISHU_RICH_TEXT_REPLY](FEISHU_RICH_TEXT_REPLY.md)），审批/过期通知仍为 `text`。bot 按该字段决定是否渲染飞书富文本；忽略该字段的消费端按纯文本处理即可。advisor/bot 同仓同步。
 >
 > **v2.8（2026-11-20）**：§1.1 `claim_conflict` 可附 `conflicting_title`；§4.1 新申请响应新增 `subscriber_display`（user_id → 姓名 → open_id）；§5–§7 审批同意、拒绝、过期及撤销通知以 `subscription_notice` 进入 IM outbox（additive，advisor/bot 同仓同步）。
@@ -45,7 +43,7 @@
 | `nsdp_unavailable` | NSDP/noam 不可达（**v1.2a 起入会不再触发**：降级建会，见 §1.1；码位保留供后续使用） | 提示"NSDP 服务暂时不可用，稍后再试" |
 | `session_ended` / `session_draining` | 会话已结束/排空中，操作被拒 | 告知原因 |
 | `session_paused` | 会话 paused（owner 离会）暂停辅助中；仅 ingest 面使用（CONTRACT_RECORDER_STREAM v1.1），API 面以 `phase` 字段表达 | 告知原因（暂停中，owner 回会后恢复） |
-| `not_owner` | 操作者无权限：审批/撤销仍 owner-only；**结束会话（§3.3，v2.10）允许 owner、该场日历组织者与 enabled 小C 名单成员，其余调用者得此码** | 回答"只有会话负责人（或会议组织者/获授权参会者）可以…" |
+| `not_owner` | 操作者不是该会话/订阅的 owner | 回答"只有会话 owner 可以…" |
 | `meeting_ambiguous`（v2） | 同会议号有多个**独立**场次同时覆盖当前时间窗（循环系列已按 occurrence 归并解析，同系列 master+例外场不算多场次），无法消歧 | 请用户稍后在目标场次时间窗内重试 |
 | `session_claimed`（v2） | 该实例已有**他人**的非 ended 会话（先到先得，归属不可转移） | 告知"该会议已由他人启动会参谋" |
 | `instance_ended`（v2） | 该实例已有会话且已 ended/draining（每实例一生一个 session，不可复建） | 告知"该场会议的辅助已结束，不可重新开始" |
@@ -133,21 +131,7 @@
 {"owner_open_id": "ou_A"}
 ```
 
-成功（200）：`{"session_id": "s-3f9c", "phase": "draining"}`。会话（running 或 paused）进入 draining：在途输入/模型任务/待发回答在**绝对排空截止**（STATE_MACHINES §1.3）内落定后自动置 ended。已 ended 再调 → 幂等返回 `{"phase": "ended"}`。
-
-- **结束权限（v2.10，2026-11-23）**：`owner_open_id` 字段语义为**调用者**（字段名不变，兼容）。允许调用者 = session owner ∪ **该场日历组织者（会话行 `organizer_open_id`，建会时持久化；小A 先建会时与 owner 相同，小C 先建会时即小A）** ∪ **enabled 小C 名单成员（§9.3，admin 授权的止血面）**；其余调用者 → `not_owner`。日历组织者不是 owner 时仍不能接管/订阅/审批（STATE_MACHINES §0），但**可以结束**。判定只用持久化数据，不发起日历/attendees 调用——结束是止血操作，不因飞书/auth 故障被卡。
-- 幂等：draining 再调 → `{"phase": "draining"}`；ended 再调 → `{"phase": "ended"}`。审批/撤销（§5）仍 owner-only，不随本条扩展。
-
-### 3.4 `GET /sessions/endable?caller_open_id=ou_A` —— 调用者可结束的会话（v2.10 新增）
-
-```json
-{"sessions": [{"session_id": "s-3f9c", "meeting_no": "123456789", "title": "周会",
-  "phase": "running", "started_at": "…", "end_role": "organizer"}]}
-```
-
-- 供 bot `结束会议 [会议号]` 定位**非自有**会话：返回该调用者按 §3.3 可结束的全部非 ended 会话（running/paused/draining，按 `started_at` 倒序）。
-- `end_role` = `owner`（本人是 session owner，优先）| `organizer`（该场日历组织者）| `supervisor`（enabled 小C 名单命中）。身份与 §3.3 判定同源，advisor 与 bot 无需重复校验。
-- 与 §3.1 的分工：§3.1 仍为 owner 作用域（`状态` 指令数据源）；本端点是结束权限的发现面。NSDP 门与 §3.3 同门（组织者面）。
+成功（200）：`{"session_id": "s-3f9c", "phase": "draining"}`。会话（running 或 paused）进入 draining：在途输入/模型任务/待发回答在**绝对排空截止**（STATE_MACHINES §1.3）内落定后自动置 ended。已 ended 再调 → 幂等返回 `{"phase": "ended"}`。非 owner → `not_owner`（日历组织者不是 owner 时同样 `not_owner`）。
 
 ## 4. 订阅申请（S3.1–S3.2）
 
@@ -454,4 +438,4 @@ v1 中「revoked 终态再申请 → 409」作废（已定 2026-11-16）；旧 `
 
 ## 10. 版本
 
-API v1（响应体保留 `"api": 1` 字段位，首版不强制）；v1.1 NSDP 门；v1.2 GUI 面（§8）；v1.3 运维面（§9）；v1.4 §9.1 身份目录与订阅列表（依赖 CONTRACT_AUTH v1.3）；**v2.0（2026-11-16）状态机 v2**：phase 更名/新增 `paused`、实例唯一建会、单人单占位、订阅新状态与重申/撤回、§9.3/§9.4 supervisor 名单面、GUI §8.3 paused 展示；v2.1（2026-11-17）§9.4 bare login 优先按飞书 `user_id`（CONTRACT_AUTH v1.7）解析，email 兜底保留；**v2.2（2026-11-17）§9.5 运行时配置面：`idle_timeout_s` 运维可配（仅新会话生效）**（additive）；**v2.3（2026-11-18）§9.6 会话文字记录导出面：`GET /admin/sessions/{id}/transcript`（human STT final + LLM 回答，additive）**；**v2.4（2026-11-18）§2/§3.0 循环日程 occurrence 解析：RRULE 本地展开、同系列归并、实例 id `<uid>_<start>` 绑定（additive，响应结构不变）**；**v2.5（2026-11-18）§2 小C 邀请名单按场经 attendees 接口拉取（additive）**；**v2.6（2026-11-19）§2 邀请名单扩展为直接参与人 ∪ 受邀群组成员（chat_members 按场展开，additive）**；**v2.7（2026-11-19）§9.7 会话任务耗时导出面：`GET /admin/sessions/{id}/timings`（gateway 阶段 + advisor 衔接点，additive）**；**v2.10（2026-11-23）§3.3 结束会话权限扩展（owner ∪ 该场组织者 ∪ enabled 小C，持久化数据判定）+ §3.4 `GET /sessions/endable` 发现面（行附 `end_role`，additive）**。不兼容变更递增版本号并同步 bot/advisor/macos-gui/admin-site 侧实现、测试与 `integrations/` 用例；v2.0 为同仓整体切换（单机 `local-up` 一次拉起全部节点），无 v1/v2 双轨窗口。
+API v1（响应体保留 `"api": 1` 字段位，首版不强制）；v1.1 NSDP 门；v1.2 GUI 面（§8）；v1.3 运维面（§9）；v1.4 §9.1 身份目录与订阅列表（依赖 CONTRACT_AUTH v1.3）；**v2.0（2026-11-16）状态机 v2**：phase 更名/新增 `paused`、实例唯一建会、单人单占位、订阅新状态与重申/撤回、§9.3/§9.4 supervisor 名单面、GUI §8.3 paused 展示；v2.1（2026-11-17）§9.4 bare login 优先按飞书 `user_id`（CONTRACT_AUTH v1.7）解析，email 兜底保留；**v2.2（2026-11-17）§9.5 运行时配置面：`idle_timeout_s` 运维可配（仅新会话生效）**（additive）；**v2.3（2026-11-18）§9.6 会话文字记录导出面：`GET /admin/sessions/{id}/transcript`（human STT final + LLM 回答，additive）**；**v2.4（2026-11-18）§2/§3.0 循环日程 occurrence 解析：RRULE 本地展开、同系列归并、实例 id `<uid>_<start>` 绑定（additive，响应结构不变）**；**v2.5（2026-11-18）§2 小C 邀请名单按场经 attendees 接口拉取（additive）**；**v2.6（2026-11-19）§2 邀请名单扩展为直接参与人 ∪ 受邀群组成员（chat_members 按场展开，additive）**；**v2.7（2026-11-19）§9.7 会话任务耗时导出面：`GET /admin/sessions/{id}/timings`（gateway 阶段 + advisor 衔接点，additive）**。不兼容变更递增版本号并同步 bot/advisor/macos-gui/admin-site 侧实现、测试与 `integrations/` 用例；v2.0 为同仓整体切换（单机 `local-up` 一次拉起全部节点），无 v1/v2 双轨窗口。
