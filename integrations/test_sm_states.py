@@ -6,11 +6,23 @@ join idempotence, and the absolute drain deadline with a dead bot.
 Occurrence identity / paused transitions / STT isolation are covered by
 advisor unit suites (test_domain, test_observation, test_ingest).
 """
+import json
 import re
 import time
 import unittest
+from urllib import error, request
 
 from test_bed import TestBed, http_get_json
+
+OPENER = request.build_opener(request.ProxyHandler({}))
+
+
+def http_post_json(url, body, *, idempotency_key):
+    req = request.Request(url, data=json.dumps(body).encode(), method='POST',
+                          headers={'Content-Type': 'application/json',
+                                   'X-Idempotency-Key': idempotency_key})
+    with OPENER.open(req, timeout=5) as response:
+        return response.status, json.loads(response.read())
 
 
 class StateMatrixTests(unittest.TestCase):
@@ -86,6 +98,43 @@ class StateMatrixTests(unittest.TestCase):
             if s['meeting_no'] == '244000222')), 'session never drained to ended')
         _ack, again = bus.join_says(bed.service, 'ou_D', '入会 244000333')
         self.assertIn('已入会', again)
+
+    def test_supervisor_ends_session_started_by_owner(self):
+        """CONTRACT v2.10 §3.3/§3.4：小A 建会，enabled 小C 名单成员经 bot 结束；
+        陌生人经 bot/API 均被拒。"""
+        bed, bus = self.bed, self.bed.bus
+        bed.authorize('ou_A')
+        self.track('ou_A', '244000555')
+        _ack, reply = bus.join_says(bed.service, 'ou_A', '入会 244000555')
+        self.assertIn('已入会', reply)
+        session_id = next(s['session_id'] for s in self.admin_sessions()
+                          if s['meeting_no'] == '244000555')
+
+        _status, grant = http_post_json(
+            f'http://127.0.0.1:{bed.ports["api"]}/admin/supervisors',
+            {'login_name': 'ou_C', 'enabled': True}, idempotency_key='grant-ou-C')
+        self.assertEqual(grant['open_id'], 'ou_C')
+
+        # stranger via bot: no endable session -> user-facing rejection
+        denied = bus.user_says(bed.service, 'ou_X', '结束会议 244000555')
+        self.assertIn('未找到该会议的进行中会话', denied)
+        # stranger directly against the API: contract-level not_owner
+        try:
+            http_post_json(f'http://127.0.0.1:{bed.ports["api"]}/sessions/{session_id}/end',
+                           {'owner_open_id': 'ou_X'}, idempotency_key='end-ou-X')
+            self.fail('expected not_owner')
+        except error.HTTPError as exc:
+            self.assertEqual(exc.code, 409)
+            self.assertEqual(json.loads(exc.read())['error']['code'], 'not_owner')
+        self.assertEqual(next(s['phase'] for s in self.admin_sessions()
+                              if s['session_id'] == session_id), 'running')
+
+        # enabled 小C ends 小A's session through the bot
+        ended = bus.user_says(bed.service, 'ou_C', '结束会议 244000555')
+        self.assertIn('正在结束「', ended)
+        self.assertTrue(self.wait_until(lambda: next(
+            s['phase'] == 'ended' for s in self.admin_sessions()
+            if s['session_id'] == session_id)), 'session never drained to ended')
 
     def test_drain_deadline_forces_ended_with_dead_bot(self):
         bed, bus = self.bed, self.bed.bus
