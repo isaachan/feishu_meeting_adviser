@@ -104,7 +104,14 @@ class Controller(QObject):
     def _start_login(self):
         assert self.client is not None
         self.flow = LoginFlow(self.client)
-        start = self.flow.begin()
+        try:
+            start = self.flow.begin()
+        except (ApiError, NetworkError):
+            # 服务器不可达等启动期失败：进登录页给状态与「刷新二维码」重试，
+            # 不让 do_boot 在事件循环启动前崩溃。
+            self._enter('login')
+            self.login_status.emit('暂时连不上服务器，请检查网络后点「刷新二维码」重试')
+            return None
         self._enter('login')
         self.login_started.emit(start)
         return start

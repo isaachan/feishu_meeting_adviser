@@ -13,7 +13,7 @@ except ImportError:
     PYSIDE_READY = False
 
 from gui import config as config_mod
-from gui.api import ApiError
+from gui.api import ApiError, NetworkError
 
 if PYSIDE_READY:
     from PySide6.QtWidgets import QApplication, QLabel, QPushButton
@@ -58,6 +58,17 @@ class AppSmokeTests(unittest.TestCase):
         self.assertIsInstance(self.window.stack.currentWidget(), SettingsPage)
         self.assertFalse(self.window.settings_page.auto_checkbox.isChecked())
         self.assertEqual(self.controller.server_url, config_mod.DEFAULT_SERVER_URL)
+
+    def test_boot_survives_login_network_error(self):
+        self.client.start_error = NetworkError('<urlopen error [Errno 22]>')
+        self.controller.do_boot()  # 服务器不可达时不得在 boot 期抛出
+        self.assertEqual(self.controller.state, 'login')
+        self.assertIsInstance(self.window.stack.currentWidget(), LoginPage)
+        self.assertIn('重试', self.window.login_page.status_label.text())
+        self.assertTrue(self.window.login_page.qr_label.pixmap().isNull())
+        self.client.start_error = None
+        self.controller.do_start_login()  # 「刷新二维码」恢复
+        self.assertFalse(self.window.login_page.qr_label.pixmap().isNull())
 
     def test_qr_fits_compact_window(self):
         pixmap = qr_pixmap('https://accounts.feishu.cn/open-apis/authen/v1/authorize?x=1')
@@ -239,6 +250,7 @@ class ScriptedClient:
     def __init__(self):
         self.poll_result = {'status': 'pending'}
         self.sessions_error = None
+        self.start_error = None
         self.sessions_payload = {'user': {'open_id': 'ou_A', 'name': 'Kai Han',
                                           'email': 'kai.han@nio.com'},
                                  'sessions': [{'session_id': 's-1', 'meeting_no': '111',
@@ -250,6 +262,8 @@ class ScriptedClient:
                                                    'token': 'st-x', 'mic': False}}]}
 
     def login_start(self):
+        if self.start_error is not None:
+            raise self.start_error
         return {'login_url': 'https://accounts.feishu.cn/open-apis/authen/v1/'
                              'authorize?client_id=x&state=st',
                 'device_code': 'dc-xyz-123456', 'expires_at': 1.0}
