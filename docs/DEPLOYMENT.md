@@ -98,7 +98,7 @@ cp scripts/prod.env.example scripts/prod.env
 chmod 600 scripts/prod.env
 ```
 
-`scripts/prod.env` 是 shell 格式，仅保存可信的配置内容，不提交 Git。按需设置 `JIRA_URL`、`OPENCODE_MODEL`、`OPENCODE_AUTH`、`SKILLS_DIR`。切换 LLM 时改 `OPENCODE_MODEL='<provider>/<model>'`（不设则用 gateway 默认 `zai-coding-plan/glm-5.3`），对应 provider 的 api key 需已在 `auth.json` 或 `OPENCODE_AUTH` 中；这是运维配置变更，无需 `prod-up.sh`，停活跃会话后 `sudo systemctl restart meeting-advisor@llm-gateway` 即可，但 gateway 的健康检查不覆盖模型校验，须用一次真实决策确认。将已有 `prod.env` 的 `PUBLIC_BASE_URL`、`INGEST_URL` 改为域名值（参见 `prod.env.example`）；admin-site 固定监听 localhost，旧的 `ADMIN_HOST` 可删除。默认真实模型 `REMOTE_BACKEND=opencode`；如需先验收假模型，可暂设 `fake`。GUI 的服务器地址填写 `http://meeting-advisor.nioint.com`。
+`scripts/prod.env` 是 shell 格式，仅保存可信的配置内容，不提交 Git。按需设置 `JIRA_URL`、`OPENCODE_MODEL`、`OPENCODE_AUTH`、`OPENCODE_PROVIDER_CONFIG`、`SKILLS_DIR`。切换 LLM 时改 `OPENCODE_MODEL='<provider>/<model>'`（不设则用 gateway 默认 `zai-coding-plan/glm-5.3`）；provider 在内置目录中时只配 `auth.json`/`OPENCODE_AUTH`，不在目录中（如 `nio`）时另需 `OPENCODE_PROVIDER_CONFIG` 指向一份 `{"<provider>": {...}}` 的 provider 定义 JSON，api key 可通过 provider 的 `options.apiKey='{env:VAR}'` 配合 `prod.env` 里的环境变量提供。注意 gateway 每次决策使用隔离 XDG 目录与自建 `OPENCODE_CONFIG_CONTENT`，运维用户 `~/.config/opencode` 下的 TUI 配置对 gateway 不生效。切换后停活跃会话并 `sudo systemctl restart meeting-advisor@llm-gateway`（配置变更无需 `prod-up.sh`）；gateway 的健康检查不覆盖模型校验，须用一次真实决策确认。将已有 `prod.env` 的 `PUBLIC_BASE_URL`、`INGEST_URL` 改为域名值（参见 `prod.env.example`）；admin-site 固定监听 localhost，旧的 `ADMIN_HOST` 可删除。默认真实模型 `REMOTE_BACKEND=opencode`；如需先验收假模型，可暂设 `fake`。GUI 的服务器地址填写 `http://meeting-advisor.nioint.com`。
 
 ### 7.2 部署、停止与升级
 

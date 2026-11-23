@@ -155,9 +155,11 @@ class OpenCodeBackend:
     def __init__(self, *, executable: str, model: str, auth_path: Path | None,
                  runtime_base: Path | None, command: list | None = None,
                  skills_dir: Path | None = None, auth_url: str = 'http://127.0.0.1:8381',
-                 noam_bin: str = 'noam', jira_url: str = ''):
+                 noam_bin: str = 'noam', jira_url: str = '',
+                 provider_config: Path | None = None):
         self.executable = executable
         self.auth_path = Path(auth_path) if auth_path else None
+        self.provider_config = (Path(provider_config) if provider_config else None)
         self.command = command
         self.skills_dir = Path(skills_dir) if skills_dir else Path(__file__).resolve().parents[1] / 'skills'
         self.auth_url = auth_url
@@ -396,6 +398,22 @@ class OpenCodeBackend:
             'agent': {AGENT: {'mode': 'primary', 'description': 'Meeting decisions only',
                               'permission': permission, 'steps': 12,
                               'prompt': AGENT_PROMPT}}}
+        if self.provider_config is not None:
+            # Custom providers (not in opencode's catalog) must be declared here;
+            # the per-run XDG store never sees the operator's global config.
+            try:
+                if self.provider_config.is_symlink() \
+                        or self.provider_config.stat().st_size > 100_000:
+                    raise ValueError()
+                providers = json.loads(self.provider_config.read_text())
+            except (OSError, ValueError):
+                raise BackendError('backend_unavailable') from None
+            if (not isinstance(providers, dict)
+                    or not isinstance(providers.get(self.provider), dict)
+                    or any(not isinstance(name, str) or not isinstance(spec, dict)
+                           for name, spec in providers.items())):
+                raise BackendError('backend_unavailable')
+            config['provider'] = providers
         env['OPENCODE_CONFIG_CONTENT'] = json.dumps(config)
         return env
 

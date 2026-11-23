@@ -37,6 +37,8 @@ def parser():
     serve.add_argument('--opencode-model', default='zai-coding-plan/glm-5.3')
     serve.add_argument('--opencode-auth', type=Path, default=None,
                        help='opencode auth.json providing the model provider key')
+    serve.add_argument('--opencode-provider-config', type=Path, default=None,
+                       help='JSON provider definitions for models absent from the catalog')
     serve.add_argument('--skills-dir', type=Path, default=None,
                        help='OpenCode skill directory (default: packaged skills)')
     serve.add_argument('--auth-url', default='http://127.0.0.1:8381',
@@ -63,6 +65,7 @@ def backend_factory(options):
                 executable=options.opencode_executable,
                 model=options.opencode_model,
                 auth_path=options.opencode_auth,
+                provider_config=options.opencode_provider_config,
                 runtime_base=options.runtime_dir,
                 skills_dir=options.skills_dir, auth_url=options.auth_url,
                 noam_bin=options.noam_bin, jira_url=options.jira_url)

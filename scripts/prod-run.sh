@@ -20,6 +20,7 @@ case "$1" in
     args=(--opencode-executable "$OPENCODE_BIN" --noam-bin "$NOAM_BIN" --database "$DATA/gateway/tasks.sqlite3")
     [[ -z "${OPENCODE_MODEL:-}" ]] || args+=(--opencode-model "$OPENCODE_MODEL")
     [[ -z "${OPENCODE_AUTH:-}" ]] || args+=(--opencode-auth "$OPENCODE_AUTH")
+    [[ -z "${OPENCODE_PROVIDER_CONFIG:-}" ]] || args+=(--opencode-provider-config "$OPENCODE_PROVIDER_CONFIG")
     [[ -z "${SKILLS_DIR:-}" ]] || args+=(--skills-dir "$SKILLS_DIR")
     exec "$VENV/bin/llm-gateway" serve --host 127.0.0.1 --port 8377 "${args[@]}" ;;
   advisor)

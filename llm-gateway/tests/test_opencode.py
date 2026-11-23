@@ -32,6 +32,36 @@ class OpenCodeBackendTests(unittest.TestCase):
                               stop_event=threading.Event(),
                               metadata={'owner_open_id': 'ou_A'})
 
+    def test_provider_config_is_forwarded_to_the_isolated_instance(self):
+        spec = {'synthetic': {'npm': '@ai-sdk/openai-compatible',
+                              'api': 'https://example.invalid/v1',
+                              'models': {'m': {}}}}
+        provider_config = self.root / 'provider.json'
+        provider_config.write_text(json.dumps(spec))
+        backend = OpenCodeBackend(executable='opencode', model='synthetic/m',
+                                  auth_path=self.auth, runtime_base=self.root / 'runtime',
+                                  provider_config=provider_config)
+        backend.runtime = self.root / 'runtime' / 'run-test'
+        backend.runtime.mkdir(parents=True)
+        backend.password = 'synthetic-password'
+        backend.owner_open_id = 'ou_A'
+        config = json.loads(backend._environment()['OPENCODE_CONFIG_CONTENT'])
+        self.assertEqual(config['provider'], spec)
+        self.assertEqual(config['enabled_providers'], ['synthetic'])
+
+    def test_provider_config_must_define_the_selected_provider(self):
+        provider_config = self.root / 'provider.json'
+        provider_config.write_text(json.dumps({'other': {}}))
+        backend = OpenCodeBackend(executable='opencode', model='synthetic/m',
+                                  auth_path=self.auth, runtime_base=self.root / 'runtime',
+                                  provider_config=provider_config)
+        backend.runtime = self.root / 'runtime' / 'run-test'
+        backend.runtime.mkdir(parents=True)
+        backend.password = 'synthetic-password'
+        backend.owner_open_id = 'ou_A'
+        with self.assertRaises(BackendError):
+            backend._environment()
+
     def test_reply_decision_passes_verification_and_schema(self):
         decision = self.decide(self.backend('reply'))
         self.assertEqual((decision['reply'], decision['reply_sentence_keys']),
