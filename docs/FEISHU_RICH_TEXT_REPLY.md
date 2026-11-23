@@ -63,8 +63,8 @@ outbox `payload.format` 标记 `reply`（`advisor/src/advisor/api.py`）；bot
 - `output="decision-v2"` 表示 `reply` 遵循本文 §5 的 `reply-md-v1` 方言。
 - 校验器结构不变：`llm-gateway/src/llm_gateway/decisions.py` 与
   `advisor/src/advisor/model_backend.py` 仍校验四个字段、证据键和长度。
-- 迁移期 gateway 同时接受 `decision-v1` 与 `decision-v2`；advisor 先请求 v1 保持现状，
-  bot 渲染能力就绪后再切 v2。`output` 参与 gateway 的 content hash
+- gateway 同时接受 `decision-v1` 与 `decision-v2`；advisor 默认请求 `decision-v2`，
+  可用 `--decision-output decision-v1` 回滚。`output` 参与 gateway 的 content hash
   （`llm-gateway/src/llm_gateway/service.py` 的 `canonical_hash`）与
   `advisor` 的 `remote_identity`，版本切换会自然改变幂等键，属于预期行为。
 - prompt 更新（`llm-gateway/src/llm_gateway/backends/opencode.py` 的 `AGENT_PROMPT`）：

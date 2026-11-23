@@ -13,7 +13,8 @@
 - 两版 `output` 均参与 `content_hash`，并随任务持久化、在成功响应 `result.output` 回显；
   同一 `request_id` 不能在不同版本间复用。
 - gateway 在 `decision-v2` 任务的 system 指令中追加 Markdown 排版要求；`decision-v1`
-  行为保持不变。版本切换由 advisor `--decision-output` 显式控制，迁移期两版并存。
+  行为保持不变。advisor 默认请求 `decision-v2`，可用 `--decision-output decision-v1`
+  回滚；gateway 两版并存。
 
 ## 任务身份
 

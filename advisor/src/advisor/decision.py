@@ -90,7 +90,7 @@ class DecisionApplier:
             if reply_valid and not (control_valid and decision.control == 'cancel'):
                 basis = {key: valid_reply[key] for key in decision.reply_sentence_keys}
                 marker = reply_identity_marker(
-                    getattr(settings, 'decision_output', 'decision-v1'))
+                    getattr(settings, 'decision_output', 'decision-v2'))
                 message_uuid = str(uuid5(NAMESPACE_URL, digest([
                     marker, job['session_id'], job['role_version'], basis,
                     decision.reply])))

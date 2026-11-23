@@ -49,8 +49,9 @@ def main() -> None:
     serve.add_argument('--remote-backend', choices=['fake', 'opencode'], default='opencode',
                        help='gateway backend tag sent with inference jobs')
     serve.add_argument('--decision-output', choices=['decision-v1', 'decision-v2'],
-                       default='decision-v1',
-                       help='inference output contract; v2 asks for reply-md-v1 Markdown')
+                       default='decision-v2',
+                       help='inference output contract (default: decision-v2, '
+                            'reply-md-v1 Markdown; v1 is the rollback)')
     serve.add_argument('--calendar', choices=['stub', 'feishu'], default='feishu',
                        help='calendar validation mode (default: real Feishu reads)')
     serve.add_argument('--calendar-stub', action='store_true',

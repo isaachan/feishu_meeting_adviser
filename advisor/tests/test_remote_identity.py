@@ -16,10 +16,13 @@ class RemoteIdentityTests(unittest.TestCase):
         self.assertNotEqual(meeting_a, meeting_b)
 
     def test_decision_output_version_changes_identity(self):
-        v1 = remote_identity('role', {'generation': 1}, AdviserSettings(), 'ou_A')
+        v1 = remote_identity('role', {'generation': 1},
+                             AdviserSettings(decision_output='decision-v1'), 'ou_A')
         v2 = remote_identity('role', {'generation': 1},
                              AdviserSettings(decision_output='decision-v2'), 'ou_A')
         self.assertNotEqual(v1, v2)
+        self.assertEqual(remote_identity('role', {'generation': 1},
+                                         AdviserSettings(), 'ou_A'), v2)
 
     def test_owner_is_mandatory(self):
         settings = AdviserSettings()
