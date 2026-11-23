@@ -11,7 +11,7 @@ from .service import BotService
 LOG = logging.getLogger(__name__)
 
 
-def _env_flag(name, default=False):
+def _env_flag(name, default=True):
     value = os.environ.get(name)
     if value is None:
         return default
@@ -31,7 +31,7 @@ def main() -> None:
     serve.add_argument('--rich-text', action=argparse.BooleanOptionalAction,
                        default=_env_flag('BOT_RICH_TEXT'),
                        help='render Markdown replies as Feishu rich text '
-                            '(default: BOT_RICH_TEXT, off)')
+                            '(default: BOT_RICH_TEXT, on)')
 
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')

@@ -177,7 +177,8 @@ def render(message: OutboundMessage) -> tuple[str, dict]:
 
 ## 9. 灰度与回滚
 
-- bot 环境变量开关（如 `BOT_RICH_TEXT=1`），关闭时所有消息按纯文本发送。
+- bot 环境变量开关 `BOT_RICH_TEXT`（默认开启；`BOT_RICH_TEXT=0` 或 `--no-rich-text` 关闭），
+  关闭时所有消息按纯文本发送。
 - 上线顺序：gateway 支持 v2 → advisor 输出 `format` → bot 渲染开关打开 → advisor 请求 v2。
 - 回滚：关 bot 开关即可回到纯文本；advisor 可回退请求 `decision-v1`，gateway 继续兼容。
 

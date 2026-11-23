@@ -56,14 +56,14 @@ bot ：正在排空收尾（draining），在途回答发完即结束。
 pip install -e '.[dev]'
 BOT_APP_ID=cli_xxx BOT_APP_SECRET=xxx bot serve --advisor-url http://127.0.0.1:8380
 # 富文本回答（受限 Markdown → 飞书 interactive 卡片；失败自动回退纯文本）
-BOT_RICH_TEXT=1 bot serve --advisor-url http://127.0.0.1:8380
+BOT_RICH_TEXT=1 bot serve --advisor-url http://127.0.0.1:8380  # 默认已开启
 # 本地全栈一键起停见 ../scripts/local-up.sh（docs/LOCAL_TESTING.md）
 
 ruff check src tests && pyright
 python -m unittest discover -s tests -v   # 51 项
 ```
 
-富文本开关：`--rich-text/--no-rich-text`，默认读 `BOT_RICH_TEXT`（关闭）。关闭时所有
+富文本开关：`--rich-text/--no-rich-text`，默认读 `BOT_RICH_TEXT`（开启）。关闭时所有
 消息按纯文本发送；开启后仅 `format=markdown` 的 outbox 行走卡片渲染，审批/状态等
 bot 本地文案仍为纯文本。方言与回退规则见
 [docs/FEISHU_RICH_TEXT_REPLY.md](../docs/FEISHU_RICH_TEXT_REPLY.md)。
