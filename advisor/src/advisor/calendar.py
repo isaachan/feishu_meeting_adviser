@@ -15,7 +15,7 @@ those with past occurrences"). Masters must therefore be expanded locally and
 same-series entries merged, or daily meetings vanish from 会议列表 (master's
 first-occurrence timestamps look long past) and collide on one meeting_no
 (meeting_ambiguous). Instance binding follows the legacy 方案 B rule
-(legacy/advisor/src/feishu_meeting_adviser/materials.py): recurring series
+(removed with `legacy/` on 2026-11-23; see git history): recurring series
 bind to ``<uid>_<occurrence_start>``, never to the ``_0`` master.
 """
 import json

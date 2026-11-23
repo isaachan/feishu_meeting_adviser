@@ -2,7 +2,7 @@
 
 状态：v0.2，2026-11-10 立项并完成首轮评审修订（2026-11-13 由 `new/` 上提至仓库根目录）。本文是方案 C 的唯一工作依据：任务拆解、依赖、验收口径与里程碑。
 上游文档：[REQUIREMENTS](docs/REQUIREMENTS.md)（场景）、[ARCHITECTURE](docs/ARCHITECTURE.md)（v0.4 架构与决策）、[DEPLOYMENT](docs/DEPLOYMENT.md)（v0.4 部署基线）。
-旧实现（方案 B，停止维护）已整体迁入 `legacy/`，仅作平移素材，**不在 legacy/ 里改代码**。
+旧实现（方案 B，停止维护）原迁入 `legacy/` 作平移素材，**已于 2026-11-23 删除**；下文旧资产路径仅存 git 历史，仍被引用的三份契约（CONTRACT_REMOTE_INFERENCE / CONTRACT_STT_STREAM / CONTRACT_RECORDER_INPUT）已迁至根 `docs/`。
 
 ## 0. 工作约定（全体任务默认遵守）
 
@@ -14,7 +14,7 @@
 
 ## 1. 资产平移对照（从旧仓库复制，不导入）
 
-| 新模块 | 旧资产（在 `legacy/` 内） | 处置 |
+| 新模块 | 旧资产（原 `legacy/` 内，已删除） | 处置 |
 |---|---|---|
 | `recorder/` | `legacy/local-meeting-recorder/src/local_meeting_recorder/audio/`（双路采集、CaptureSession、MuteGate 语义）、`real.py` 的采集编排 | 保留采集/留存；去 spool、去本地 OAuth、去 STT 客户端 |
 | `auth/` | `legacy/local-meeting-recorder/src/local_meeting_recorder/oauth.py`（授权/换取/一次性 refresh 轮转/存储加固） | redirect URI 云端化；存储按 open_id 多用户化；去掉本地浏览器回调流程 |
@@ -23,7 +23,7 @@
 | `bot/` | `legacy/chatbot/chatbot/bot.py`（lark 长连接、事件去重、顺序 worker） | 接线模式复制；后端换 advisor API 客户端 |
 | `stt-server/` | `legacy/stt-server/`（sherpa 流式 WS 服务） | 整体平移；`auth` 配置固定 `none`，删除飞书鉴权分支或保留不启用 |
 | `llm-gateway/` | `legacy/llm-gateway/`（任务/幂等/OpenCode 沙箱） | 原样平移，不动契约 |
-| 契约语义 | `legacy/docs/CONTRACT_RECORDER_INPUT.md`、`CONTRACT_STT_STREAM.md`、`CONTRACT_REMOTE_INFERENCE.md`、`APP_PERMISSIONS_EVENTS.md` | 语义提炼进新契约，文件留在旧处引用 |
+| 契约语义 | `CONTRACT_RECORDER_INPUT.md`、`CONTRACT_STT_STREAM.md`、`CONTRACT_REMOTE_INFERENCE.md`（2026-11-23 迁入根 `docs/`）；`APP_PERMISSIONS_EVENTS.md`（随 legacy/ 删除，存 git 历史） | 语义提炼进新契约 |
 
 ## 2. 里程碑与依赖
 
@@ -89,7 +89,7 @@
 
 - [ ] **5.1 真实 OAuth + 日历校验。** 飞书应用后台注册回调（指向 auth）；真实账号授权（电脑+手机）；真实日历组织者/时间窗校验。**验收：**`data/acceptance-auth/` 同款取证（脱敏）。**进展（2026-11-10）：**代码侧就绪——真实 `FeishuCalendarValidator` 落地（旧 feishu_calendar.py 语义平移：vchat.meeting_url 提取 9 位会议号做事件映射、组织者= event_organizer.user_id ∈ 用户身份集合、时间窗 [start−30min, end+30min]、description 即材料、token 失效一次静默刷新；9 项注入式单测覆盖四拒绝路径/窗口松弛/取消与全天事件过滤/刷新/凭据中途丢失）；`advisor serve --calendar feishu|stub`（默认 feishu，--calendar-stub 兼容保留）。本地全栈脚本 `scripts/local-up.sh|local-down.sh` + `local.env.example` + `docs/LOCAL_TESTING.md`。待用户提供飞书应用凭据与真实会议进行实测取证。
 - [ ] **5.2 真实飞书 IM。** bot 上真应用（IM 三权限+长连接事件，沿用旧权限清单）；小A/小B 真账号跑 S1–S3。**验收：**真机全场景走查记录。
-- [ ] **5.3 真实 GLM。** gateway 切 OpenCode 后端，复用旧 M2 部署经验（`legacy/docs/REMOTE_SERVER_DEVELOPMENT.md`）。**验收：**真实会议片段端到端，记录执行耗时。
+- [ ] **5.3 真实 GLM。** gateway 切 OpenCode 后端，复用旧 M2 部署经验（`REMOTE_SERVER_DEVELOPMENT.md` 已随 legacy/ 删除，见 git 历史）。**验收：**真实会议片段端到端，记录执行耗时。
 - [ ] **5.4 真实会议预验收。** 一场真实飞书会议全链路（双路采集、延迟、字幕质量、回答质量）。**验收：**证据存档；问题清单回填任务。
 
 ## 9. 阶段 6：M4 —— 多租户、部署与收尾

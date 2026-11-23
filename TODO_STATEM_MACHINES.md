@@ -7,7 +7,7 @@
 - [飞书会议状态调研](studies/meeting-events/README.md) **已完成**：普通会议不产生所需推送事件。调研验证两条轮询链路——应用身份（`poll.py`：`vc:meeting.meetingid:read` 9 位号→会议 ID + `vc:meeting.meetingevent:read` 详情/参会人）与用户身份（`poll_user.py`：仅用户版 `vc:meeting.meetingevent:read`，`list_by_no` 被拒时回退 `user_active_meeting` 解析会议 ID，要求授权用户本人正在会中）。**SM-08 采用 `poll_user.py` 的用户身份链路**：owner 用户 token 走 auth 既有用户 OAuth 托管（PKCE client 凭据即现有 app 配置），advisor 无需新增应用 tenant 凭据；用户版 scope 须加入授权 scope 集（SM-01 核对 CONTRACT_AUTH）。已知限制：轮询漏掉间隔内快速进出；VC 会议 ID 会前未必存在；owner 离会后用户身份详情查询是否仍可用未在调研中明确，列为 SM-08 首个验证项。此调研是 SM-08 的输入，**不再重复调研任务**。根 [TODO.md](TODO.md) 的 T12 是此前的验证项；实施时结合调研结论核对/更新，不要并列重复实现。
 - 真实会议验收口径：即时会议（无日历事件）在 [REQUIREMENTS v0.4](docs/REQUIREMENTS.md) 属非目标；SM-08/SM-13 的「真实普通会议」一律指**带日历日程的普通会议**（meetingInstanceKey 与 C 准入都依赖权威日历 occurrence，即时会议两者皆无来源）。
 - [STT 停机握手](docs/STT_SHUTDOWN_HANDSHAKE.md) 已有独立方案，对应根 TODO.md T11；本文件 SM-07 只负责状态机集成验收及依赖跟踪，不复制那项修复。
-- 以下涉及 `advisor` / `bot` / `auth` / `recorder` / `macos-gui` / `stt-server` / `llm-gateway` / `admin-site` 的任务，**跨模块仅通过版本化契约交互**；`legacy/` 不修改。未定参数除了已确认的无音频 900 秒外不得擅自宣称业务定值。
+- 以下涉及 `advisor` / `bot` / `auth` / `recorder` / `macos-gui` / `stt-server` / `llm-gateway` / `admin-site` 的任务，**跨模块仅通过版本化契约交互**。未定参数除了已确认的无音频 900 秒外不得擅自宣称业务定值。
 
 ## 阶段 A · 收口规则与接口（先于实现）
 
