@@ -110,7 +110,7 @@
 | 观测快照时效 | `max_observation_age_s` | 60 | 视为 unknown |
 | 观测轮询间隔 | `observe_poll_s` | 15 | —（退避上限 `observe_backoff_max_s` 默认 120） |
 | 观测单次调用超时 | `observe_timeout_s` | 10 | 记 unknown |
-| 单次模型调用 | `model_timeout_seconds` | 90（现有） | 失败/重试受总预算约束 |
+| 单次模型调用 | `model_timeout_seconds` | 220（现有） | 失败/重试受总预算约束 |
 | 单次 IM 发送回写 | bot 侧现有 | — | `uncertain` 语义沿用 |
 
 与 SERVICE_STATE_MACHINES_V2 §5.2 逐条对应；具体秒数除 900 外均未业务定值。
