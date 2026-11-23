@@ -345,57 +345,22 @@ class AdvisorApi:
         except StorageError:
             raise ApiError(404, 'not_found', 'unknown session') from None
 
-    # -- end permission (CONTRACT_ADVISOR_API v2.10 §3.3/§3.4) ----------------
-
-    def _end_role(self, session, caller):
-        """Caller's end permission for a session: owner > organizer >
-        enabled supervisor, else None. Persisted data only — ending is a
-        stop-the-bleed operation and must not depend on calendar/auth."""
-        if not isinstance(caller, str) or not caller:
-            return None
-        if caller == session['owner_open_id']:
-            return 'owner'
-        if session.get('organizer_open_id') and caller == session['organizer_open_id']:
-            return 'organizer'
-        if caller in self.store.enabled_supervisor_open_ids():
-            return 'supervisor'
-        return None
-
-    def list_endable_sessions(self, caller):
-        if not isinstance(caller, str) or not caller:
-            raise ApiError(400, 'bad_message', 'caller_open_id required')
-        self._gate_nsdp(caller)
-        rows = []
-        for session in self.store.list_sessions(None):
-            role = self._end_role(session, caller)
-            if role is None:
-                continue
-            rows.append({'session_id': session['session_id'],
-                         'meeting_no': session['meeting_no'],
-                         'title': session['title'], 'phase': session['phase'],
-                         'started_at': session['started_at'], 'end_role': role})
-        return {'sessions': rows}
-
     def end_session(self, session_id, body):
-        caller = body.get('owner_open_id')
-        if isinstance(caller, str) and caller:
-            self._gate_nsdp(caller)
+        owner = body.get('owner_open_id')
+        if isinstance(owner, str) and owner:
+            self._gate_nsdp(owner)
         try:
             session = self.store.require_session(session_id)
         except StorageError:
             raise ApiError(404, 'not_found', 'unknown session') from None
-        role = self._end_role(session, caller)
-        if role is None:
-            raise ApiError(409, 'not_owner',
-                           'only the owner, organizer or an enabled supervisor '
-                           'may end this session')
+        if owner != session['owner_open_id']:
+            raise ApiError(409, 'not_owner', 'only the organizer may end this session')
         if session['phase'] in ('ended', 'draining'):
             return {'session_id': session_id, 'phase': session['phase']}
         updated = self.store.set_phase(session_id, 'draining', now=self.clock(),
                                        drain_deadline_at=self.clock() + self.drain_deadline_s)
         assert updated is not None
-        LOG.info('session ending: session=%s -> draining (caller=%s role=%s)',
-                 session_id, caller, role)
+        LOG.info('session ending: session=%s -> draining (owner=%s)', session_id, owner)
         return {'session_id': session_id, 'phase': updated['phase']}
 
     # -- supervisor grants (CONTRACT_ADVISOR_API §9.3/§9.4) --------------------
@@ -915,9 +880,6 @@ def build_api_server(api: AdvisorApi, host='127.0.0.1', port=8380):
                 self._run(lambda: (api.list_meetings(owner), False))
             elif parsed.path == '/sessions':
                 self._run(lambda: (api.list_sessions(query.get('owner_open_id', [None])[0]), False))
-            elif parsed.path == '/sessions/endable':
-                caller = query.get('caller_open_id', [None])[0]
-                self._run(lambda: (api.list_endable_sessions(caller), False))
             elif parsed.path == '/admin/sessions':
                 self._run(lambda: (api.admin_sessions(), False))
             elif parsed.path == '/admin/supervisors':
