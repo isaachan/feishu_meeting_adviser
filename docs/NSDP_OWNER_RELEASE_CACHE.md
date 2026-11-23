@@ -1,6 +1,6 @@
 # NSDP release 查询按组织者共享：方案
 
-状态：2026-11-23 方案已对齐，待实现。本文件只定义 `meeting_nsdp_lookup_release` 的结果复用；不改变现有推理接口、OpenCode 会话生命周期或 `noam nsdp info` 目录语义。
+状态：2026-11-23 已实现，待生产 timings 验收。本文件定义 `meeting_nsdp_lookup_release` 的结果复用；不改变现有推理接口、OpenCode 会话生命周期或 `noam nsdp info` 目录语义。
 
 ## 1. 目标与现状
 
@@ -33,13 +33,15 @@ OpenCode → meeting_nsdp_lookup_release(release)
 
 ## 4. 观测与故障边界
 
-为区分“noam 慢”和“OpenCode/MCP 链路未完成”，工具调用至少记录：`cache_hit`、缓存年龄、auth 取凭据耗时、同键等待耗时、noam 子进程开始/结束及耗时、退出状态/超时、MCP 响应完成；按现有 `request_id` 关联 gateway 任务。日志不含 token、命令结果、字幕或查询正文；工具结果仍按当前规则返回模型。记录在 noam 启动**之前**写出，避免超时或进程中断时只有完成态耗时。
+为区分“noam 慢”和“OpenCode/MCP 链路未完成”，工具调用至少记录：`cache_hit`、缓存年龄、auth 取凭据耗时、同键等待耗时、noam 子进程开始/结束及耗时、退出状态/超时、MCP 响应就绪；按现有 `request_id` 关联 gateway 任务。日志不含 token、命令结果、字幕或查询正文；工具结果仍按当前规则返回模型。记录在 noam 启动**之前**写出，避免超时或进程中断时只有完成态耗时。
 
 现有 noam 子进程最长 60 秒，而 OpenCode 曾在约 220 秒时仍报告工具 `running`。缓存只能缩短重复且成功的查询，不能解释或解决首次 miss、MCP 通信停滞及 OpenCode 状态未更新；必须结合 `diagnostics.opencode_trace` 和上述工具内探针判断瓶颈。历史 timings 无法回填。
 
-## 5. 实施与验收
+## 5. 实现与验收
 
-1. 在 gateway 的 NSDP 工具层加入 owner 桶、release 索引、60 分钟固定 TTL、持久化、过期清理及同键串行；保留现有 noam 每次执行的临时 HOME/XDG 隔离。不得更改 advisor 对回复证据、授权通知或 outbox 的判定。
-2. 加入凭据复核与失效处理，并扩充工具分段耗时与缓存命中观测；确认新字段能经 gateway timings 进入 advisor 的会话 timings 导出。
-3. 用 fake noam/auth 验证：同 owner 同词跨 session 一次 noam、不同词和不同 owner 隔离、大小写等价、60 分钟前后、凭据删除/更换、401、失败不缓存、并发同键、重启恢复及超时清锁。再以 prod 新任务的 timings 验证命中率和端到端耗时，不用缓存命中替代对首次 220 秒卡顿的排查。
+gateway 的 `nsdp_cache.py` 在会议目录数据库中建立独立的 owner 凭据指纹和 release 结果表；固定 TTL 为 3600 秒，每个 owner 最多保留 64 条、2 MiB 结果。缓存锁是按 owner 和 release 分开的进程间文件锁，运行 noam 时不持有 SQLite 写事务。gateway 定期清理过期结果，重启后仍可读取未过期结果。HMAC 密钥保存在同目录的私有文件中，密钥丢失会清空旧结果。`nsdp_tool_server.py` 每次先向 auth 取该 owner 当前凭据；命中或 miss 都会核对凭据，变更、删除及实时查询的 401 会使旧结果失效。noam 仍使用每次调用独立、结束即删除的 HOME/XDG 目录。
+
+`timings.tool_calls[]` 对 NSDP 工具补充 `cache_hit`、`cache_age_ms`、`cache_wait_ms`、`auth_ms`、`noam_ms`；`timings.diagnostics.nsdp_stages[]` 记录 `mcp_received`、`auth_start`/`auth_done`、缓存命中或未命中、`noam_start`/`noam_done`、`mcp_response_ready` 等无正文事件及时间戳。子进程在 noam 启动前写出阶段事件；若调用超时，可以用最后一个事件判断卡在哪一段。`mcp_response_ready` 表示工具已准备好响应，并不等于 OpenCode 已收到或处理完响应。
+
+本地 gateway 全套单测运行 83 项，其中 5 项需要真实 OpenCode 模型的用例按默认配置跳过，其余通过。测试覆盖跨实例复用、owner/查询词隔离、TTL、凭据变更与删除、401、失败不缓存、同键成功查询并发去重、重启恢复、等待超时、清理与首查并发、HMAC 密钥丢失，以及工具阶段数据进入 timings。生产环境尚未部署或取新 timings 验证；上线后应分别比较首次 miss 和重复 hit 的端到端时长，并用 `diagnostics.opencode_trace` 与 `diagnostics.nsdp_stages` 追查此前约 220 秒的首次工具卡顿。
 

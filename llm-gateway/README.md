@@ -19,7 +19,7 @@ python3 -m venv .venv
   [--noam-bin /path/to/noam]
 ```
 
-默认内置 `nsdp-version` skill，用于查询版本和核对 Gate 日期；用 `--skills-dir` 可指定其他 skill 根目录（每个 skill 为 `<name>/SKILL.md`，将替代默认目录）。各 OpenCode 任务启动时读取配置，替换 skill 后新任务生效。gateway 所在主机需要安装 noam；查询时受控工具按任务组织者向 auth 按需读取 NSDP token，token 仅注入 noam 子进程。advisor 与 gateway 应同步部署，内部 API 仅在可信网络开放。
+默认内置 `nsdp-version` skill，用于查询版本和核对 Gate 日期；用 `--skills-dir` 可指定其他 skill 根目录（每个 skill 为 `<name>/SKILL.md`，将替代默认目录）。各 OpenCode 任务启动时读取配置，替换 skill 后新任务生效。gateway 所在主机需要安装 noam；查询时受控工具按任务组织者向 auth 按需读取 NSDP token，token 仅注入 noam 子进程。成功的 release 查询按组织者和规范化查询词跨会议缓存 60 分钟，每次命中前仍检查当前凭据；细节见 [NSDP 查询缓存](../docs/NSDP_OWNER_RELEASE_CACHE.md)。advisor 与 gateway 应同步部署，内部 API 仅在可信网络开放。
 
 内置 `jira-query` skill 提供 issue、JQL 搜索、字段和项目查询。配置 `--jira-url https://<Jira地址>` 或环境变量 `JIRA_URL`；未配置时 Jira 工具不可用。组织者按通知链接提交个人 PAT，gateway 按组织者从 auth 获取，仅注入隔离的 noam 子进程，并强制 `JIRA_READ_ONLY=true`。缺失或 401 时通知组织者，403 表示无权访问；不阻塞其他会议判断。
 
@@ -36,7 +36,7 @@ POST /v1/inference-jobs/{request_id}/cancel
 GET  /healthz
 ```
 
-任务响应与结果中的 `timings` 携带阶段耗时观测(定义见 [性能观测方案](../docs/LLM_GATEWAY_PERFORMANCE_MEASUREMENT.md)):`execution_ms`、`process_start_ms`、`verify_{config,agent,mcp,provider,tool}_ms`、`session_prepare_ms`、`prompt_submit_ms`、`prompt_visible_ms`、`decision_wait_ms`、`reply_validate_ms`、`tool_calls[]`(名称/状态/耗时/来源)、资源采样(`peak_rss_kb` 等)与 `failed_stage`/`attempts`;`diagnostics.opencode_trace` 记录 OpenCode 消息和工具状态的无正文轮询时间线。终态响应另有 `finished_at`(ISO 时间)。gateway 日志按 `timing_event: {json}` 行输出阶段与任务汇总事件(带 `request_id`,可关联 `session_id`)。
+任务响应与结果中的 `timings` 携带阶段耗时观测(定义见 [性能观测方案](../docs/LLM_GATEWAY_PERFORMANCE_MEASUREMENT.md)):`execution_ms`、`process_start_ms`、`verify_{config,agent,mcp,provider,tool}_ms`、`session_prepare_ms`、`prompt_submit_ms`、`prompt_visible_ms`、`decision_wait_ms`、`reply_validate_ms`、`tool_calls[]`(名称/状态/耗时/来源)、资源采样(`peak_rss_kb` 等)与 `failed_stage`/`attempts`;`diagnostics.opencode_trace` 记录 OpenCode 消息和工具状态的无正文轮询时间线。NSDP 工具调用另有 `tool_calls[]` 中的 `cache_hit`、`cache_age_ms`、`cache_wait_ms`、`auth_ms`、`noam_ms`，以及 `diagnostics.nsdp_stages[]` 中的 MCP/auth/cache/noam 分段事件。终态响应另有 `finished_at`(ISO 时间)。gateway 日志按 `timing_event: {json}` 行输出阶段与任务汇总事件(带 `request_id`,可关联 `session_id`)。
 
 默认限额：全局并发 4、队列 64、期限上限 120s、载荷 2 MiB、保留 24h；均可由启动参数覆盖。
 
