@@ -6,7 +6,7 @@
 
 - **会议实例（meeting instance）**：一场具体会议 = 会议号 + 权威日历 occurrence。`meeting_instance_key = "{meeting_no}|{event_calendar_id}|{event_id}|{occurrence_start_unix}"`，四段全部取自**同一权威 occurrence**（经 owner 用户 OAuth 读到的日历事件实例）；`occurrence_start_unix` 为该场次固定排期开始时刻。同号跨天、同日两场、跨时区均产生不同 key。
 - **每实例至多 1 个 session（含 ended）**；draining/ended 实例不可复建（含 900 秒无音频报废，业务已接受）。
-- **session owner**：合资格小A（该 occurrence 的日历组织者）或合资格小C（admin 名单 enabled + 该场日历邀请名单命中——直接受邀或为受邀群组成员（CONTRACT_ADVISOR_API v2.6）——或本人组织者），先到先得、创建后固定不变。日历组织者不是 owner 时，对该 session 无任何权限（不能接管、不能订阅、其离会不影响 phase）。
+- **session owner**：合资格小A（该 occurrence 的日历组织者）或合资格小C（admin 名单 enabled + 该场日历邀请名单命中——直接受邀或为受邀群组成员（CONTRACT_ADVISOR_API v2.6）——或本人组织者），先到先得、创建后固定不变。日历组织者不是 owner 时，不能接管、不能订阅、其离会不影响 phase；**唯一例外（2026-11-23，CONTRACT_ADVISOR_API v2.10）：组织者与 enabled 小C 名单成员可结束该 session（S4 止血面，仅持久化数据判定）**。
 - **单人单占位（SessionClaim）**：任一用户在**非 ended** 会话上至多 1 条 active claim（kind=controller 或 subscriber）；订阅 `requested` 即占位。denied / subscriber_cancelled / expired / owner_revoked / ended 释放；paused / draining 不释放。
 - **所有时限为配置项**（§5），除无音频 **900 秒**为业务定值外，其余默认值为工程初始值，不构成业务定值。
 - `uncertain` 不伪装已送达；`sent` 不可撤回；迟到结果不复活任何终态。
@@ -20,7 +20,7 @@
 | S1 | — | → `running` | `POST /sessions` 成功 | 准入链（CONTRACT_ADVISOR_API §2）；写 controller claim；铸流令牌；监督器启动 |
 | S2 | `running` | → `paused` | 确认 owner **在会→离会**（§4 观测输入） | 仅 session owner；创建时未入会/在会未知/查询失败/音频中断/GUI 停录均不算离会。副作用见 §1.2 |
 | S3 | `paused` | → `running` | 确认**同一** owner 回会 | 沿用同一 session、订阅与上下文；不自动重开采集（已定：手动）；恢复后新字幕正常驱动新决策 |
-| S4 | `running`/`paused` | → `draining` | owner `end` / admin end / 确认会议结束 / 900 秒无真实音频 | 写绝对 `drain_deadline_at`；拒新源、新订阅、新模型任务；900 秒在 paused 下**连续计时不冻结**；误结束不可逆 |
+| S4 | `running`/`paused` | → `draining` | owner `end`（v2.10 起含该场组织者/小C 名单成员经 §3.3/§3.4 结束）/ admin end / 确认会议结束 / 900 秒无真实音频 | 写绝对 `drain_deadline_at`；拒新源、新订阅、新模型任务；900 秒在 paused 下**连续计时不冻结**；误结束不可逆 |
 | S5 | `draining` | → `ended` | 排空条件全部满足（§2） | 监督器自动；释放全部 claim；吊销流令牌 |
 | S6 | `draining` | → `ended` | `drain_deadline_at` 到达仍有未完成项 | 强制收尾（§1.3）；写诊断记录；释放全部 claim |
 | S7 | `draining`/`ended` | （不变） | 迟到音频/字幕/模型结果/观测快照 | 快照时效校验；不复活、不应用 |
