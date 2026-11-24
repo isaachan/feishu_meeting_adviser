@@ -29,7 +29,7 @@ GUI 客户端 = recorder 的图形分发形态：**同样的采集与上行能�
 | D6 | 单会话 | 主界面不提供选择；意外返回多个会话时拒绝任意连接并显示错误 |
 | D7 | 关窗语义 | 采集中关窗 = 隐藏窗口继续采集（Dock 图标恢复）；无采集关窗 = 退出；Cmd-Q 采集中 = 确认「停止采集并退出？」→ 干净收尾后退出 |
 | D8 | 托盘 | v1 不做 |
-| D9 | 命名 | 目录与 Python 包名于 2026-11-23 由 `macos-gui`/`macos_gui` 统一更名为 `gui`/`gui`（跨平台形态；windows-gui 共用主体） |
+| D9 | 命名 | 目录与 Python 包名于 2026-11-23 由 `macos-gui`/`macos_gui` 统一更名为 `gui`/`gui`（跨平台形态）。2026-11-24 将 `windows-gui/` 合并进 `gui/`：平台构建脚本在 `gui/macos/`、`gui/windows/`，平台差异集中在 `src/gui/platforms/`；共用 `gui/launcher.py` |
 
 ## 3. 架构
 
@@ -121,6 +121,9 @@ GUI                    advisor /gui                auth                     飞�
 ```
 gui/
   pyproject.toml          # 依赖: pyside6, keyring, recorder(本地 whl 路径依赖)
+  launcher.py             # 共用 PyInstaller 入口（mac helper 仅在 darwin 生效）
+  macos/build.sh          # macOS .app 构建脚本
+  windows/build.ps1       # Windows 单文件 exe 构建脚本
   src/gui/
     __main__.py           # python -m gui 入口
     config.py             # server_url/device_token 读写（keyring + QSettings 兜底）
@@ -128,6 +131,7 @@ gui/
     login.py              # device-flow 控制器（QR pixmap、poll 循环、token 落库）
     sessions.py           # 会话轮询器（QTimer，空闲 10s / 采集中 5s）
     capture.py            # 组装 recorder 采集栈（QThread 内跑，Qt 信号上报 stats）
+    platforms/            # macos/windows/generic：采集源、留存目录、关窗策略
     app.py  ui/           # QApplication 与窗口（单会话主页/设置/登录）
   tests/  README.md
 ```
@@ -164,9 +168,10 @@ boot → 无 device_token：扫码登录 → 单会话主页
 ## 7. 运行与分发形态
 
 - **命令行形态（开发/验收先行）**：venv 安装 gui（含 recorder 路径依赖）→ `python -m gui` 或 console 入口 `gui` 直接运行。SCK helper 首次使用 swiftc 现场编译（recorder 既有行为）。功能验收先在此形态完成。
-- PyInstaller onedir `.app`（PySide6 + gui + recorder 包 + 预编译 SCK helper；打包时 swiftc 编译 helper 放入 bundle，经 `LOCAL_MEETING_RECORDER_SCK_BIN` 指向——recorder 已支持该覆盖）。
+- **macOS 打包**：`gui/macos/build.sh` → PyInstaller onedir `.app`（PySide6 + gui + recorder 包 + 预编译 SCK/mute helper；打包时 swiftc 编译 helper 放入 bundle，经 `LOCAL_MEETING_RECORDER_SCK_BIN`/`LOCAL_MEETING_RECORDER_MUTE_BIN` 指向——recorder 已支持该覆盖）。产物在 `gui/dist/macos/`（`.app` + `MeetingAdvisor-macos-<arch>.zip`）。
 - 不签名/不公证：README 引导右键打开绕 Gatekeeper；TCC 弹窗（屏幕录制=SCK、麦克风=开 mic 时）一次授权长期有效（TCC 记 .app）。
-- Windows：同代码 `pyinstaller onedir .exe`；loopback 源缺失时启动采集显式报「该平台暂不支持内录」（mic 可用）——WASAPI loopback 属 recorder 后续任务（G7）。
+- **Windows 打包**：`gui/windows/build.ps1` → PyInstaller onefile `MeetingAdvisor-<timestamp>.exe`（`recorder[windows]`：process_audio_capture 进程环回 + soundcard/uiautomation mic 门控），产物在 `gui/dist/windows/`。两端共用 `gui/launcher.py`。
+- **平台策略**：`src/gui/platforms/` 按 `sys.platform` 选择采集源、本地留存目录与关窗语义。macOS 采集中关窗=隐藏继续；Windows 拒绝关闭并提示先断开；其他平台按隐藏处理（CI 用 generic 源）。
 
 ## 8. 任务拆分
 
