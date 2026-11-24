@@ -169,14 +169,14 @@ class CaptureJobTests(unittest.TestCase):
 
     def test_windows_selects_platform_sources(self):
         from gui.capture import default_source_factory
-        with patch('gui.capture.sys.platform', 'win32'):
+        with patch('gui.platforms.sys.platform', 'win32'):
             sources = default_source_factory(True)
         self.assertEqual([type(source).__name__ for source in sources],
                          ['WindowsLoopbackSource', 'WindowsMicSource'])
 
     def test_mac_selects_mute_gated_microphone(self):
         from gui.capture import default_source_factory
-        with patch('gui.capture.sys.platform', 'darwin'):
+        with patch('gui.platforms.sys.platform', 'darwin'):
             sources = default_source_factory(True)
         self.assertEqual([type(source).__name__ for source in sources],
                          ['SwiftLoopbackSource', 'MacFeishuMicSource'])

@@ -7,12 +7,12 @@ make the UI responsive. HTTP calls block only inside the worker thread.
 import logging
 import threading
 import sys
-from pathlib import Path
 
 from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtWidgets import QMainWindow, QStackedWidget
 
 from . import config as config_mod
+from . import platforms
 from .api import ApiError, GuiApiClient, NetworkError
 from .login import LoginFlow
 from .sessions import normalize_sessions
@@ -220,7 +220,7 @@ class Controller(QObject):
         args = dict(args)
         args['mic'] = True  # fixed client behavior; no user-facing switch
         factory = self.job_factory or self._default_job
-        out_root = self.capture_out_root or _default_capture_root()
+        out_root = self.capture_out_root or platforms.capture_root()
         job = factory(args, out_root)
         self.job = job
         try:
@@ -279,18 +279,6 @@ class Controller(QObject):
         threading.Thread(target=guarded, daemon=True).start()
 
 
-def _default_capture_root():
-    """Whole-session audio retention root (same layout as the recorder CLI)."""
-    import sys
-    if sys.platform == 'darwin':
-        base = Path.home() / 'Library' / 'Application Support' / 'gui'
-    elif sys.platform == 'win32':
-        base = Path.home() / 'AppData' / 'Local' / 'gui'
-    else:
-        base = Path.home() / '.local' / 'state' / 'gui'
-    return base / 'recorder' / 'audio'
-
-
 class MainWindow(QMainWindow):
     def __init__(self, controller: Controller, parent=None):
         super().__init__(parent)
@@ -343,7 +331,7 @@ class MainWindow(QMainWindow):
         """D7：采集中关窗 = 隐藏窗口继续采集；无采集 = 正常退出。"""
         if self.controller.capturing:
             event.ignore()
-            if sys.platform == 'win32':
+            if platforms.close_while_capturing() == 'block':
                 self.dashboard_page.set_error('请先断开连接，再关闭窗口')
             else:
                 self.hide()

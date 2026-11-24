@@ -7,13 +7,14 @@ stats() and notices completion via state -> 'stopped'.
 """
 import threading
 import time
-import sys
 from pathlib import Path
 
 from recorder.audio import CaptureSession
 from recorder.audio.frames import AudioFrame, SourceEvent
-from recorder.audio.sources import AudioSource, MicSource
+from recorder.audio.sources import AudioSource
 from recorder.uplink import SourceUplink
+
+from . import platforms
 
 EXIT_OK, EXIT_ARGS, EXIT_CONN, EXIT_INTERRUPT = 0, 2, 3, 130
 ARGS_KEYS = ('session', 'event', 'url', 'token')
@@ -21,22 +22,7 @@ ARGS_KEYS = ('session', 'event', 'url', 'token')
 
 def default_source_factory(mic_enabled: bool):
     """Select platform sources; all session and uplink logic remains shared."""
-    if sys.platform == 'win32':
-        from recorder.audio.windows_loopback import WindowsLoopbackSource
-        from recorder.audio.windows_mic import WindowsMicSource
-        sources: list[AudioSource] = [WindowsLoopbackSource()]
-        if mic_enabled:
-            sources.append(WindowsMicSource())
-        return sources
-    from recorder.audio.sck_capture import SwiftLoopbackSource
-    sources: list[AudioSource] = [SwiftLoopbackSource('loopback')]
-    if mic_enabled:
-        if sys.platform == 'darwin':
-            from recorder.audio.macos_mic import MacFeishuMicSource
-            sources.append(MacFeishuMicSource('mic'))
-        else:
-            sources.append(MicSource('mic'))
-    return sources
+    return platforms.create_sources(mic_enabled)
 
 
 class CaptureJob:
