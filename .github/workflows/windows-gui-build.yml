@@ -18,7 +18,7 @@ jobs:
         run: 'echo "stamp=$(Get-Date -Format ''yyyyMMdd-HHmmss'')" >> $env:GITHUB_OUTPUT'
       - name: Build Windows app
         shell: powershell
-        run: ./windows-gui/build.ps1
+        run: ./windows-gui/build.ps1 -Stamp "${{ steps.timestamp.outputs.stamp }}"
       - name: Upload Windows application
         uses: actions/upload-artifact@v4
         with:

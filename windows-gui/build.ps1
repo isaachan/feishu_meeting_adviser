@@ -1,5 +1,6 @@
-param([string]$Python = "py")
+param([string]$Python = "py", [string]$Stamp = "")
 $ErrorActionPreference = "Stop"
+if (-not $Stamp) { $Stamp = Get-Date -Format "yyyyMMdd-HHmmss" }
 $root = Split-Path -Parent $PSScriptRoot
 $venv = Join-Path $PSScriptRoot ".venv"
 $pythonExe = Join-Path $venv "Scripts\python.exe"
@@ -24,4 +25,7 @@ if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed" }
     --hidden-import recorder.audio.windows_mute `
     "$PSScriptRoot\launcher.py"
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
-Write-Host "Built: $PSScriptRoot\dist\MeetingAdvisor\MeetingAdvisor.exe"
+$builtExe = Join-Path $PSScriptRoot "dist\MeetingAdvisor\MeetingAdvisor.exe"
+$stampedExe = Join-Path $PSScriptRoot "dist\MeetingAdvisor\MeetingAdvisor-$Stamp.exe"
+Move-Item -Force $builtExe $stampedExe
+Write-Host "Built: $stampedExe"
