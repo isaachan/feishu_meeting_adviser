@@ -212,5 +212,53 @@ class ConcurrencyTests(SupervisorBase):
         self.supervisor.stop()
 
 
+class BadEvidenceBackend(FakeBackend):
+    """Model returns an evidence key that is not part of the snapshot."""
+
+    def decide(self, snapshot, role):
+        self.calls += 1
+        fresh = snapshot.get('fresh_input_keys') or []
+        if not fresh:
+            return Decision('none', (), None, ())
+        return Decision('none', (), '证据不合法', ('loopback:missing:1-2',))
+
+
+class ResilienceTests(SupervisorBase):
+    def test_invalid_evidence_rejects_job_without_killing_supervisor(self):
+        self.backend = BadEvidenceBackend()
+        session = self.create()
+        sid = session['session_id']
+        self.supervisor.start_session(sid)
+        self.say(sid, 'k1', '触发决策')
+        self.assertTrue(self.wait_until(
+            lambda: self.store.require_session(sid)['error'] == 'model_invalid_evidence'))
+        self.assertTrue(self.supervisor._threads[sid].is_alive())
+        job = self.store.db.execute(
+            'SELECT state FROM jobs WHERE session_id=?', (sid,)).fetchone()
+        self.assertEqual(job['state'], 'abandoned')
+        # the loop still advances: drain deadline machinery keeps working
+        self.store.set_phase(sid, 'draining')
+        self.assertTrue(self.wait_until(
+            lambda: self.store.require_session(sid)['phase'] == 'ended'))
+
+    def test_iteration_exception_keeps_loop_alive(self):
+        session = self.create()
+        sid = session['session_id']
+        original = self.store.expire_subscription_requests
+        calls = {'n': 0}
+
+        def flaky(session_id, *, now):
+            calls['n'] += 1
+            if calls['n'] == 1:
+                raise RuntimeError('boom')
+            return original(session_id, now=now)
+
+        self.store.expire_subscription_requests = flaky
+        self.supervisor.start_session(sid)
+        self.assertTrue(self.wait_until(lambda: calls['n'] >= 2))
+        self.assertTrue(self.supervisor._threads[sid].is_alive())
+        self.assertEqual(self.store.require_session(sid)['phase'], 'running')
+
+
 if __name__ == '__main__':
     unittest.main()

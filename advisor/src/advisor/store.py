@@ -1069,6 +1069,23 @@ class SessionStore:
             tx.jobs.retry(job['job_id'])
             tx.sessions.record_job_failure(job['session_id'], reason=reason, retry_at=retry_at)
 
+    def reject_job(self, job, reason, *, now=None):
+        """Terminal reject for a model result the adviser refuses to apply.
+
+        Unlike ``fail_job`` the job is not retried: the snapshot generation it
+        carried is consumed, so the same evidence is never re-judged forever.
+        Newer captions bump the generation and remain decidable.
+        """
+        moment = time.time() if now is None else now
+        with self.unit_of_work() as tx:
+            tx.connection.execute(
+                "UPDATE jobs SET state='abandoned' "
+                "WHERE job_id=? AND state IN ('pending','running')", (job['job_id'],))
+            tx.connection.execute(
+                'UPDATE sessions SET error=?,retry_at=?,'
+                'decided_generation=MAX(decided_generation,?) WHERE session_id=?',
+                (reason, moment, job.get('generation') or 0, job['session_id']))
+
     def mark_job_running(self, job_id):
         with self.unit_of_work() as tx:
             tx.jobs.claim(job_id)

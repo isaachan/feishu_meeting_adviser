@@ -13,7 +13,7 @@ import threading
 import time
 
 from .auth_client import AuthorizationRequired
-from .errors import StorageError
+from .errors import ModelError, StorageError
 from .model_jobs import ModelJobExecutor
 from .model_backend import load_role
 from .nsdp import NsdpUnavailable
@@ -111,88 +111,97 @@ class SessionSupervisor:
                     LOG.warning('lease lost for %s', session_id)
                     return
                 try:
-                    session = self.store.require_session(session_id)
-                except StorageError:
-                    return
-                if not self.legacy_nsdp and session['nsdp_hold']:
-                    self.store.set_nsdp_hold(session_id, False, now=self.clock())
-                    session = self.store.require_session(session_id)
-                phase = session['phase']
-                if phase == 'ended':
-                    return
-                now = self.clock()
-                self.store.expire_subscription_requests(session_id, now=now)
-                if (self.meeting_observer is not None
-                        and phase in ('running', 'paused')
-                        and now >= next_observation_at):
-                    next_observation_at = now + self.settings.observe_poll_s
                     try:
-                        self.meeting_observer.observe(session)
-                    except Exception:
-                        LOG.exception('meeting observation failed: session=%s', session_id)
-                    session = self.store.require_session(session_id)
+                        session = self.store.require_session(session_id)
+                    except StorageError:
+                        return
+                    if not self.legacy_nsdp and session['nsdp_hold']:
+                        self.store.set_nsdp_hold(session_id, False, now=self.clock())
+                        session = self.store.require_session(session_id)
                     phase = session['phase']
+                    if phase == 'ended':
+                        return
                     now = self.clock()
-                if phase == 'paused' and executor.running:
-                    stop_event = getattr(backend, 'stop_event', None)
-                    if isinstance(stop_event, threading.Event):
-                        stop_event.set()  # gateway POST /cancel; local job already abandoned
-                if self.legacy_nsdp:
-                    self._nsdp_maintenance(session_id, session, now)
-                result = executor.take_finished()
-                if result is not None:
-                    self._apply_result(result, now, executor.diagnostic_metadata())
-                    stop_event = getattr(backend, 'stop_event', None)
-                    if isinstance(stop_event, threading.Event):
-                        stop_event.clear()  # reuse backend after owner returns
-                    backoff_until = now + self.settings.poll_interval * 5
-                if phase == 'draining':
-                    self.close_ingest(session_id)
-                    self._reap_disconnected_sources(session_id)
-                    stuck = self.store.expire_stuck_sending(session_id, now=now)
-                    if stuck:
-                        LOG.info('session %s stuck sending -> uncertain: %s',
-                                 session_id, stuck)
-                    expired = self.store.discard_expired_replies(
-                        session_id, self.settings, now=now)
-                    if expired:
-                        LOG.info('session %s expired replies cancelled: %s',
-                                 session_id, expired)
-                    deadline = session['drain_deadline_at']
-                    if deadline is None:
-                        deadline = self.store.ensure_drain_deadline(
-                            session_id, now=now,
-                            duration_s=self.settings.drain_deadline_s)
-                    if now >= deadline:
-                        # S6: bounded finish even with bot/gateway/STT down
-                        diagnostic = self.store.force_end(session_id, now=now)
-                        LOG.warning('session %s drain deadline forced ended: %s',
-                                    session_id, diagnostic)
-                        return
-                    if not executor.running and self.store.drain_ready(session_id):
-                        self.store.set_phase(session_id, 'ended', now=now)
-                        LOG.info('session %s drained to ended', session_id)
-                        return
-                else:
-                    if phase == 'paused':
-                        # owner is away: refuse live capture (idempotent sweep)
-                        self.close_ingest(session_id, paused=True)
-                    if self._idle_expired(session_id, session):
-                        self.store.set_phase(
-                            session_id, 'draining', now=now,
-                            drain_deadline_at=now + self.settings.drain_deadline_s)
-                        LOG.info('session %s idle -> draining (phase=%s)', session_id, phase)
-                    elif phase == 'paused':
-                        pass  # 不发起新任务；恢复由观测输入驱动（STATE_MACHINES §4）
-                    else:
+                    self.store.expire_subscription_requests(session_id, now=now)
+                    if (self.meeting_observer is not None
+                            and phase in ('running', 'paused')
+                            and now >= next_observation_at):
+                        next_observation_at = now + self.settings.observe_poll_s
+                        try:
+                            self.meeting_observer.observe(session)
+                        except Exception:
+                            LOG.exception('meeting observation failed: session=%s', session_id)
+                        session = self.store.require_session(session_id)
+                        phase = session['phase']
+                        now = self.clock()
+                    if phase == 'paused' and executor.running:
+                        stop_event = getattr(backend, 'stop_event', None)
+                        if isinstance(stop_event, threading.Event):
+                            stop_event.set()  # gateway POST /cancel; local job already abandoned
+                    if self.legacy_nsdp:
+                        self._nsdp_maintenance(session_id, session, now)
+                    result = executor.take_finished()
+                    if result is not None:
+                        self._apply_result(result, now, executor.diagnostic_metadata())
+                        stop_event = getattr(backend, 'stop_event', None)
+                        if isinstance(stop_event, threading.Event):
+                            stop_event.clear()  # reuse backend after owner returns
+                        backoff_until = now + self.settings.poll_interval * 5
+                    if phase == 'draining':
+                        self.close_ingest(session_id)
+                        self._reap_disconnected_sources(session_id)
+                        stuck = self.store.expire_stuck_sending(session_id, now=now)
+                        if stuck:
+                            LOG.info('session %s stuck sending -> uncertain: %s',
+                                     session_id, stuck)
                         expired = self.store.discard_expired_replies(
                             session_id, self.settings, now=now)
                         if expired:
                             LOG.info('session %s expired replies cancelled: %s',
                                      session_id, expired)
-                        if not executor.running and now >= backoff_until:
-                            self._launch(executor, session_id, role_version, now)
-                self._stop.wait(self.settings.poll_interval)
+                        deadline = session['drain_deadline_at']
+                        if deadline is None:
+                            deadline = self.store.ensure_drain_deadline(
+                                session_id, now=now,
+                                duration_s=self.settings.drain_deadline_s)
+                        if now >= deadline:
+                            # S6: bounded finish even with bot/gateway/STT down
+                            diagnostic = self.store.force_end(session_id, now=now)
+                            LOG.warning('session %s drain deadline forced ended: %s',
+                                        session_id, diagnostic)
+                            return
+                        if not executor.running and self.store.drain_ready(session_id):
+                            self.store.set_phase(session_id, 'ended', now=now)
+                            LOG.info('session %s drained to ended', session_id)
+                            return
+                    else:
+                        if phase == 'paused':
+                            # owner is away: refuse live capture (idempotent sweep)
+                            self.close_ingest(session_id, paused=True)
+                        if self._idle_expired(session_id, session):
+                            self.store.set_phase(
+                                session_id, 'draining', now=now,
+                                drain_deadline_at=now + self.settings.drain_deadline_s)
+                            LOG.info('session %s idle -> draining (phase=%s)', session_id, phase)
+                        elif phase == 'paused':
+                            pass  # 不发起新任务；恢复由观测输入驱动（STATE_MACHINES §4）
+                        else:
+                            expired = self.store.discard_expired_replies(
+                                session_id, self.settings, now=now)
+                            if expired:
+                                LOG.info('session %s expired replies cancelled: %s',
+                                         session_id, expired)
+                            if not executor.running and now >= backoff_until:
+                                self._launch(executor, session_id, role_version, now)
+                    self._stop.wait(self.settings.poll_interval)
+                except (ModelError, StorageError) as exc:
+                    # one bad result must never take the whole session's supervisor down
+                    LOG.warning('supervisor iteration failed: session=%s error=%s',
+                                session_id, exc)
+                    self._stop.wait(self.settings.poll_interval)
+                except Exception:
+                    LOG.exception('supervisor iteration crashed: session=%s', session_id)
+                    self._stop.wait(self.settings.poll_interval)
         finally:
             executor.close(timeout=2)
             self.store.release_lease(session_id, self._lease_owner)
@@ -203,6 +212,16 @@ class SessionSupervisor:
             return  # hard gate: no model decisions while NSDP authorization is missing
         job = self.store.prepare_job(session_id, self.settings, role_version, now=now)
         if job is None:
+            return
+        if job['state'] != 'pending':
+            # orphaned inflight row (apply crashed mid-iteration): consume it so
+            # the loop does not wedge re-claiming a job that can never start
+            LOG.warning('model job not pending; rejected: session=%s job=%s state=%s',
+                        session_id, job['job_id'][:12], job['state'])
+            try:
+                self.store.reject_job(job, 'model_failed', now=now)
+            except StorageError:
+                pass
             return
         snapshot = json.loads(job['snapshot'])
         LOG.info('model job start: session=%s job=%s generation=%s captions=%s '
@@ -242,8 +261,12 @@ class SessionSupervisor:
                 self.jira_notifier.notify_jira_owner(result.job['session_id'], session['owner_open_id'],
                                                      dedupe_s=self.settings.nsdp_nag_seconds)
         if result.error is None and result.decision is not None:
-            self.store.finish_job(result.job, result.decision,
-                                  now=now, settings=self.settings)
+            try:
+                self.store.finish_job(result.job, result.decision,
+                                      now=now, settings=self.settings)
+            except (ModelError, StorageError) as exc:
+                self._reject_result(result, exc, now=now)
+                return
             LOG.info('model decision applied: session=%s job=%s control=%s '
                      'reply="%s" reply_keys=%s elapsed_ms=%.0f',
                      result.job['session_id'], result.job['job_id'][:12],
@@ -264,6 +287,25 @@ class SessionSupervisor:
             LOG.warning('model job failed: session=%s job=%s reason=%s '
                         'elapsed_ms=%.0f', result.job['session_id'],
                         result.job['job_id'][:12], result.error, result.elapsed_ms)
+
+    def _reject_result(self, result, exc, *, now):
+        """Terminal-reject a result the adviser refuses to apply (e.g. evidence
+        keys that are not part of the snapshot).
+
+        The job is abandoned instead of retried — otherwise the same snapshot
+        would be re-judged forever — and the generation it covered is consumed
+        so later captions can still produce a decision.
+        """
+        reason = getattr(exc, 'reason', 'model_failed')
+        LOG.warning('model result rejected: session=%s job=%s reason=%s error=%s',
+                    result.job['session_id'], result.job['job_id'][:12],
+                    reason, exc)
+        try:
+            self.store.reject_job(result.job, reason, now=now)
+        except StorageError:
+            LOG.info('late rejected result dropped (job no longer inflight): '
+                     'session=%s job=%s', result.job['session_id'],
+                     result.job['job_id'][:12])
 
     def _reap_disconnected_sources(self, session_id):
         """Live sources with no ingest connection left are terminal (lost)."""
