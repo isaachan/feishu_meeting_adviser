@@ -1,4 +1,4 @@
-"""PyInstaller entry point for the Qt client on macOS."""
+"""Shared PyInstaller entry point for the Qt client (macOS and Windows)."""
 import os
 import sys
 from pathlib import Path

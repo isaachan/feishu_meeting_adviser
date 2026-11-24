@@ -15,10 +15,10 @@ jobs:
         id: timestamp
         run: 'echo "stamp=$(date +%Y%m%d-%H%M%S)" >> "$GITHUB_OUTPUT"'
       - name: Build macOS app
-        run: ./gui/build.sh
+        run: ./gui/macos/build.sh
       - name: Upload macOS application
         uses: actions/upload-artifact@v4
         with:
           name: MeetingAdvisor-macos-arm64-${{ steps.timestamp.outputs.stamp }}
-          path: gui/dist/MeetingAdvisor-macos-arm64.zip
+          path: gui/dist/macos/MeetingAdvisor-macos-arm64.zip
           if-no-files-found: error

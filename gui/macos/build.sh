@@ -1,9 +1,9 @@
 #!/bin/sh
-# Build the macOS .app package (mirror of windows-gui/build.ps1, DESIGN §7).
+# Build the macOS .app package (mirror of gui/windows/build.ps1, DESIGN §7).
 # Requires Python 3.11+ and Xcode Command Line Tools (swiftc) on the build Mac.
 set -eu
 
-root=$(cd "$(dirname "$0")/.." && pwd)
+root=$(cd "$(dirname "$0")/../.." && pwd)
 gui=$root/gui
 venv=$gui/.venv
 
@@ -24,7 +24,7 @@ done
 
 "$venv/bin/python" -m PyInstaller --noconfirm --clean --onedir --windowed \
     --name MeetingAdvisor \
-    --distpath "$gui/dist" --workpath "$gui/build/pyinstaller" \
+    --distpath "$gui/dist/macos" --workpath "$gui/build/pyinstaller" \
     --specpath "$gui/build" \
     --collect-all sounddevice --collect-all keyring \
     --hidden-import segno \
@@ -34,7 +34,7 @@ done
     --add-binary "$helpers/sck_capture:." --add-binary "$helpers/macos_mute:." \
     "$gui/launcher.py"
 
-app=$gui/dist/MeetingAdvisor.app
+app=$gui/dist/macos/MeetingAdvisor.app
 # The app opens the microphone in-process (sounddevice); without the usage
 # key macOS kills it on the first TCC prompt.
 /usr/libexec/PlistBuddy -c 'Delete :NSMicrophoneUsageDescription' \
@@ -44,8 +44,8 @@ app=$gui/dist/MeetingAdvisor.app
     "$app/Contents/Info.plist"
 
 arch=$(uname -m)
-rm -rf "$gui/dist/MeetingAdvisor"  # raw onedir COLLECT output; the .app is self-contained
-zip=$gui/dist/MeetingAdvisor-macos-$arch.zip
+rm -rf "$gui/dist/macos/MeetingAdvisor"  # raw onedir COLLECT output; the .app is self-contained
+zip=$gui/dist/macos/MeetingAdvisor-macos-$arch.zip
 rm -f "$zip"
 ditto -c -k --keepParent "$app" "$zip"
 echo "Built: $app"
