@@ -10,7 +10,7 @@ Windows GUI 与 `gui` 共用 PySide6 主体和 recorder 上行。支持 Windows 
 powershell -ExecutionPolicy Bypass -File .\windows-gui\build.ps1
 ```
 
-构建脚本建立独立虚拟环境、安装依赖并使用 PyInstaller。结果为 `windows-gui\dist\MeetingAdvisor\MeetingAdvisor.exe`，可单独分发。程序启动时会自动将运行依赖解压到系统临时目录，启动可能需要一些时间。也可在 GitHub Actions 中手动运行 `Windows GUI build` workflow，下载产物。
+构建脚本建立独立虚拟环境、安装依赖并使用 PyInstaller。结果为 `windows-gui\dist\MeetingAdvisor\MeetingAdvisor-<yyyyMMdd-HHmmss>.exe`（时间戳默认取构建时刻，也可用 `-Stamp` 指定），可单独分发。程序启动时会自动将运行依赖解压到系统临时目录，启动可能需要一些时间。也可在 GitHub Actions 中手动运行 `Windows GUI build` workflow，下载产物。
 
 ## 使用
 
