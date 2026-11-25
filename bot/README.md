@@ -68,6 +68,12 @@ python -m unittest discover -s tests -v   # 51 项
 bot 本地文案仍为纯文本。方言与回退规则见
 [docs/FEISHU_RICH_TEXT_REPLY.md](../docs/FEISHU_RICH_TEXT_REPLY.md)。
 
+Jira 工单链接：设置 `JIRA_URL` 与白名单 `JIRA_PROJECT_KEYS`（如
+`NT3VFTVDR,NT2`）后，Markdown 回答里的裸工单号 `NT3VFTVDR-123` 会渲染成
+`https://<jira>/browse/NT3VFTVDR-123` 链接；已有链接、行内代码和未列入白名单的
+工单号保持不变，纯文本消息不处理。两个变量均可由 `--jira-url` /
+`--jira-project-keys` 覆盖。
+
 前置：飞书自建应用开通机器人能力、IM 权限、事件订阅（**长连接**方式）订阅
 `im.message.receive_v1`；详细配置见 `../docs/LOCAL_TESTING.md`。
 使用 SOCKS 代理时长连接依赖 `python-socks`；升级已有环境后重新执行上面的

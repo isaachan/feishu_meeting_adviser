@@ -2,7 +2,17 @@
 import unittest
 from unittest.mock import patch
 
-from bot.__main__ import _env_flag
+from bot.__main__ import _env_flag, _jira_project_keys
+
+
+class JiraProjectKeyTests(unittest.TestCase):
+    def test_parses_and_trims_comma_separated_keys(self):
+        self.assertEqual(_jira_project_keys('NT2, NT3VFTVDR ,,'),
+                         ('NT2', 'NT3VFTVDR'))
+
+    def test_blank_is_empty(self):
+        self.assertEqual(_jira_project_keys(''), ())
+        self.assertEqual(_jira_project_keys(None), ())
 
 
 class RichTextDefaultTests(unittest.TestCase):

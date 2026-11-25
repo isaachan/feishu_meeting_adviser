@@ -19,10 +19,18 @@ LOG = logging.getLogger(__name__)
 
 
 class LarkTransport:
-    def __init__(self, app_id, app_secret, *, rich_text=True):
+    def __init__(self, app_id, app_secret, *, rich_text=True, jira_url='',
+                 jira_project_keys=()):
         self.api = (lark.Client.builder().app_id(app_id)
                     .app_secret(app_secret).build())
         self.rich_text = rich_text
+        self.jira_url = jira_url
+        self.jira_project_keys = tuple(jira_project_keys)
+
+    def _render(self, message, rich_text):
+        return render(message, rich_text=self.rich_text and rich_text,
+                      jira_url=self.jira_url,
+                      jira_project_keys=self.jira_project_keys)
 
     def send_dm(self, open_id, message) -> str:
         response = self.api.im.v1.message.create(self._create_request(open_id, message))
@@ -51,7 +59,7 @@ class LarkTransport:
                 and message.msg_format == 'markdown')
 
     def _create_request(self, open_id, message, *, rich_text=True):
-        rendered = render(message, rich_text=self.rich_text and rich_text)
+        rendered = self._render(message, rich_text)
         body = (lark.im.v1.CreateMessageRequestBody.builder()
                 .receive_id(open_id).msg_type(rendered.msg_type)
                 .content(json.dumps(rendered.content, ensure_ascii=False)).build())
@@ -62,7 +70,7 @@ class LarkTransport:
     def _reply_request(self, message_id, message, *, rich_text=True):
         suffix = '' if rich_text else ':text'
         uuid = str(uuid5(NAMESPACE_URL, message_id + str(message) + suffix))
-        rendered = render(message, rich_text=self.rich_text and rich_text)
+        rendered = self._render(message, rich_text)
         body = (lark.im.v1.ReplyMessageRequestBody.builder()
                 .msg_type(rendered.msg_type)
                 .content(json.dumps(rendered.content, ensure_ascii=False))
@@ -72,9 +80,11 @@ class LarkTransport:
 
 
 def run(service: BotService, app_id: str, app_secret: str, *, queue_size=100,
-        history_turns=8, rich_text=True):
+        history_turns=8, rich_text=True, jira_url='', jira_project_keys=()):
     """Start the sequential worker and the lark long connection (blocking)."""
-    transport = LarkTransport(app_id, app_secret, rich_text=rich_text)
+    transport = LarkTransport(app_id, app_secret, rich_text=rich_text,
+                              jira_url=jira_url,
+                              jira_project_keys=jira_project_keys)
     service.transport = transport
     queue: Queue = Queue(maxsize=queue_size)
 
