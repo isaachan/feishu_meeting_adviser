@@ -1,6 +1,8 @@
 # 状态机与 Domain Model 落地任务
 
 > 目标依据：[REQUIREMENTS v0.4](docs/REQUIREMENTS.md)、[服务状态机](docs/SERVICE_STATE_MACHINES_V2.md)、[Domain Model](docs/DOMAIN_MODEL_V2.md)。**仅任务拆分，不代表目标规则已经实现**；现行冻结契约仍是运行基线。保留本文件名 `TODO_STATEM_MACHINES.md`。每项独立验收；凡涉及代码变更，按仓库约定先划分任务、每完成一项提交一次。
+>
+> **2026-11-25 口径更新（REQUIREMENTS v0.5 / STATE_MACHINES v2.1）**：SM-00/SM-02/SM-06 中的「每实例一生一个 session（含 ended）」「已 ended 同实例不可复建」「900 秒报废后本场不可重建」均已被推翻。现行口径：唯一性只约束未结束会话；ended 后可在本场日历时间窗内重新入会（新建独立 session，不继承旧订阅，draining 期间拒绝）。下列历史任务原文作为决策记录保留，不再代表当前规格。
 
 ## 已有材料与依赖边界
 

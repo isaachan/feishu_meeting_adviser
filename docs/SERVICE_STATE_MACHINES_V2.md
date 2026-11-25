@@ -12,9 +12,9 @@
 | 谁的离会触发 paused | 飞书角色 A/C 与 advisor owner 混淆会让同场组织者和 C 的离会互相干扰 | **已确认**：唯一 advisor session owner（A 或 C，先到先得）离会 → paused；该 owner 回来 → running。日历组织者不是该 session owner 时其进出**不影响** phase |
 | `drained` 是排空中还是已排空 | 原文笔误 | **已确认**：统一用现有 `draining → ended`；源状态 `drained` 保持原意 |
 | 飞书实时会议状态、成员进出从哪里来 | 当前只读日历事件/时间窗，不知道人员是否在会或会议已结束 | **后续优先验证**：主动查询能力见根目录 TODO.md T12；没查到 ≠ 确认离开/结束。此问题不阻塞本稿其余业务规则的决策 |
-| 一个会议“最多一个 session 存在”的时间范围 | 现行允许旧会话结束后再建新会话 | **已确认**：每场会议最多一个 session（含历史 ended）；同一 9 位号跨天复用，以**会议号 + 会议时区 + 当地日期 + 当日场次**区分 |
+| 一个会议“最多一个 session 存在”的时间范围 | 原口径每个实例一生一个 session（含 ended） | **已确认（v0.5，2026-11-25 修订）**：改为**任一时刻最多一个未结束 session**；ended 后可在本场时间窗内重新入会（新建独立 session，不继承旧订阅/材料）。同一 9 位号跨天复用，以**会议号 + 会议时区 + 当地日期 + 当日场次**区分 |
 | “用户只能在一个 session 出现”的范围 | 是否含 requested/denied、ended 历史、及 A/C/B 同一人的角色重叠 | **已确认**：以非 ended 会话为范围，申请 requested 即预占；denied/自退订释放，历史不阻止未来会议 |
-| 主动停止与自动结束 | 会未结束时人工停止能否重新开启？一次会议最多一个 session 与不可复活冲突 | **已确认**：人工结束直接进 `draining` 后 `ended`，不可重建/复活；接受误点导致该场无法继续辅助 |
+| 主动停止与自动结束 | 会未结束时人工停止能否重新开启？ | **已确认（v0.5，2026-11-25 修订）**：人工结束直接进 `draining` 后 `ended`，该 session 不可复活；draining 期间重开拒绝（`instance_draining`），ended 后可在本场时间窗内重新入会（新建 session）。原“误点导致该场无法继续辅助”的口径作废 |
 | 采集停录与 session 暂停 | GUI/recorder 停录是一段无上行，不等于 owner 离会 | **已确认**：GUI 停录后可选择同一尚处于 `running` 的 session 再采集；连续 900 秒无上行则转 `draining`。`paused` 只由 owner 离会触发，采集按钮不直接改变 session phase |
 | owner 离会后在途字幕/任务/回答 | 需要约定暂停边界和终止时限 | **已确认容许两种方案**：立即作废，或处理完当前在途工作后停；选实现成本较低且有界的方案。是否允许已经发送的回答继续送达不能靠“作废”撤回 |
 | 小B取消后重订与撤销 | 现行 revoked 终态且重订拒绝 | 区分 `subscriber_cancelled` 与 `owner_revoked`；前者可新建申请，后者暂仍禁止；不是将同一申请行复活 |
@@ -50,11 +50,11 @@ stateDiagram-v2
 
 | 当前 phase | 事件 | 目标 phase | 守卫 / 幂等 / 副作用（草案） |
 |---|---|---|---|
-| 无 | 合资格 A 或名单内 C 入会 | `running` | A 是日历组织者、C 在邀请名单（或本人是组织者）；校验 `meetingInstanceKey` 一生唯一、用户当前归属唯一，原子抢占并写库，首位成功者是不可随意转移的 session owner |
+| 无 | 合资格 A 或名单内 C 入会 | `running` | A 是日历组织者、C 在邀请名单（或本人是组织者）；校验 `meetingInstanceKey` 非 ended 唯一、用户当前归属唯一，原子抢占并写库，首位成功者是不可随意转移的 session owner；ended 历史不阻塞（v0.5） |
 | `running` | 查询确认该 session owner 原先在会、现在离会 | `paused` | 不以组织者身份代替 owner；创建时未入会、在会未知、API 暂不可达/音频中断/GUI 停录均不算“离会”；音频与在途任务处置另议 |
 | `paused` | 查询确认**同一** session owner 回会 | `running` | 沿用同一 session、订阅与上下文；GUI 是否自动重启采集待定 |
-| `running/paused` | 连续 900 秒无上行音频 | `draining` | 与飞书会议是否已开始、GUI 曾否采集无关；空闲窗内停录再开同一 `running` session 可续用；owner 离会过久也会结束本场辅助，超时后不可复活 |
-| `running/paused` | 查询确认会议已结束或 session owner / admin 人工结束 | `draining` | 拒新源、新订阅、新模型任务；有界收尾；误结束不可逆，重复终止命令回显当前状态 |
+| `running/paused` | 连续 900 秒无上行音频 | `draining` | 与飞书会议是否已开始、GUI 曾否采集无关；空闲窗内停录再开同一 `running` session 可续用；900 秒结束当前 session，场次时间窗内可重新入会（v0.5） |
+| `running/paused` | 查询确认会议已结束或 session owner / admin 人工结束 | `draining` | 拒新源、新订阅、新模型任务；有界收尾；当前 session 结束不可逆，重复终止命令回显当前状态；实例可在 ended 后重开（v0.5） |
 | `draining` | 正常排空完成 | `ended` | 源终态（已冲刷/已丢失）、模型任务终态/过期、outbox 无 pending；uncertain 仍需人工处理 |
 | `draining` | 排空截止时间到达，仍有未完成项 | `ended` | 强制关闭/标记无法完成的源；将本地未完成 job 终态化、停止等待 gateway 并丢弃迟到结果；尚未开始发送的 pending 回答取消，在途发送结果不明则记 uncertain；记录未完成原因与数量后最终置 ended。不能无限等待 bot/STT/gateway |
 | `draining/ended` | 迟到的查询快照/音频/字幕/模型结果 | 不变 | 查询快照时效/版本校验；不复活 session，不应用 ended 后结果 |

@@ -1,5 +1,7 @@
 # Advisor 内部 API 契约（bot ↔ advisor）
 
+> **v2.11（2026-11-25）**：§1.1/§2 实例唯一性改为**只约束未结束会话**——`ended` 后可在本场日历时间窗内重新 `POST /sessions`，新建独立 session（新 session_id/令牌/claim，不继承旧订阅与材料）。draining 期间返回新错误码 `instance_draining`（提示稍后重试）；`instance_ended` 不再由建会路径产生，仅保留码位兼容。schema v12 对应把实例键与 VC id 唯一索引改为非 ended 的 partial unique。见 [STATE_MACHINES v2.1 §1.4](STATE_MACHINES.md)。
+>
 > **v2.10（2026-11-25）**：移除 advisor 内遗留的 NSDP 取数路径——组织者面 NSDP token 硬门、建会预取、会话内 `nsdp_hold` 挂起/补取/周期 DM 全部删除；实际 NSDP 查询只在 gateway 受控工具按需执行。保留的是入会凭据检查（v1.6：飞书/NSDP/Jira 均已提交）与 gateway 工具报告 `nsdp_authorization_required`/`jira_authorization_required` 时经 outbox 给组织者的重新授权 DM。`nsdp_hold` 字段继续以 `false` 输出以兼容旧消费端，但不再被写入或参与调度。
 >
 > **v2.9（2026-11-22）**：§7.1 outbox `payload` 新增 `format: text|markdown`（additive）：模型回答 `reply` 为 `markdown`（`reply-md-v1`，见 [FEISHU_RICH_TEXT_REPLY](FEISHU_RICH_TEXT_REPLY.md)），审批/过期通知仍为 `text`。bot 按该字段决定是否渲染飞书富文本；忽略该字段的消费端按纯文本处理即可。advisor/bot 同仓同步。
@@ -48,7 +50,8 @@
 | `not_owner` | 操作者不是该会话/订阅的 owner | 回答"只有会话 owner 可以…" |
 | `meeting_ambiguous`（v2） | 同会议号有多个**独立**场次同时覆盖当前时间窗（循环系列已按 occurrence 归并解析，同系列 master+例外场不算多场次），无法消歧 | 请用户稍后在目标场次时间窗内重试 |
 | `session_claimed`（v2） | 该实例已有**他人**的非 ended 会话（先到先得，归属不可转移） | 告知"该会议已由他人启动会参谋" |
-| `instance_ended`（v2） | 该实例已有会话且已 ended/draining（每实例一生一个 session，不可复建） | 告知"该场会议的辅助已结束，不可重新开始" |
+| `instance_draining`（v2.11） | 该实例的会话正在 draining，尚不可重开 | 告知"该场会议正在结束中，请稍后再试" |
+| `instance_ended`（v2，v2.11 起不再产生） | 历史错误码：该实例已有 ended 会话不可复建；现保留仅兼容旧消费端 | 新部署不应出现；如出现按"可重新入会"话术处理 |
 | `claim_conflict`（v2） | 申请人在其他非 ended 会话已有归属（owner 或订阅，requested 也算占位）；或 owner 申请订阅自己的会话。错误体可附 `conflicting_title`（当前占用会议标题；无占用则为 null） | 带会议名称提示先结束/退出；无标题时使用通用提示 |
 | `not_supervisor`（v2） | 既非该日历事件组织者，也不在 supervisor（小C）名单 | 告知"仅组织者或管理员授权的参会者可启动" |
 | `not_invited`（v2） | 名单内小C 但不在该场日历邀请名单（也非组织者） | 告知原因 |
@@ -77,11 +80,11 @@
     "url": "ws://server:8400/ingest", "token": "st-xxx", "mic": false}}
 ```
 
-- 语义（v2 准入链，顺序固定）：凭据门（同 v1.6）→ 解析目标 occurrence（按 `meeting_no` 匹配并展开循环系列，见下条；0 个可解析场次 → `meeting_not_found`，多个独立场次覆盖当前窗 → `meeting_ambiguous`）→ 时间窗（±30min，`outside_window`）→ 准入（组织者身份命中走 A 路径；否则须在 supervisor 名单且命中该场邀请名单或本人组织者，见 §9.3；失败 → `not_organizer` / `not_supervisor` / `not_invited`）→ 实例与占位唯一（STATE_MACHINES §0：非 ended 同事件绑定会话 → 本人幂等 `existing:true` / 他人 `session_claimed`；精确 instance key 已有 ended/draining 会话 → `instance_ended`；本人已有其他非 ended 归属 → `claim_conflict`）→ 建会（phase=`running`，写 controller claim，材料 = 日历事件描述）→ 铸流令牌 → 监督器启动。命令文本由 bot 按模板渲染（附录见 CONTRACT_RECORDER_STREAM）；**响应中不得含任何用户凭据**。
+- 语义（v2 准入链，顺序固定）：凭据门（同 v1.6）→ 解析目标 occurrence（按 `meeting_no` 匹配并展开循环系列，见下条；0 个可解析场次 → `meeting_not_found`，多个独立场次覆盖当前窗 → `meeting_ambiguous`）→ 时间窗（±30min，`outside_window`）→ 准入（组织者身份命中走 A 路径；否则须在 supervisor 名单且命中该场邀请名单或本人组织者，见 §9.3；失败 → `not_organizer` / `not_supervisor` / `not_invited`）→ 实例与占位唯一（STATE_MACHINES §0/§1.4：非 ended 同事件绑定会话 → 本人幂等 `existing:true` / 他人 `session_claimed`；同 instance key 正在 draining → `instance_draining`；ended 历史不阻塞，继续建新会话；本人已有其他非 ended 归属 → `claim_conflict`）→ 建会（phase=`running`，写 controller claim，材料 = 日历事件描述）→ 铸流令牌 → 监督器启动。命令文本由 bot 按模板渲染（附录见 CONTRACT_RECORDER_STREAM）；**响应中不得含任何用户凭据**。
 - 循环日程解析（v2.4，2026-11-18 小A daily 会 bug）：飞书 events 列表 API 返回系列 master（`<uid>_0`，start/end=**第一场**）与例外场（`<uid>_<original_time>`，`is_exception`/`recurring_event_id`），不展开场次且不限查询窗（anchor 语义）。advisor 本地展开 RRULE 子集（FREQ=DAILY/WEEKLY/MONTHLY/YEARLY + INTERVAL/COUNT/UNTIL/BYDAY(周)/BYMONTHDAY(月)），同系列条目归并：例外场按原槽位覆盖、取消的例外场=删除该场；"此日程及后续"拆分出的同号系列各自展开。绑定 occurrence 实例 id `<uid>_<start>`（对齐 legacy 方案 B materials.py 的实例规则）——同系列每场各占独立 `meeting_instance_key`，与 STATE_MACHINES §0 每场一会对齐。不支持的 RRULE（如 `FREQ=MONTHLY;BYDAY=2TU`）回退按第一场绑定（修复前行为）。
 - 小C 邀请名单数据源（v2.5，2026-11-18 supervisor 误报 not_invited bug）：events 列表 API **不返回** `attendees[]`；准入需命中邀请名单（非组织者）时，advisor 按绑定场次实例 id 调用 attendees 专用接口拉取真实名单（removed 与非 user 类型不参与匹配），组织者路径不发起该调用；拉取失败 fail-closed 为 `auth_unavailable`。
 - 邀请名单含受邀群组成员（v2.6，2026-11-19 小C 群邀误报 not_invited bug）：attendees 名单中的 chat（群组）类型参与人（`attendee_id=chat_*`）同样构成邀请证明。user 直接命中失败且存在 chat 参与人时，advisor 以调用者本人 token 按场分页拉取 chat_members（≤20 页×100，removed 成员剔除，user_id/open_id/union_id 多键匹配）——该接口仅对**在群内**的调用者开放，恰与"受邀群组成员"场景自洽。飞书侧确定性拒绝（不在群内/参与人列表不可见，如 194001/194000）= 该群不构成证明、继续其余群；传输/认证故障与页数截断 fail-closed 为 `auth_unavailable`（截断只可能漏掉真命中）。组织者路径与 user 直接命中路径不发起该调用。
-- v2 提醒义务（bot 话术层，SM-12 落实）：建会成功回复须提示「建会后 900 秒内需开始采集，超时本场失效且不可重建」。
+- v2 提醒义务（bot 话术层，SM-12 落实）：建会成功回复须提示「建会后 900 秒内需开始采集，超时本场 session 结束；可在本场时间窗内重新入会」。
 - 凭据缺失/失效（409）：
 
 ```json
@@ -90,8 +93,8 @@
 ```
 
   小A/小C 完成授权后重发入会指令（state 已绑定意图，auth 侧可提示续接）。
-- 拒绝码全集：`authorization_required` / `meeting_not_found` / `meeting_ambiguous` / `not_organizer` / `not_supervisor` / `not_invited` / `outside_window` / `session_claimed` / `instance_ended` / `claim_conflict`。
-- 幂等与并发：同一 owner 对同一实例的非 ended 会话重试 → 返回既有会话（`existing:true`，不重建、令牌不换）；并发双人抢占同一实例 → 事务级唯一约束，后到者 `session_claimed`；同 key 重放 → 原响应。
+- 拒绝码全集：`authorization_required` / `meeting_not_found` / `meeting_ambiguous` / `not_organizer` / `not_supervisor` / `not_invited` / `outside_window` / `session_claimed` / `instance_draining` / `claim_conflict`（`instance_ended` 保留兼容、不再产生）。
+- 幂等与并发：同一 owner 对同一实例的 running/paused 会话重试 → 返回既有会话（`existing:true`，不重建、令牌不换）；draining 重试 → `instance_draining`；已 ended 后再发入会（新 message_id/幂等键）→ 新建会话。并发双人抢占同一实例 → 事务级唯一约束，后到者 `session_claimed`；同 key 重放 → 原响应。
 
 ## 3. 会话查询与结束
 

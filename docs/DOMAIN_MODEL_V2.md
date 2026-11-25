@@ -121,7 +121,7 @@ classDiagram
 
 | # | 约束（草案） | 放在哪个领域边界执行 |
 |---|---|---|
-| I1 | `MeetingInstance` 按**会议号 + 会议时区 + 当地日期 + 当日场次**唯一；同号跨天或同日不同场次是不同实例。时区/日期须来自同一权威日历 occurrence（不能随 A/C 的展示时区变），场次绑定其稳定 ID 或固定排期开始时刻，不按请求顺序计数。每实例**整场始终最多 1 个 AdvisorSession（含历史 ended）**。 | advisor 持久化唯一键与原子抢占；验证改期、跨时区、跨日和重复日历事件的归一化规则 |
+| I1 | `MeetingInstance` 按**会议号 + 会议时区 + 当地日期 + 当日场次**唯一；同号跨天或同日不同场次是不同实例。时区/日期须来自同一权威日历 occurrence（不能随 A/C 的展示时区变），场次绑定其稳定 ID 或固定排期开始时刻，不按请求顺序计数。每实例**任一时刻最多 1 个未结束 AdvisorSession**；ended 历史行可多条（v0.5/v2.1：ended 后可在场次时间窗内重新入会，新建 session）。 | advisor 持久化部分唯一键（仅非 ended）与原子抢占；验证改期、跨时区、跨日和重复日历事件的归一化规则 |
 | I2 | 小A/小C 是飞书 Context 身份；session 只有 **1 个 advisor owner / controller**：合资格 A 或名单内且在该场邀请名单的 C，谁先成功创建谁拥有。该 owner 审批订阅、收默认回答、使用自身查询凭据；**已确认在会后离会 → paused、同一 owner 回会 → running**。日历组织者若不是 owner，其进出不改 phase，且**不能订阅或接手该 session**。owner 创建时尚未入会不能直接算“离会”。一个人不能在同一 session 同时扮演 owner 和 subscriber。 | advisor 准入/审批/通知/身份与查询凭据；只有 owner 的在会观测驱动暂停/恢复 |
 | I3 | `SupervisorGrant.loginName` 以 `kai.han` 形式由 admin 配置，须解析到惟一稳定 `User.openId` 才生效；名单内 C 必须属于**该场日历邀请名单**（或本人是组织者），不要求在创建 session 时已进入实时会议。 | admin 写入/advisor 鉴权；可考虑保存原始录入值和解析时间作审计 |
 | I4 | 同一 `User` 在任一时刻最多 **1 条 active SessionClaim**，不论 kind=controller/subscriber；历史 claim 与订阅申请可多条。**以非 ended 会话为范围、requested 即占位**；denied/本人退订/审批超时释放，session paused/draining 时已存在的归属仍占位，ended 后全部释放。 | advisor 原子事务与唯一约束；不是 bot 端内存检查 |

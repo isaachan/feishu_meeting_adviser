@@ -1,11 +1,14 @@
 # 状态机规格 · 会话与订阅（v2 冻结）
 
 > **v2（2026-11-16，SM-01）**：落实 [REQUIREMENTS v0.4](REQUIREMENTS.md) 与 [SERVICE_STATE_MACHINES_V2](SERVICE_STATE_MACHINES_V2.md)/[DOMAIN_MODEL_V2](DOMAIN_MODEL_V2.md) 的业务口径（决策记录见 [TODO_STATEM_MACHINES](../TODO_STATEM_MACHINES.md) SM-00）。v1 的 `recording` 更名 `running` 并新增 `paused`；订阅新增 `expired`/`subscriber_cancelled`/`owner_revoked` 且撤销后可重申；会话按会议实例唯一；draining 有绝对截止时间。本文是 advisor 实现与测试的对照规格；API 错误码见 [CONTRACT_ADVISOR_API](CONTRACT_ADVISOR_API.md) §1.1；ingest 侧错误码见 [CONTRACT_RECORDER_STREAM](CONTRACT_RECORDER_STREAM.md) §3.4。变更需同步本文与两侧契约。
+>
+> **v2.1（2026-11-25）**：推翻「每实例一生一个 session / 误结束不可逆」——实例唯一性改为**仅约束未结束会话**；`ended` 后可在本场日历时间窗内重新入会（新建独立 session，见 §1.4）。draining 期间仍拒绝重开。schema v12 把实例键与 VC id 的唯一索引改为 partial（非 ended）。
 
 ## 0. 术语与全局不变量
 
 - **会议实例（meeting instance）**：一场具体会议 = 会议号 + 权威日历 occurrence。`meeting_instance_key = "{meeting_no}|{event_calendar_id}|{event_id}|{occurrence_start_unix}"`，四段全部取自**同一权威 occurrence**（经 owner 用户 OAuth 读到的日历事件实例）；`occurrence_start_unix` 为该场次固定排期开始时刻。同号跨天、同日两场、跨时区均产生不同 key。
-- **每实例至多 1 个 session（含 ended）**；draining/ended 实例不可复建（含 900 秒无音频报废，业务已接受）。
+- **每实例至多 1 个未结束 session**；draining 期间不可重开；`ended` 后可在本场日历时间窗内重新入会，新建立一个独立 session（§1.4），旧 ended 行作为历史保留。
+- **`ended` 是单个 session 的终态，不是实例的终态**（v2.1）：无音频 900 秒使当前 session 结束，但实例可重开；重开不继承旧订阅与材料。
 - **session owner**：合资格小A（该 occurrence 的日历组织者）或合资格小C（admin 名单 enabled + 该场日历邀请名单命中——直接受邀或为受邀群组成员（CONTRACT_ADVISOR_API v2.6）——或本人组织者），先到先得、创建后固定不变。日历组织者不是 owner 时，对该 session 无任何权限（不能接管、不能订阅、其离会不影响 phase）。
 - **单人单占位（SessionClaim）**：任一用户在**非 ended** 会话上至多 1 条 active claim（kind=controller 或 subscriber）；订阅 `requested` 即占位。denied / subscriber_cancelled / expired / owner_revoked / ended 释放；paused / draining 不释放。
 - **所有时限为配置项**（§5），除无音频 **900 秒**为业务定值外，其余默认值为工程初始值，不构成业务定值。
@@ -17,10 +20,10 @@
 
 | # | 从 | 迁移 | 触发 | 守卫 / 副作用 |
 |---|---|---|---|---|
-| S1 | — | → `running` | `POST /sessions` 成功 | 准入链（CONTRACT_ADVISOR_API §2）；写 controller claim；铸流令牌；监督器启动 |
+| S1 | — | → `running` | `POST /sessions` 成功 | 准入链（CONTRACT_ADVISOR_API §2）；写 controller claim；铸流令牌；监督器启动。同实例已有 ended 历史不阻塞（§1.4） |
 | S2 | `running` | → `paused` | 确认 owner **在会→离会**（§4 观测输入） | 仅 session owner；创建时未入会/在会未知/查询失败/音频中断/GUI 停录均不算离会。副作用见 §1.2 |
 | S3 | `paused` | → `running` | 确认**同一** owner 回会 | 沿用同一 session、订阅与上下文；不自动重开采集（已定：手动）；恢复后新字幕正常驱动新决策 |
-| S4 | `running`/`paused` | → `draining` | owner `end` / admin end / 确认会议结束 / 900 秒无真实音频 | 写绝对 `drain_deadline_at`；拒新源、新订阅、新模型任务；900 秒在 paused 下**连续计时不冻结**；误结束不可逆 |
+| S4 | `running`/`paused` | → `draining` | owner `end` / admin end / 确认会议结束 / 900 秒无真实音频 | 写绝对 `drain_deadline_at`；拒新源、新订阅、新模型任务；900 秒在 paused 下**连续计时不冻结**；本 session 结束不可逆（实例可在其 ended 后重开，§1.4） |
 | S5 | `draining` | → `ended` | 排空条件全部满足（§2） | 监督器自动；释放全部 claim；吊销流令牌 |
 | S6 | `draining` | → `ended` | `drain_deadline_at` 到达仍有未完成项 | 强制收尾（§1.3）；写诊断记录；释放全部 claim |
 | S7 | `draining`/`ended` | （不变） | 迟到音频/字幕/模型结果/观测快照 | 快照时效校验；不复活、不应用 |
@@ -33,7 +36,7 @@
 - 空闲截止 = `max(created_at, last_audio_at) + idle_timeout_s(900)`，**绝对时刻**、持久化计算，重启不漂移。
 - **真实音频** = ingest 二进制帧；心跳/ping、`gap`/`stop`/`stream_end`、控制 JSON、建连握手一律**不续期**。
 - running 与 paused 连续计时（含 GUI 手工停录的空窗、owner 离会的空窗）；draining/ended 不再计。
-- 建会即起算：提前超过 900 秒建会且未开录 → S4 → 实例报废（已定：接受；bot/GUI 负责建会话术提醒）。
+- 建会即起算：提前超过 900 秒建会且未开录 → S4 → 当前 session 结束；可在本场日历时间窗内重新入会（§1.4，bot/GUI 负责话术提醒）。
 - 停录后 900 秒内对同一 `running` session 再次 start（`resume:false` 新纪元）即续用，不新建会话。
 
 ### 1.2 paused 的即时副作用（已定「立即作废」）
@@ -48,6 +51,15 @@
 - 进入 draining 时写 `drain_deadline_at = now + drain_deadline_s`（配置，默认 600s）；**不可因重启/重试/再轮询重置**；advisor 重启只恢复剩余预算。
 - 正常排空完成可提前 ended（S5）。
 - 截止时（S6）按序执行：未终态源 → `lost`/`abandoned`；pending|running job → `abandoned` 并忽略迟到 gateway 结果；未开始发送的 pending IM → `cancelled`；`sending` → `uncertain`；写诊断行（各项计数与原因）→ `ended` → 释放全部 claim。
+
+### 1.4 实例重开（v2.1）
+
+- 触发：同实例最近一次 session 已 `ended`，owner 再次 `POST /sessions`，且仍满足准入链与日历时间窗（`start-30min ~ end+30min`）。
+- 语义：**不迁移、不复活**旧 ended 行；新建 session（新 `session_id`、流令牌、controller claim、outbox、材料、`idle_timeout_at` 重新起算）。旧转录/回答/订阅历史只读保留。
+- 唯一性：`meeting_instance_key` 与 `vc_meeting_id` 的唯一索引只覆盖 `running/paused/draining`（schema v12）；同一实例允许多条 ended 历史行，但任意时刻至多 1 个未结束 session。
+- draining：同实例存在 draining session 时，`POST /sessions` 返回 `409 instance_draining`（提示稍后再试），不解锁重开。
+- 订阅/材料不继承：旧 approved 订阅随旧 session ended 关闭；新 session 需重新申请订阅，材料从日历事件描述重建。
+- 观察者：新 session 可重新绑定同一 `vc_meeting_id`（旧 ended 行不再占用唯一索引），在会/离会/会议结束感知照常工作。
 
 ## 2. 排空完成条件（S5）
 
@@ -143,10 +155,14 @@
 
 10. v9→v10：新表 `app_config(key, value, updated_ns, updated_by)`（CONTRACT_ADVISOR_API §9.5 运行时配置）。无行回填——缺省键回落进程默认（`AdviserSettings`），存量会话行内 `idle_timeout_s` 不变。
 
+11. v10→v11：`jobs.timings TEXT`（性能观测，模型任务终态时写入）。
+
+12. v11→v12：实例/VC 唯一索引改为 partial，只约束 `running/paused/draining`（§1.4）。`ended` 历史行不再占用唯一键，允许同实例重新建会并重新绑定 VC id。
+
 ## 7. 与 v1 的差异与兼容窗口
 
 - `recording→running` 更名 + `paused` 新增：advisor/bot/admin-site/gui 同仓同步切换，无长期双轨；部署顺序 = 单机 `local-up` 整栈一次拉起（CONTRACT_ADVISOR_API §10 v2.0）。
 - 订阅 `revoked` 拆分为 `subscriber_cancelled`/`owner_revoked` + 新增 `expired`；旧 `revoked` 行只读兼容，新写不再产生。
-- 新错误码：`meeting_ambiguous` / `session_claimed` / `instance_ended` / `claim_conflict` / `not_supervisor` / `not_invited` / `identity_unresolved` / `session_paused`（ingest）。
+- 新错误码：`meeting_ambiguous` / `session_claimed` / `instance_draining`（未结束实例正在结束，稍后重试）/ `claim_conflict` / `not_supervisor` / `not_invited` / `identity_unresolved` / `session_paused`（ingest）。`instance_ended` 自 v2.1 起不再由建会路径产生，仅保留码位兼容旧消费端。
 - recorder 协议 `protocol=1` 不变（新增错误码属兼容扩展，CONTRACT_RECORDER_STREAM v1.1）。
 - 旧 `(owner, meeting_no)` 去重废除，改实例唯一 + 单人占位（§0）。
