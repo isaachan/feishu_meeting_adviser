@@ -292,9 +292,12 @@ class FireRedSession:
     def _feed_vad(self, samples) -> None:
         # sherpa's silero VAD loses frames when fed chunks bigger than its
         # window: feed it window_size slices regardless of batch size.
+        vad = self._vad
+        if vad is None:
+            return
         window = 512
         for i in range(0, len(samples), window):
-            self._vad.accept_waveform(samples[i:i + window])
+            vad.accept_waveform(samples[i:i + window])
 
     def _drain(self) -> list[SttEvent]:
         events: list[SttEvent] = []

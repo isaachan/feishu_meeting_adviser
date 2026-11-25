@@ -119,7 +119,7 @@ class SttService:
             self._live.pop(key, None)
 
     async def handle(self, websocket) -> None:
-        session: ServerSession | None = None
+        session: ServerSession | FireRedSession | None = None
         acquired = False
         stats_key: int | None = None
         info: dict = {}
