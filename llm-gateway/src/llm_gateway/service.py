@@ -46,8 +46,6 @@ def canonical_hash(system: str, input_value: dict, output: str, backend: str,
 
 
 def validate_request(payload: dict, *, limits: Limits) -> dict:
-    if not isinstance(payload, dict):
-        raise RequestError(422, 'invalid_request', 'body must be a JSON object')
     if payload.get('schema_version') != 1:
         raise RequestError(422, 'invalid_request', 'schema_version must be 1')
     request_id = payload.get('request_id')
