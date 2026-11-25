@@ -154,6 +154,15 @@ class ObserverTests(unittest.TestCase):
         restarted.observe(self.store.require_session(self.sid))
         self.assertEqual(self.store.require_session(self.sid)['phase'], 'paused')
 
+    def test_ended_session_lets_new_session_rebind_vc(self):
+        self.assertEqual(self.tick()['vc_meeting_id'], 'vc-1')
+        self.store.set_phase(self.sid, 'draining')
+        self.store.set_phase(self.sid, 'ended')
+        reopened = self.create_session('ou_A', '123456789')
+        self.observer.observe(self.store.require_session(reopened))
+        self.assertEqual(self.store.require_session(reopened)['vc_meeting_id'], 'vc-1')
+        self.assertEqual(self.store.require_session(self.sid)['vc_meeting_id'], 'vc-1')
+
     def test_old_oauth_scope_is_notified_without_false_observation(self):
         self.auth.scopes = ['calendar:calendar.event:read']
         self.tick()
