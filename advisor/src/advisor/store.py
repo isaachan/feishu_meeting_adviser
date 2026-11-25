@@ -301,12 +301,13 @@ class SessionStore:
     def create_session(self, *, owner_open_id, meeting_no, title, event_calendar_id,
                        event_id, description='', idle_timeout_s=900, now=None,
                        instance_key=None, organizer_open_id=None):
-        """STATE_MACHINES v2 S1: instance-unique creation with claim checks.
+        """STATE_MACHINES v2 S1: non-ended-instance creation with claim checks.
 
         Returns ``(session, existing)``. Raises StateError('session_claimed' |
-        'instance_ended' | 'claim_conflict') per the frozen precedence:
-        event-binding match among non-ended sessions first (reschedules keep
-        one instance), then the exact instance key, then the single-claim rule.
+        'instance_draining' | 'claim_conflict') per the frozen precedence:
+        event-binding match among running/paused sessions first (reschedules
+        keep one instance), then the active instance key, then the single-claim
+        rule. Ended sessions history never blocks a fresh session (v12).
         """
         moment = time.time() if now is None else now
         organizer = organizer_open_id or owner_open_id
@@ -324,7 +325,7 @@ class SessionStore:
         with self.unit_of_work() as tx:
             binding_match = tx.connection.execute(
                 "SELECT * FROM sessions WHERE meeting_no=? AND event_calendar_id=? "
-                "AND event_id=? AND phase IN ('running','paused','draining') "
+                "AND event_id=? AND phase IN ('running','paused') "
                 'ORDER BY started_at DESC LIMIT 1',
                 (meeting_no, event_calendar_id, event_id)).fetchone()
             if binding_match is not None:
@@ -334,11 +335,13 @@ class SessionStore:
                 value.pop('stream_token', None)
                 return value, True
             instance_match = tx.connection.execute(
-                'SELECT * FROM sessions WHERE meeting_instance_key=?',
+                "SELECT * FROM sessions WHERE meeting_instance_key=? "
+                "AND phase IN ('running','paused','draining') "
+                'ORDER BY started_at DESC LIMIT 1',
                 (key,)).fetchone()
             if instance_match is not None:
-                if instance_match['phase'] in ('draining', 'ended'):
-                    raise StateError('instance_ended')
+                if instance_match['phase'] == 'draining':
+                    raise StateError('instance_draining')
                 if instance_match['owner_open_id'] != owner_open_id:
                     raise StateError('session_claimed')
                 value = dict(instance_match)

@@ -107,16 +107,30 @@ class SessionLifecycleTests(Base):
                 instance_key=meeting_instance_key('123456789', 'cal_x', 'evt_y', 1762800000))
         self.assertEqual(caught.exception.args[0], 'session_claimed')
 
-    def test_ended_instance_cannot_be_recreated(self):
+    def test_ended_instance_can_be_recreated(self):
         session = self.create()
         self.store.set_phase(session['session_id'], 'draining', now=self.now)
         self.store.set_phase(session['session_id'], 'ended', now=self.now)
+        again, existing = self.store.create_session(
+            owner_open_id='ou_A', meeting_no='123456789', title='周会',
+            event_calendar_id='cal_x', event_id='evt_y', now=self.now,
+            instance_key=meeting_instance_key('123456789', 'cal_x', 'evt_y', 1762800000))
+        self.assertFalse(existing)
+        self.assertNotEqual(again['session_id'], session['session_id'])
+        self.assertEqual(again['phase'], 'running')
+        self.assertEqual(self.store.require_session(session['session_id'])['phase'], 'ended')
+
+    def test_draining_instance_blocks_recreate(self):
+        session = self.create()
+        self.store.set_phase(session['session_id'], 'draining', now=self.now)
         with self.assertRaises(StateError) as caught:
             self.store.create_session(
                 owner_open_id='ou_A', meeting_no='123456789', title='周会',
                 event_calendar_id='cal_x', event_id='evt_y', now=self.now,
                 instance_key=meeting_instance_key('123456789', 'cal_x', 'evt_y', 1762800000))
-        self.assertEqual(caught.exception.args[0], 'instance_ended')
+        self.assertEqual(caught.exception.args[0], 'instance_draining')
+
+
 
     def test_new_occurrence_same_meeting_no_creates_distinct_instance(self):
         first = self.create(start=1762800000)

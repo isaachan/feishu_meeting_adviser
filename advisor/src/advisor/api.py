@@ -111,6 +111,7 @@ def _state_error(exc: StateError):
     mapping = {'not_found': (404, 'not_found'), 'invalid_state': (409, 'invalid_state'),
                'not_owner': (409, 'not_owner'), 'session_not_recording': (409, 'session_ended'),
                'session_claimed': (409, 'session_claimed'),
+               'instance_draining': (409, 'instance_draining'),
                'instance_ended': (409, 'instance_ended'),
                'claim_conflict': (409, 'claim_conflict')}
     status, code = mapping.get(exc.args[0] if exc.args else '', (409, 'invalid_state'))
@@ -186,12 +187,14 @@ class AdvisorApi:
             raise ApiError(400, 'bad_message', 'owner_open_id and meeting_ref.no required')
 
         self._gate_join_credentials(owner, meeting_no)
-        # Cheap retry shortcut (same owner, same meeting_no, non-ended): the
-        # single-claim rule means this must be the caller's session for that
-        # meeting; avoids the calendar round-trip on command retries.
+        # Cheap retry shortcut (same owner, same meeting_no, running/paused):
+        # the single-claim rule means this must be the caller's session for that
+        # meeting; avoids the calendar round-trip on command retries. Draining
+        # is excluded so it surfaces as instance_draining (one session per
+        # active instance, STATE_MACHINES v2 §0).
         active = self.store.db.execute(
             "SELECT * FROM sessions WHERE owner_open_id=? AND meeting_no=? "
-            "AND phase IN ('running','paused','draining')", (owner, meeting_no)).fetchone()
+            "AND phase IN ('running','paused')", (owner, meeting_no)).fetchone()
         if active is not None:
             LOG.info('session reuse: session=%s meeting=%s owner=%s',
                      active['session_id'], meeting_no, owner)

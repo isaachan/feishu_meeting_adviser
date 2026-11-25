@@ -346,6 +346,27 @@ class CreateSessionTests(ApiBase):
         self.assertEqual(third['session_id'], first['session_id'])
         self.assertEqual(self.spy.started, [first['session_id']])
 
+    def test_join_during_draining_is_rejected(self):
+        _, first = self.join(key='drain-1')
+        self.post(f"/sessions/{first['session_id']}/end",
+                  {'owner_open_id': 'ou_A'}, key='drain-end')
+        status, body = self.post_error(
+            '/sessions', {'owner_open_id': 'ou_A',
+                          'meeting_ref': {'no': '123456789'}}, key='drain-rejoin')
+        self.assertEqual((status, body['error']['code']), (409, 'instance_draining'))
+
+    def test_join_after_ended_starts_a_new_session(self):
+        _, first = self.join(key='reopen-1')
+        self.post(f"/sessions/{first['session_id']}/end",
+                  {'owner_open_id': 'ou_A'}, key='reopen-end')
+        self.store.set_phase(first['session_id'], 'ended')
+        status, second = self.join(key='reopen-2')
+        self.assertEqual(status, 200)
+        self.assertFalse(second['existing'])
+        self.assertNotEqual(second['session_id'], first['session_id'])
+        self.assertEqual(second['phase'], 'running')
+        self.assertEqual(self.spy.started, [first['session_id'], second['session_id']])
+
 
 class SessionOpsTests(ApiBase):
     def created(self):
