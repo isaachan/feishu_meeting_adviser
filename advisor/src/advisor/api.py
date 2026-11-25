@@ -4,7 +4,6 @@ Ports (auth client, calendar validator) are injected; the calendar validator
 interface returns the binding + title + description on success and raises
 CalendarError(code) for the four S1 rejection paths.
 """
-import hashlib
 import json
 import logging
 import secrets

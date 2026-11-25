@@ -6,7 +6,6 @@ make the UI responsive. HTTP calls block only inside the worker thread.
 """
 import logging
 import threading
-import sys
 
 from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtWidgets import QMainWindow, QStackedWidget

@@ -1,13 +1,11 @@
 """Gateway CLI: serve the inference contract on localhost."""
 import argparse
-import json
 import logging
 import os
 from pathlib import Path
 import signal
 import sys
 import threading
-import time
 
 from . import __version__
 from .api import GatewayApp, create_server

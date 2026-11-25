@@ -11,8 +11,6 @@ Resubmitting the same request_id with the same content_hash after failed,
 cancelled or expired requeues the task; succeeded never re-executes.
 """
 from contextlib import contextmanager
-import json
-import os
 import sqlite3
 import threading
 import time

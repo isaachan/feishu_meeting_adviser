@@ -15,7 +15,7 @@ import time
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from .errors import StateError, StorageError
-from .models import (Caption, JobState, MaterialState, ReplyState, SourceState,
+from .models import (Caption, MaterialState, SourceState,
                      caption_from_json, caption_to_dict, digest, epoch_ns)
 from .persistence import (DEFAULT_DRAIN_DEADLINE_S, SCHEMA, SCHEMA_VERSION,
                           SESSION_PHASES, SESSION_TRANSITIONS,

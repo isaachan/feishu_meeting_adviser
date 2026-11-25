@@ -6,7 +6,6 @@ authorization codes and states.
 """
 
 import json
-import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib import parse
 

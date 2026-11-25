@@ -5,7 +5,6 @@ The authorization ``code`` IS the expected open_id: the stub mints
 production callback path (exchange -> subject == state-bound open_id) runs
 unchanged. Never enable against real credentials.
 """
-import time
 
 from .constants import SCOPES
 

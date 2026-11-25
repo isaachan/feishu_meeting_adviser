@@ -9,7 +9,7 @@ import re
 from contextlib import contextmanager
 from pathlib import Path
 
-from .constants import BASE_SCOPES, MAX_FILE_BYTES, SCOPES
+from .constants import BASE_SCOPES, SCOPES
 from .errors import AuthError
 from .storage import FileLock, ensure_private_directory, read_private_json, write_private_json
 

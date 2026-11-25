@@ -3,7 +3,6 @@ import argparse
 import asyncio
 import json
 import logging
-import signal
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
