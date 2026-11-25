@@ -8,6 +8,7 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 try:
     import PySide6  # noqa: F401
     import segno  # noqa: F401
+    from PySide6.QtWidgets import QApplication, QLabel, QPushButton
     PYSIDE_READY = True
 except ImportError:
     PYSIDE_READY = False
@@ -16,7 +17,6 @@ from gui import config as config_mod
 from gui.api import ApiError, NetworkError
 
 if PYSIDE_READY:
-    from PySide6.QtWidgets import QApplication, QLabel, QPushButton
     from gui.app import Controller, MainWindow
     from gui.ui.pages import (DashboardPage, LoginPage, SettingsPage,
                                     StatusOrb, qr_pixmap)
