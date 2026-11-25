@@ -30,6 +30,14 @@ select = ["E9", "F63", "F7", "F82"]
 
 [tool.pyright]
 include = ["src/recorder"]
+# Windows-only capture backends import ctypes.windll plus win32 packages from
+# the [windows] extra; they cannot be resolved on the Linux/macOS CI runners.
+# They are exercised by the Windows build workflow instead.
+exclude = [
+    "src/recorder/audio/windows_loopback.py",
+    "src/recorder/audio/windows_mic.py",
+    "src/recorder/audio/windows_mute.py",
+]
 pythonVersion = "3.11"
 typeCheckingMode = "basic"
 
