@@ -94,10 +94,12 @@ class S3SubscriptionTests(unittest.TestCase):
         _reply_b, request_no = self.subscribe('ou_B', 'ou_A', '444000444')
         approval = [t for t in bus.dms_to('ou_A') if f'同意 #{request_no}' in t]
         self.assertTrue(approval, f'approval request missing: {bus.dms_to("ou_A")[-2:]}')
+        self.assertIn('（会议号 444000444）', approval[0])
 
         # first decision (before approval) reached only 小A
         first_batch = self.wait_reply_dm('ou_A', 1)
         self.assertTrue(first_batch)
+        self.assertIn('（会议号 444000444）', first_batch[-1])
         time.sleep(1)
         self.assertEqual([t for t in bus.dms_to('ou_B') if '网关合成回答' in t], [],
                          '小B must not receive before approval (forward-only)')
@@ -129,6 +131,9 @@ class S3SubscriptionTests(unittest.TestCase):
                       f'pending={[r["recipient_open_id"] for r in pending]}; '
                       f'session={session_row}; context={context_count}; '
                       f'outbox={outbox_rows}; jobs={jobs}')
+
+        b_batch = [t for t in bus.dms_to('ou_B') if '网关合成回答' in t]
+        self.assertIn('（会议号 444000444）', b_batch[-1])
 
         # revoke -> bleeding stops immediately for 小B, 小A keeps receiving
         b_before = len([t for t in bus.dms_to('ou_B') if '网关合成回答' in t])

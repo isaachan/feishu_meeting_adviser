@@ -22,6 +22,23 @@ _HEADING = re.compile(r'^[ \t]{0,3}#{1,6}[ \t]+(.*)$', re.MULTILINE)
 _NESTED_LIST = re.compile(r'^[ \t]+(?=(?:[-*+]|\d+\.)[ \t])', re.MULTILINE)
 _TABLE_SEPARATOR = re.compile(r'^[ \t]*\|?[ :|-]+\|?[ \t]*$', re.MULTILINE)
 _BLANK_RUN = re.compile(r'\n{3,}')
+_MD_SPECIAL = re.compile(r'([\\`*_\[\]<>~|])')
+
+
+def escape_md(text: str) -> str:
+    """Escape inline Markdown specials in user-controlled text."""
+    return _MD_SPECIAL.sub(r'\\\1', text)
+
+
+def meeting_header(title, meeting_no, *, markdown=True) -> str:
+    """One-line meeting label for outbound replies: ``标题（会议号 …）``."""
+    label = ' '.join((title or '').split())
+    if not label:
+        return f'会议 {meeting_no}'
+    if not markdown:
+        return f'{label}（会议号 {meeting_no}）'
+    return f'**{escape_md(label)}**（会议号 {meeting_no}）'
+
 
 
 class OutboundMessage(str):

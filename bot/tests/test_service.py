@@ -399,6 +399,38 @@ class BotServiceTests(unittest.TestCase):
         self.assertEqual(delivered, '**回答**')
         self.assertEqual(delivered.msg_format, 'markdown')
 
+    def test_outbox_reply_prepends_meeting_header(self):
+        self.advisor.pending = [{'uuid': 'u-hdr', 'kind': 'reply', 'channel': 'im',
+                                 'recipient_open_id': 'ou_A', 'session_id': 's-abc123',
+                                 'title': 'Q3 [预算] 周会', 'meeting_no': '123456789',
+                                 'payload': {'text': '**回答**', 'format': 'markdown'},
+                                 'created_at': 1, 'attempts': 0}]
+        self.service.poll_once()
+        delivered = self.transport.dms[-1][1]
+        self.assertEqual(delivered,
+                         '**Q3 \\[预算\\] 周会**（会议号 123456789）\n\n**回答**')
+        self.assertEqual(delivered.msg_format, 'markdown')
+
+    def test_outbox_reply_header_falls_back_to_meeting_no(self):
+        self.advisor.pending = [{'uuid': 'u-hdr2', 'kind': 'reply', 'channel': 'im',
+                                 'recipient_open_id': 'ou_A', 'session_id': 's-abc123',
+                                 'title': '', 'meeting_no': '987654321',
+                                 'payload': {'text': '回答', 'format': 'text'},
+                                 'created_at': 1, 'attempts': 0}]
+        self.service.poll_once()
+        self.assertEqual(self.transport.dms[-1][1], '会议 987654321\n\n回答')
+
+    def test_subscription_notice_keeps_body_without_header(self):
+        self.advisor.pending = [{'uuid': 'sub-8', 'kind': 'subscription_notice',
+                                 'channel': 'im', 'recipient_open_id': 'ou_B',
+                                 'session_id': 's-abc123', 'title': '周会',
+                                 'meeting_no': '123456789',
+                                 'payload': {'text': '你订阅的「周会」（会议号 123456789）已获同意。'},
+                                 'created_at': 1, 'attempts': 0}]
+        self.service.poll_once()
+        self.assertEqual(self.transport.dms[-1][1],
+                         '你订阅的「周会」（会议号 123456789）已获同意。')
+
     def test_subscription_result_notice_reaches_applicant(self):
         self.advisor.pending = [{'uuid': 'sub-7-approved',
                                  'kind': 'subscription_notice', 'channel': 'im',

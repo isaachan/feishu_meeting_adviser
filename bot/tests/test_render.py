@@ -1,7 +1,8 @@
 """reply-md-v1 rendering: Feishu card Markdown with a plain-text safety net."""
 import unittest
 
-from bot.render import MAX_MARKDOWN_BYTES, OutboundMessage, render, sanitize_markdown
+from bot.render import (MAX_MARKDOWN_BYTES, OutboundMessage, escape_md,
+                        meeting_header, render, sanitize_markdown)
 
 
 def card_text(rendered):
@@ -59,6 +60,25 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(message, '回答')
         self.assertEqual(message.msg_format, 'markdown')
         self.assertEqual(OutboundMessage('回答', 'bogus').msg_format, 'text')
+
+    def test_escape_md_protects_inline_specials(self):
+        self.assertEqual(escape_md('Q3 *预算* [草案] <at>'),
+                         'Q3 \\*预算\\* \\[草案\\] \\<at\\>')
+
+    def test_meeting_header_markdown_escapes_title(self):
+        self.assertEqual(meeting_header('Q3 *预算* [草案]', '123456789'),
+                         '**Q3 \\*预算\\* \\[草案\\]**（会议号 123456789）')
+
+    def test_meeting_header_text_mode_keeps_title(self):
+        self.assertEqual(meeting_header('Q3 *预算*', '123456789', markdown=False),
+                         'Q3 *预算*（会议号 123456789）')
+
+    def test_meeting_header_blank_title_uses_meeting_no(self):
+        self.assertEqual(meeting_header('  ', '123456789'), '会议 123456789')
+
+    def test_meeting_header_collapses_whitespace(self):
+        self.assertEqual(meeting_header('周会\n第二行', '123456789', markdown=False),
+                         '周会 第二行（会议号 123456789）')
 
 
 if __name__ == '__main__':

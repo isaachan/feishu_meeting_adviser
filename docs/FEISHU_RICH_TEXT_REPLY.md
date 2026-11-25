@@ -82,6 +82,9 @@ outbox `payload.format` 标记 `reply`（`advisor/src/advisor/api.py`）；bot
   `回复「同意 #7」` 中的 `#` 被 Markdown 解释。
 - 这只是 payload 的增量字段，消费端忽略也不影响；outbox 表结构不变，仍存原始内容。
 - bot 的兼容读取：`payload.get("format", "text")`。
+- 行内另带 `title` / `meeting_no`（v2.10）。bot 投递 `kind=reply` 时在正文前拼一行
+  `**标题**（会议号 …）`（标题按 §7 转义；标题为空回退「会议 <meeting_no>」），让接收者
+  辨识会议归属；`subscription_notice` 已在正文内含标题与会议号，不再重复加头。
 
 ### 4.3 bot 传输接口
 

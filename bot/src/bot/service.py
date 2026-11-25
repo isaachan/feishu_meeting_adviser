@@ -11,7 +11,7 @@ from typing import Protocol
 
 from .advisor_client import AdvisorApiError, AdvisorClient
 from .commands import Command, CommandError, parse_command
-from .render import OutboundMessage
+from .render import OutboundMessage, meeting_header
 
 LOG = logging.getLogger(__name__)
 
@@ -383,6 +383,10 @@ class BotService:
             format = payload.get('format', 'text')
             if not open_id or not text:
                 continue
+            if row.get('kind') == 'reply' and row.get('meeting_no'):
+                header = meeting_header(row.get('title'), row['meeting_no'],
+                                        markdown=(format == 'markdown'))
+                text = f'{header}\n\n{text}'
             message = _message(text, format)
             # Two-phase send (STATE_MACHINES v2 §1.3): claim `sending` before
             # touching Feishu so a crash mid-send lands in recoverable state
