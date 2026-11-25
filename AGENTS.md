@@ -1,6 +1,7 @@
 # Repository instructions
 
-- **The only active development entry is the repo root (方案 C：云端 advisor + laptop 采集器，2026-11-10 立项；2026-11-13 由 `new/` 上提至根目录).** Active modules at root only: `recorder/` (laptop audio capture, WS uplink), `advisor/` (cloud session core: ingest, supervisor, decisions), `bot/` (Feishu IM control/notification node), `auth/` (OAuth credential node), `stt-server/`, `llm-gateway/`, `gui/` and `admin-site/` (ops web UI: session listing/stop via CONTRACT_ADVISOR_API §9 + tail -f log streaming; no login yet, localhost only), plus `harness/` (`llm-harness` REPL: 手动喂会议文字经 CONTRACT_REMOTE_INFERENCE 测 LLM decision,不跑全 stack). Each owns its config, venv, tests and `pyproject.toml`; cross-module interaction goes only through the frozen contracts in `docs/` (`CONTRACT_RECORDER_STREAM.md`, `CONTRACT_ADVISOR_API.md`, `CONTRACT_AUTH.md`, `STATE_MACHINES.md`). Architecture: `docs/ARCHITECTURE.md`; work plan: `plan.md`; deployment baseline: `docs/DEPLOYMENT.md`; integration tests: `integrations/`; runtime data: `data/`; local stack: `scripts/local-up.sh` / `local-down.sh` (env: `scripts/local.env`).
-- **`legacy/`（方案 B：本地 advisor + spool 文件交接，2026-11-10 停维）已于 2026-11-23 整体删除。** 仍被引用的三份契约（`CONTRACT_REMOTE_INFERENCE.md`、`CONTRACT_STT_STREAM.md`、`CONTRACT_RECORDER_INPUT.md`）已迁至根 `docs/`；其余资产仅存 git 历史。
-- When the user says to "add a TODO" or “加个 TODO”, only add the requested item to the relevant `TODO.md` file (for 方案 C work that is root `TODO.md`), and Do NOT implement the TODO in that turn.
-- **开发原则：凡涉及代码变更，必须先划分任务；每完成一个任务，必须 commit 一次。**
+## 开发流程
+
+- 当用户说“加个TODO”时，仅将指定的待办事项添加到 `TODO.md` 文件中，不得在当前轮次中实现该TODO;
+- 凡涉及代码变更，必须先划分任务；每完成一个任务，必须 commit 一次;
+- 每次修改且测试通过后，需检查是否有重构的必要；每次 commit 前必须运行所有测试（包括 integration）;
