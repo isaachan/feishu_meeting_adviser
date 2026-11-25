@@ -116,7 +116,8 @@ class FakeAdvisor:
         if self.error:
             raise self.error
         return {'request_no': 7, 'state': 'requested', 'existing': False,
-                'owner_open_id': 'ou_A', 'title': '周会', 'subscriber_display': 'kai.han'}
+                'owner_open_id': 'ou_A', 'title': '周会', 'meeting_no': meeting_no,
+                'subscriber_display': 'kai.han'}
 
     def decide_subscription(self, request_no, owner, decision, *, message_id=''):
         self.calls.append(('decide', request_no, owner, decision))
@@ -272,7 +273,7 @@ class BotServiceTests(unittest.TestCase):
         self.assertEqual(len(self.transport.dms), 1)
         owner_dm = self.transport.dms[0]
         self.assertEqual(owner_dm[0], 'ou_A')
-        self.assertIn('kai.han 申请接收「周会」', owner_dm[1])
+        self.assertIn('kai.han 申请接收「周会」（会议号 123456789）', owner_dm[1])
         self.assertIn('同意 #7', owner_dm[1])
         self.assertIn('等待会议负责人同意', reply)
 

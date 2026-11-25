@@ -338,6 +338,7 @@ class BotService:
         request_no = result['request_no']
         owner = result['owner_open_id']
         title = result.get('title') or command.meeting_no
+        meeting_no = result.get('meeting_no') or command.meeting_no
         self._reply(message_id, f'已提交「{title}」的订阅申请，等待会议负责人同意。')
         try:
             if self.transport is None:
@@ -345,7 +346,7 @@ class BotService:
             applicant = result.get('subscriber_display') or sender
             self.transport.send_dm(
                 owner, OutboundMessage(
-                    f'{applicant} 申请接收「{title}」的会参谋回答。\n'
+                    f'{applicant} 申请接收「{title}」（会议号 {meeting_no}）的会参谋回答。\n'
                     f'回复「同意 #{request_no}」或「拒绝 #{request_no}」。', 'text'))
         except Exception:
             LOG.exception('approval request delivery failed (best-effort by design)')

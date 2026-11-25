@@ -148,7 +148,8 @@
 ```json
 {"request_no": 7, "session_id": "s-3f9c", "state": "requested",
   "approval_deadline_at": 1762801800.0,
-  "owner_open_id": "ou_A", "title": "周会", "subscriber_display": "kai.han"}
+  "owner_open_id": "ou_A", "title": "周会", "meeting_no": "123456789",
+  "subscriber_display": "kai.han"}
 ```
 
 - 会议号解析到唯一实例的 `running`/`paused` 会话才受理（v2：**paused 也受理**，已定 2026-11-16）；未命中 / draining / ended → `not_found`（bot 回"未找到该会议或会议已结束"）。
@@ -156,6 +157,7 @@
 - `request_no`（即 #rN）**全局唯一**、单调递增，advisor 分配；`approval_deadline_at`（Unix 秒）为持久化审批截止，到期未决自动 `expired`。
 - 审批请求的 IM 投递由 bot 直接完成（不走 outbox，不承诺可靠投递——bot 离线期间申请可丢，小B 重发即可）。
 - 新申请响应附 `subscriber_display`：飞书 `user_id` 优先，缺失时用姓名，最后回退 `subscriber_open_id`；仅供审批通知显示。已存在申请的幂等响应不含该字段。
+- `title` / `meeting_no`（v2.10，2026-11-25）：供 bot 审批通知展示会议归属；`meeting_no` 恒为请求中的 9 位会议号。
 
 ## 5. 审批与撤销（S3.3–S3.5）
 

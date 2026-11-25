@@ -37,6 +37,7 @@ class StateMachineSpecTests(unittest.TestCase):
         row = self.subscribe()
         self.assertEqual((row['state'], row['existing']), ('requested', False))
         self.assertIsInstance(row['request_no'], int)
+        self.assertEqual(row['meeting_no'], '123456789')
         self.assertEqual(row['approval_deadline_at'], self.now + 1800)
 
     def test_duplicate_requested_returns_same_request_no(self):

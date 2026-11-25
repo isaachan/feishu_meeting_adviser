@@ -1281,6 +1281,7 @@ class SessionStore:
                     return {'request_no': latest['request_no'], 'state': latest['state'],
                             'existing': True, 'session_id': session_id,
                             'owner_open_id': session['owner_open_id'], 'title': session['title'],
+                            'meeting_no': session['meeting_no'],
                             'approval_deadline_at': latest['approval_deadline_at']}
             row = tx.subscriptions.insert(session_id, subscriber_open_id, now=moment,
                                           approval_deadline_at=moment + approval_ttl_s)
@@ -1294,7 +1295,8 @@ class SessionStore:
                         if latest is not None else None)
         return {'request_no': row['request_no'], 'state': 'requested', 'existing': False,
                 'session_id': session_id, 'owner_open_id': session['owner_open_id'],
-                'title': session['title'], 'previous': previous,
+                'title': session['title'], 'meeting_no': session['meeting_no'],
+                'previous': previous,
                 'approval_deadline_at': row['approval_deadline_at']}
 
     def decide_subscription(self, request_no, owner_open_id, decision, *, now=None):
