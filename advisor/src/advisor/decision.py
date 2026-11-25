@@ -112,7 +112,7 @@ class DecisionApplier:
                     reply_validity_s=validity)
                 LOG.info('reply queued: session=%s uuid=%s recipients=%s reply="%s"',
                          job['session_id'], message_uuid[:12], recipients,
-                         decision.reply[:120])
+                         (decision.reply or '')[:120])
             brief = {
                 'generation': job['generation'],
                 'snapshot_hash': digest(snapshot),

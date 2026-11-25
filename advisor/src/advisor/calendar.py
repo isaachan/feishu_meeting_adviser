@@ -197,6 +197,10 @@ class FeishuCalendarValidator:
         except AuthUnavailable:
             raise CalendarError('auth_unavailable') from None
 
+    def _data(self, path, query, owner_open_id):
+        """Non-soft ``_get`` page's ``data`` field (soft rejection cannot occur)."""
+        return (self._get(path, query, owner_open_id) or {}).get('data')
+
     # -- validation -----------------------------------------------------------
 
     def validate(self, owner_open_id, meeting_ref):
@@ -262,7 +266,7 @@ class FeishuCalendarValidator:
                 'end': end}
 
     def _identities(self, owner_open_id):
-        data = self._get(USER_INFO_PATH, None, owner_open_id).get('data')
+        data = self._data(USER_INFO_PATH, None, owner_open_id)
         identities = []
         if isinstance(data, dict):
             for key in ('user_id', 'open_id', 'union_id'):
@@ -319,7 +323,7 @@ class FeishuCalendarValidator:
         return {'now': now, 'meetings': meetings[:limit]}
 
     def _window_events(self, now, owner_open_id):
-        data = self._get(CALENDARS_PATH, {'page_size': 50}, owner_open_id).get('data')
+        data = self._data(CALENDARS_PATH, {'page_size': 50}, owner_open_id)
         items = data.get('calendar_list') if isinstance(data, dict) else None
         if not isinstance(items, list):
             raise CalendarError('auth_unavailable')
@@ -333,9 +337,9 @@ class FeishuCalendarValidator:
         if calendar_id is None:
             raise CalendarError('meeting_not_found')
         path = EVENTS_PATH.format(calendar_id=parse.quote(calendar_id, safe=''))
-        data = self._get(path, {'start_time': now - LIST_RANGE_SECONDS,
-                                'end_time': now + LIST_RANGE_SECONDS,
-                                'page_size': 250}, owner_open_id).get('data')
+        data = self._data(path, {'start_time': now - LIST_RANGE_SECONDS,
+                                 'end_time': now + LIST_RANGE_SECONDS,
+                                 'page_size': 250}, owner_open_id)
         items = data.get('items') if isinstance(data, dict) else None
         if not isinstance(items, list):
             raise CalendarError('auth_unavailable')
@@ -371,7 +375,7 @@ class FeishuCalendarValidator:
             query = {'user_id_type': 'open_id', 'page_size': 100}
             if page_token:
                 query['page_token'] = page_token
-            data = self._get(path, query, owner_open_id).get('data')
+            data = self._data(path, query, owner_open_id)
             items = data.get('items') if isinstance(data, dict) else None
             if not isinstance(items, list):
                 raise CalendarError('auth_unavailable')

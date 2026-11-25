@@ -1252,7 +1252,7 @@ class SessionStore:
             return self._expire_due_requests(tx, moment, session_id=session_id)
 
     def create_subscription_request(self, session_id, subscriber_open_id, *, now=None,
-                                    approval_ttl_s=1800):
+                                    approval_ttl_s: float = 1800):
         """STATE_MACHINES v2 T1: requesting occupies the caller's single claim."""
         moment = time.time() if now is None else now
         ns = int(moment * 1_000_000_000)

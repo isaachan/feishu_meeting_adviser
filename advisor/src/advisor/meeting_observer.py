@@ -166,7 +166,8 @@ class FeishuMeetingObserver:
                    and str(person.get('id')) in owner_ids]
         if len(matched) != 1:
             return 'unknown'  # absent ≠ confirmed left
-        return {2: 'present', 4: 'left'}.get(matched[0].get('status'), 'unknown')
+        status = matched[0].get('status')
+        return {2: 'present', 4: 'left'}.get(status if isinstance(status, int) else -1, 'unknown')
 
     def observe(self, session):
         owner = session['owner_open_id']

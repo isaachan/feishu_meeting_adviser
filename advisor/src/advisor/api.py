@@ -122,8 +122,8 @@ class AdvisorApi:
 
     def __init__(self, store: SessionStore, supervisor, *,
                  auth_client, calendar_validator, ingest_url, host='127.0.0.1',
-                 clock=time.time, email_domain='nio.com', approval_ttl_s=1800,
-                 drain_deadline_s=600, idle_timeout_s=900):
+                 clock=time.time, email_domain='nio.com', approval_ttl_s: float = 1800,
+                 drain_deadline_s: float = 600, idle_timeout_s=900):
         self.store = store
         self.supervisor = supervisor
         self.auth = auth_client
