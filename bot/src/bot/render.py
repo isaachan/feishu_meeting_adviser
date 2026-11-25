@@ -62,12 +62,14 @@ class Rendered:
     content: dict
 
 
-def render(message: str | OutboundMessage, *, rich_text: bool = True) -> Rendered:
+def render(message: str | OutboundMessage, *, rich_text: bool = True,
+           jira_url: str = '', jira_project_keys: tuple = ()) -> Rendered:
     text = str(message)
     fmt = message.msg_format if isinstance(message, OutboundMessage) else 'text'
     if not rich_text or fmt != 'markdown':
         return _text(text)
-    cleaned = sanitize_markdown(text)
+    cleaned = sanitize_markdown(text, jira_url=jira_url,
+                                jira_project_keys=jira_project_keys)
     if cleaned is None:
         LOG.warning('markdown render fell back to text (%s bytes)', len(text.encode('utf-8')))
         return _text(text)
@@ -78,7 +80,8 @@ def render(message: str | OutboundMessage, *, rich_text: bool = True) -> Rendere
     })
 
 
-def sanitize_markdown(text: str) -> str | None:
+def sanitize_markdown(text: str, *, jira_url: str = '',
+                      jira_project_keys: tuple = ()) -> str | None:
     """Return the reply-md-v1 subset, or None when it must be sent as text."""
     if not isinstance(text, str) or not text.strip():
         return None
@@ -86,6 +89,8 @@ def sanitize_markdown(text: str) -> str | None:
     cleaned = _FENCE.sub('', cleaned)
     cleaned = _HTML.sub('', cleaned)
     cleaned = _IMAGE.sub('', cleaned)
+    cleaned = linkify_jira_keys(cleaned, jira_url=jira_url,
+                                project_keys=jira_project_keys)
     cleaned = _LINK.sub(_safe_link, cleaned)
     cleaned = _HEADING.sub(lambda match: f"**{match.group(1).strip()}**", cleaned)
     cleaned = _NESTED_LIST.sub('', cleaned)
@@ -95,6 +100,32 @@ def sanitize_markdown(text: str) -> str | None:
     if not cleaned or len(cleaned.encode('utf-8')) > MAX_MARKDOWN_BYTES:
         return None
     return cleaned
+
+
+def linkify_jira_keys(text: str, *, jira_url: str = '',
+                      project_keys: tuple = ()) -> str:
+    """Wrap bare allowlisted Jira issue keys in Markdown links.
+
+    ``project_keys`` is an explicit allowlist so lookalikes such as ``UTF-8``
+    stay untouched. Existing Markdown links, bare URLs and inline code are kept
+    verbatim to avoid double-linking or breaking code.
+    """
+    base = (jira_url or '').strip().rstrip('/')
+    keys = tuple(key for key in (project_keys or ()) if key)
+    if not base or not keys:
+        return text
+    prefixes = '|'.join(re.escape(key) for key in sorted(keys, key=len, reverse=True))
+    pattern = re.compile(
+        rf'(?P<kept>`[^`\n]*`|\[[^\]]*\]\([^)]*\)|https?://[^\s)\]]*)'
+        rf'|(?<![A-Za-z0-9_-])(?P<key>(?:{prefixes})-\d+)(?![A-Za-z0-9_-])')
+
+    def replace(match: re.Match) -> str:
+        if match.group('kept') is not None:
+            return match.group('kept')
+        key = match.group('key')
+        return f'[{key}]({base}/browse/{key})'
+
+    return pattern.sub(replace, text)
 
 
 def _safe_link(match: re.Match) -> str:

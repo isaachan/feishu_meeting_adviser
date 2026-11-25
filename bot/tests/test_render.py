@@ -2,7 +2,8 @@
 import unittest
 
 from bot.render import (MAX_MARKDOWN_BYTES, OutboundMessage, escape_md,
-                        meeting_header, render, sanitize_markdown)
+                        linkify_jira_keys, meeting_header, render,
+                        sanitize_markdown)
 
 
 def card_text(rendered):
@@ -79,6 +80,59 @@ class RenderTests(unittest.TestCase):
     def test_meeting_header_collapses_whitespace(self):
         self.assertEqual(meeting_header('周会\n第二行', '123456789', markdown=False),
                          '周会 第二行（会议号 123456789）')
+
+
+class JiraLinkifyTests(unittest.TestCase):
+    base = 'https://jira.example.com'
+    keys = ('NT3VFTVDR', 'NT2')
+
+    def link(self, text):
+        return linkify_jira_keys(text, jira_url=self.base, project_keys=self.keys)
+
+    def test_bare_key_becomes_browse_link(self):
+        self.assertEqual(
+            self.link('见 NT3VFTVDR-1234。'),
+            '见 [NT3VFTVDR-1234](https://jira.example.com/browse/NT3VFTVDR-1234)。')
+
+    def test_trailing_slash_in_base_is_normalized(self):
+        self.assertIn('](https://jira.example.com/browse/NT2-7)',
+                      linkify_jira_keys('NT2-7', jira_url='https://jira.example.com/',
+                                        project_keys=self.keys))
+
+    def test_non_allowlisted_lookalikes_are_untouched(self):
+        for text in ('UTF-8', 'COVID-19', 'NT9-1', 'nt2-1'):
+            with self.subTest(text=text):
+                self.assertEqual(self.link(text), text)
+
+    def test_multiple_keys_all_linked(self):
+        self.assertEqual(
+            self.link('NT2-1 和 NT3VFTVDR-9'),
+            '[NT2-1](https://jira.example.com/browse/NT2-1) 和 '
+            '[NT3VFTVDR-9](https://jira.example.com/browse/NT3VFTVDR-9)')
+
+    def test_existing_link_is_not_double_linked(self):
+        text = '[NT2-1](https://jira.example.com/browse/NT2-1)'
+        self.assertEqual(self.link(text), text)
+
+    def test_inline_code_is_untouched(self):
+        self.assertEqual(self.link('`NT2-1`'), '`NT2-1`')
+
+    def test_bare_url_is_untouched(self):
+        text = 'https://jira.example.com/browse/NT2-1'
+        self.assertEqual(self.link(text), text)
+
+    def test_no_config_is_a_noop(self):
+        self.assertEqual(linkify_jira_keys('NT2-1'), 'NT2-1')
+        self.assertEqual(linkify_jira_keys('NT2-1', jira_url=self.base), 'NT2-1')
+
+    def test_render_links_keys_only_in_markdown(self):
+        markdown = render(OutboundMessage('跟踪 NT2-1', 'markdown'),
+                          jira_url=self.base, jira_project_keys=self.keys)
+        self.assertIn('[NT2-1](https://jira.example.com/browse/NT2-1)',
+                      card_text(markdown))
+        text = render(OutboundMessage('跟踪 NT2-1', 'text'),
+                      jira_url=self.base, jira_project_keys=self.keys)
+        self.assertEqual(text.content, {'text': '跟踪 NT2-1'})
 
 
 if __name__ == '__main__':
