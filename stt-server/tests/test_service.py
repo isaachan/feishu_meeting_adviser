@@ -92,7 +92,7 @@ class ServiceRoundTripTests(unittest.TestCase):
                 cls._ready.set()
                 await asyncio.Event().wait()
 
-        cls.loop.create_task(main())
+        cls._server_task = cls.loop.create_task(main())
         cls.loop.run_forever()
 
     @classmethod
@@ -320,7 +320,7 @@ class FireRedRoundTripTests(unittest.TestCase):
                 cls._ready.set()
                 await asyncio.Event().wait()
 
-        cls.loop.create_task(main())
+        cls._server_task = cls.loop.create_task(main())
         cls.loop.run_forever()
 
     @classmethod
