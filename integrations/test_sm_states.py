@@ -6,6 +6,7 @@ join idempotence, and the absolute drain deadline with a dead bot.
 Occurrence identity / paused transitions / STT isolation are covered by
 advisor unit suites (test_domain, test_observation, test_ingest).
 """
+import json
 import time
 import unittest
 
@@ -73,6 +74,38 @@ class StateMatrixTests(unittest.TestCase):
             if s['meeting_no'] == '244000222')), 'session never drained to ended')
         _ack, again = bus.join_says(bed.service, 'ou_D', '入会 244000333')
         self.assertIn('已入会', again)
+
+    def test_reopen_after_manual_end_creates_new_session(self):
+        bed, bus = self.bed, self.bed.bus
+        bed.authorize('ou_E')
+        self.track('ou_E', '244000555')
+        _ack, first = bus.join_says(bed.service, 'ou_E', '入会 244000555')
+        self.assertIn('已入会', first)
+        first_sid, first_token, _first_event = bed.recorder_args('ou_E', '244000555')
+        bus.user_says(bed.service, 'ou_E', '结束会议 244000555')
+        self.assertTrue(wait_until(lambda: any(
+            s['session_id'] == first_sid and s['phase'] == 'ended'
+            for s in self.bed.admin_sessions()), timeout=20), 'first session never ended')
+
+        _ack, second = bus.join_says(bed.service, 'ou_E', '入会 244000555')
+        self.assertIn('已入会', second)
+        second_sid, second_token, second_event = bed.recorder_args('ou_E', '244000555')
+        self.assertNotEqual(second_sid, first_sid)
+
+        old = bed.ingest_connect(first_sid, first_token)
+        old.send(json.dumps({'type': 'start', 'protocol': 1, 'session_id': first_sid,
+                             'stream_token': first_token, 'source': 'loopback',
+                             'event': _first_event, 'resume': False, 'first_sequence': 1,
+                             'wall_clock_at': '2026-11-10T14:20:00+08:00'}))
+        error = json.loads(old.recv(timeout=10))
+        self.assertEqual((error['type'], error['code']), ('error', 'session_ended'))
+        old.close()
+
+        ws = bed.ingest_connect(second_sid, second_token)
+        bed.ingest_start(ws, second_sid, second_token, event=second_event)
+        bed.ingest_frame(ws, 1)
+        bed.drain_acks(ws, 1, timeout=10)
+        ws.close()
 
     def test_drain_deadline_forces_ended_with_dead_bot(self):
         bed, bus = self.bed, self.bed.bus
