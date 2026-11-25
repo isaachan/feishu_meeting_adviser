@@ -56,6 +56,8 @@ def upgrade_schema(database: SQLiteDatabase) -> None:
     process defaults).
     v10→v11: ``jobs.timings`` (performance observation; NULL until a task
     reaches a terminal state on the model backend).
+    v11→v12: instance/VC uniqueness becomes partial (non-ended only) so a
+    meeting instance can be re-opened after its session ended.
     """
     version = database.connection.execute('PRAGMA user_version').fetchone()[0]
     if version == SCHEMA_VERSION:
@@ -214,6 +216,19 @@ def upgrade_schema(database: SQLiteDatabase) -> None:
             if 'timings' not in columns:
                 database.connection.execute('ALTER TABLE jobs ADD COLUMN timings TEXT')
             database.connection.execute('PRAGMA user_version=11')
+        version = 11
+    if version == 11:
+        with database.transaction():
+            db = database.connection
+            db.execute('DROP INDEX IF EXISTS sessions_instance')
+            db.execute(
+                "CREATE UNIQUE INDEX sessions_instance ON sessions(meeting_instance_key) "
+                "WHERE phase IN ('running','paused','draining')")
+            db.execute('DROP INDEX IF EXISTS sessions_vc_meeting')
+            db.execute(
+                'CREATE UNIQUE INDEX sessions_vc_meeting ON sessions(vc_meeting_id) '
+                "WHERE vc_meeting_id IS NOT NULL AND phase IN ('running','paused','draining')")
+            db.execute('PRAGMA user_version=12')
     # fresh (0/empty) and unknown versions are judged by require_schema
 
 

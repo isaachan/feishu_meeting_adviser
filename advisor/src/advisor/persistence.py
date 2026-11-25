@@ -13,7 +13,7 @@ from uuid import NAMESPACE_URL, uuid5
 from .errors import StateError, StorageError
 from .models import JobState, ReplyState
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 SCHEMA = (
     '''CREATE TABLE sessions (
@@ -33,8 +33,10 @@ SCHEMA = (
         idle_timeout_s INTEGER NOT NULL DEFAULT 900,
         nsdp_hold INTEGER NOT NULL DEFAULT 0,
         lease_owner TEXT, lease_expires_at REAL)''',
-    'CREATE UNIQUE INDEX sessions_instance ON sessions(meeting_instance_key)',
-    'CREATE UNIQUE INDEX sessions_vc_meeting ON sessions(vc_meeting_id) WHERE vc_meeting_id IS NOT NULL',
+    'CREATE UNIQUE INDEX sessions_instance ON sessions(meeting_instance_key) '
+    "WHERE phase IN ('running','paused','draining')",
+    'CREATE UNIQUE INDEX sessions_vc_meeting ON sessions(vc_meeting_id) '
+    "WHERE vc_meeting_id IS NOT NULL AND phase IN ('running','paused','draining')",
     'CREATE INDEX sessions_owner ON sessions(owner_open_id, phase)',
     'CREATE INDEX sessions_meeting ON sessions(meeting_no, phase)',
     '''CREATE TABLE inputs (
