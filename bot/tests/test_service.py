@@ -307,7 +307,8 @@ class BotServiceTests(unittest.TestCase):
         cases = {
             'meeting_ambiguous': '多个场次',
             'session_claimed': '已由其他人开启',
-            'instance_ended': '无法再次开启',
+            'instance_draining': '正在结束中',
+            'instance_ended': '请重新发送入会指令',
             'claim_conflict': '已有一场会参谋会议',
             'not_supervisor': '获授权的参会者',
             'not_invited': '邀请名单',

@@ -151,8 +151,10 @@ class BotService:
             return '该会议号当前对应多个场次，请稍后在目标场次的时间窗内重试'
         if exc.code == 'session_claimed':
             return '这场会议的会参谋已由其他人开启。'
+        if exc.code == 'instance_draining':
+            return '这场会议的会参谋正在结束中，请稍后再试。'
         if exc.code == 'instance_ended':
-            return '这场会议的会参谋已结束，无法再次开启。'
+            return '这场会议的会参谋已结束，请重新发送入会指令。'
         if exc.code == 'claim_conflict':
             title = exc.extra.get('conflicting_title')
             meeting = f'（「{title}」）' if title else ''
