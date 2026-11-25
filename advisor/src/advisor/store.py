@@ -285,8 +285,7 @@ class SessionStore:
 
     def create_session(self, *, owner_open_id, meeting_no, title, event_calendar_id,
                        event_id, description='', idle_timeout_s=900, now=None,
-                       nsdp_text='', instance_key=None,
-                       organizer_open_id=None):
+                       instance_key=None, organizer_open_id=None):
         """STATE_MACHINES v2 S1: instance-unique creation with claim checks.
 
         Returns ``(session, existing)``. Raises StateError('session_claimed' |
@@ -301,8 +300,8 @@ class SessionStore:
         session_id = 's-' + uuid4().hex
         stream_token = 'st-' + secrets.token_urlsafe(32)
         description = description or ''
-        documents = [{'kind': 'nsdp', 'text': nsdp_text}] if nsdp_text else []
-        has_content = bool(description) or bool(documents)
+        documents = []
+        has_content = bool(description)
         material = {'state': MaterialState.READY.value if has_content else MaterialState.DISABLED.value,
                     'context_version': self._material_version(description, documents)
                     if has_content else None,
@@ -931,49 +930,12 @@ class SessionStore:
             'SELECT body FROM session_materials WHERE session_id=?', (session_id,)).fetchone()
         return decode_mapping(row['body']) if row else None
 
-    # -- NSDP material / hold / owner notices ----------------------------------
+    # -- owner notices ---------------------------------------------------------
 
     @staticmethod
     def _material_version(description, documents) -> str:
         return digest(['material-v1', description,
                        *(item.get('text', '') for item in documents)])
-
-    @_locked
-    def update_nsdp_material(self, session_id, text, *, now=None):
-        """Replace the nsdp document in the session material (refresh/prefetch)."""
-        moment = time.time() if now is None else now
-        with self.unit_of_work() as tx:
-            row = tx.connection.execute(
-                'SELECT body FROM session_materials WHERE session_id=?',
-                (session_id,)).fetchone()
-            material = decode_mapping(row['body']) if row else {
-                'state': MaterialState.DISABLED.value, 'context_version': None,
-                'description': '', 'documents': []}
-            documents = [item for item in material.get('documents', [])
-                         if item.get('kind') != 'nsdp']
-            if text:
-                documents.append({'kind': 'nsdp', 'text': text})
-            material['documents'] = documents
-            description = material.get('description') or ''
-            has_content = bool(description) or bool(documents)
-            material['state'] = (MaterialState.READY.value if has_content
-                                 else MaterialState.DISABLED.value)
-            material['context_version'] = (self._material_version(description, documents)
-                                           if has_content else None)
-            tx.connection.execute(
-                'UPDATE session_materials SET body=?, loaded_ns=? WHERE session_id=?',
-                (encode(material), int(moment * 1_000_000_000), session_id))
-            tx.connection.execute(
-                'UPDATE sessions SET material_version=?, material_state=? WHERE session_id=?',
-                (material['context_version'], material['state'], session_id))
-
-    @_locked
-    def set_nsdp_hold(self, session_id, held, *, now=None):
-        """Hold suspends all model decisions for the session (hard gate)."""
-        with self.unit_of_work() as tx:
-            tx.connection.execute(
-                'UPDATE sessions SET nsdp_hold=? WHERE session_id=?',
-                (1 if held else 0, session_id))
 
     @_locked
     def insert_owner_notice(self, session_id, recipient_open_id, content, *,

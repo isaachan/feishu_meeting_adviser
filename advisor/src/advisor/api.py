@@ -15,7 +15,6 @@ from urllib import parse
 
 from .auth_client import AuthorizationRequired, AuthUnavailable
 from .errors import StateError, StorageError
-from .nsdp import NsdpUnavailable
 from .persistence import meeting_instance_key
 from .store import SessionStore
 
@@ -124,8 +123,7 @@ class AdvisorApi:
 
     def __init__(self, store: SessionStore, supervisor, *,
                  auth_client, calendar_validator, ingest_url, host='127.0.0.1',
-                 clock=time.time, nsdp=None, nsdp_join_budget_s=12.0,
-                 legacy_nsdp=False, email_domain='nio.com', approval_ttl_s=1800,
+                 clock=time.time, email_domain='nio.com', approval_ttl_s=1800,
                  drain_deadline_s=600, idle_timeout_s=900):
         self.store = store
         self.supervisor = supervisor
@@ -134,30 +132,12 @@ class AdvisorApi:
         self.ingest_url = ingest_url.rstrip('/')
         self.host = host
         self.clock = clock
-        self.nsdp = nsdp
-        self.legacy_nsdp = legacy_nsdp
-        self.nsdp_join_budget_s = nsdp_join_budget_s
         self.email_domain = email_domain
         self.approval_ttl_s = approval_ttl_s
         self.drain_deadline_s = drain_deadline_s
         self.idle_timeout_s = idle_timeout_s
         self._gui_logins: dict = {}
         self._gui_lock = threading.Lock()
-
-    def _gate_nsdp(self, owner):
-        """Organizer-surface commands require an NSDP token (hard gate).
-
-        小B (subscriber surface) never passes through here.
-        """
-        if self.nsdp is None or not self.legacy_nsdp:
-            return
-        try:
-            self.nsdp.require_token(owner)
-        except AuthorizationRequired as exc:
-            raise ApiError(409, 'authorization_required', 'nsdp token missing/expired',
-                           provider='nsdp', submit_url=exc.url) from None
-        except AuthUnavailable:
-            raise ApiError(409, 'auth_unavailable', 'auth node unreachable') from None
 
     def with_idempotency(self, key, action):
         if not key or not isinstance(key, str) or len(key) > 128:
@@ -206,8 +186,6 @@ class AdvisorApi:
                 or not meeting_no.isdigit() or not 6 <= len(meeting_no) <= 12:
             raise ApiError(400, 'bad_message', 'owner_open_id and meeting_ref.no required')
 
-        if self.legacy_nsdp:
-            self._gate_nsdp(owner)
         self._gate_join_credentials(owner, meeting_no)
         # Cheap retry shortcut (same owner, same meeting_no, non-ended): the
         # single-claim rule means this must be the caller's session for that
@@ -239,30 +217,12 @@ class AdvisorApi:
                 raise ApiError(409, 'not_invited',
                                'supervisor is not on this occurrence invite list')
 
-        nsdp_text = ''
-        if self.nsdp is not None and self.legacy_nsdp:
-            try:
-                # Short join budget: degrade fast — the supervisor backfills.
-                nsdp_text = self.nsdp.fetch(owner, binding.get('description') or '',
-                                             budget_s=self.nsdp_join_budget_s)
-            except AuthorizationRequired as exc:
-                raise ApiError(409, 'authorization_required', 'nsdp token missing/expired',
-                               provider='nsdp', submit_url=exc.url) from None
-            except AuthUnavailable:
-                raise ApiError(409, 'auth_unavailable', 'auth node unreachable') from None
-            except NsdpUnavailable as exc:
-                # T7 degrade (2026-11-13): join proceeds without NSDP material;
-                # the supervisor's first maintenance pass backfills it, where a
-                # rejected token surfaces as nsdp_hold (implicit validation).
-                LOG.warning('nsdp fetch degraded, joining without material: %s', exc)
-                nsdp_text = ''
-
         try:
             session, existing = self.store.create_session(
                 owner_open_id=owner, meeting_no=meeting_no,
                 title=binding['title'], event_calendar_id=binding['event_calendar_id'],
                 event_id=binding['event_id'], description=binding.get('description') or '',
-                now=self.clock(), nsdp_text=nsdp_text,
+                now=self.clock(),
                 idle_timeout_s=self._effective_idle_timeout_s(),
                 instance_key=meeting_instance_key(
                     meeting_no, binding['event_calendar_id'], binding['event_id'],
@@ -314,7 +274,6 @@ class AdvisorApi:
     def list_meetings(self, owner):
         if not isinstance(owner, str) or not owner:
             raise ApiError(400, 'bad_message', 'owner_open_id required')
-        self._gate_nsdp(owner)
         try:
             self.auth.get_token(owner)  # credentials gate (same as join)
         except AuthorizationRequired:
@@ -333,7 +292,6 @@ class AdvisorApi:
     def list_sessions(self, owner):
         if not isinstance(owner, str) or not owner:
             raise ApiError(400, 'bad_message', 'owner_open_id required')
-        self._gate_nsdp(owner)
         sessions = self.store.list_sessions(owner)
         return {'sessions': [{'session_id': s['session_id'], 'meeting_no': s['meeting_no'],
                               'title': s['title'], 'phase': s['phase'],
@@ -347,8 +305,6 @@ class AdvisorApi:
 
     def end_session(self, session_id, body):
         owner = body.get('owner_open_id')
-        if isinstance(owner, str) and owner:
-            self._gate_nsdp(owner)
         try:
             session = self.store.require_session(session_id)
         except StorageError:
@@ -629,8 +585,6 @@ class AdvisorApi:
 
     def decide_subscription(self, request_no, body):
         owner = body.get('owner_open_id')
-        if isinstance(owner, str) and owner:
-            self._gate_nsdp(owner)
         try:
             result = self.store.decide_subscription(
                 request_no, owner, body.get('decision'),
@@ -645,8 +599,6 @@ class AdvisorApi:
 
     def revoke_subscription(self, request_no, body):
         caller = body.get('owner_open_id') or body.get('subscriber_open_id')
-        if body.get('owner_open_id'):
-            self._gate_nsdp(body.get('owner_open_id'))
         try:
             return self.store.revoke_subscription(
                 request_no, caller, now=self.clock())

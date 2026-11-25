@@ -1,5 +1,7 @@
 # Advisor 内部 API 契约（bot ↔ advisor）
 
+> **v2.10（2026-11-25）**：移除 advisor 内遗留的 NSDP 取数路径——组织者面 NSDP token 硬门、建会预取、会话内 `nsdp_hold` 挂起/补取/周期 DM 全部删除；实际 NSDP 查询只在 gateway 受控工具按需执行。保留的是入会凭据检查（v1.6：飞书/NSDP/Jira 均已提交）与 gateway 工具报告 `nsdp_authorization_required`/`jira_authorization_required` 时经 outbox 给组织者的重新授权 DM。`nsdp_hold` 字段继续以 `false` 输出以兼容旧消费端，但不再被写入或参与调度。
+>
 > **v2.9（2026-11-22）**：§7.1 outbox `payload` 新增 `format: text|markdown`（additive）：模型回答 `reply` 为 `markdown`（`reply-md-v1`，见 [FEISHU_RICH_TEXT_REPLY](FEISHU_RICH_TEXT_REPLY.md)），审批/过期通知仍为 `text`。bot 按该字段决定是否渲染飞书富文本；忽略该字段的消费端按纯文本处理即可。advisor/bot 同仓同步。
 >
 > **v2.8（2026-11-20）**：§1.1 `claim_conflict` 可附 `conflicting_title`；§4.1 新申请响应新增 `subscriber_display`（user_id → 姓名 → open_id）；§5–§7 审批同意、拒绝、过期及撤销通知以 `subscription_notice` 进入 IM outbox（additive，advisor/bot 同仓同步）。
@@ -54,7 +56,7 @@
 | `invalid_state` | 状态机非法迁移（含对 `expired` 行审批、终态订阅行 decide 等） | 按 §6.6 对应话术回复 |
 | `internal` | 服务端内部错误 | 提示稍后重试 |
 
-**NSDP 门（v1.1）**：组织者面全部指令（入会/会议列表/状态/结束会议/审批/组织者撤销）在执行前要求该 open_id 已有 NSDP token；无/失效 → 409 `authorization_required`（NSDP 变体），bot 每次都回新提交链接（被动持续提醒）。订阅面（小B 的申请/取消）**不经过**该门。会话进行中 token 失效：监督器置 `nsdp_hold=1`（挂起该会话全部模型决策），经 outbox 向小A 周期性 DM 新提交链接（默认 5 分钟一条）；重新提交成功后自动恢复。NSDP 数据由 advisor 侧取（noam 子进程，token 仅存在于子进程环境），以 `kind:"nsdp"` 材料文档进入模型上下文。**v1.2a（2026-11-13，T7）**：NSDP 取数不可达（超时/后端故障）**不再拒绝入会**——降级为无 NSDP 材料建会，监督器首个维护周期起自动补取（成功即入材料，401 即挂起并提醒）；token 隐式验活由建会时点移至该首次取数。取数侧对同一 token 短 TTL 缓存（默认 10 分钟），避免连续建会重复跑全量 `nsdp info`。
+**NSDP 门（v1.1，已于 v2.10 移除）**：以下为历史描述，当前实现以 v2.10 为准。组织者面全部指令（入会/会议列表/状态/结束会议/审批/组织者撤销）在执行前要求该 open_id 已有 NSDP token；无/失效 → 409 `authorization_required`（NSDP 变体），bot 每次都回新提交链接（被动持续提醒）。订阅面（小B 的申请/取消）**不经过**该门。会话进行中 token 失效：监督器置 `nsdp_hold=1`（挂起该会话全部模型决策），经 outbox 向小A 周期性 DM 新提交链接（默认 5 分钟一条）；重新提交成功后自动恢复。NSDP 数据由 advisor 侧取（noam 子进程，token 仅存在于子进程环境），以 `kind:"nsdp"` 材料文档进入模型上下文。**v1.2a（2026-11-13，T7）**：NSDP 取数不可达（超时/后端故障）**不再拒绝入会**——降级为无 NSDP 材料建会，监督器首个维护周期起自动补取（成功即入材料，401 即挂起并提醒）；token 隐式验活由建会时点移至该首次取数。取数侧对同一 token 短 TTL 缓存（默认 10 分钟），避免连续建会重复跑全量 `nsdp info`。
 
 ## 2. `POST /sessions` —— 入会（S1）
 

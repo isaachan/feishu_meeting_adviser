@@ -14,6 +14,8 @@ from advisor.settings import AdviserSettings
 from advisor.store import SessionStore
 from advisor.supervisor import SessionSupervisor
 
+from fakes import MockNsdp
+
 
 class OwnerIdentityTests(unittest.TestCase):
     def setUp(self):
@@ -85,7 +87,7 @@ class OwnerIdentityTests(unittest.TestCase):
             return backend
 
         supervisor = SessionSupervisor(self.store, AdviserSettings(poll_interval=0.02),
-                                       backend_factory=factory)
+                                       nsdp=MockNsdp(), backend_factory=factory)
         supervisor.start_session(self.sid)
         self.addCleanup(supervisor.stop)
         self.assertTrue(prepared.wait(2))

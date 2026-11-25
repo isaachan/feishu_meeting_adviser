@@ -57,22 +57,11 @@ def main() -> None:
     serve.add_argument('--calendar-stub', action='store_true',
                        help='[deprecated] same as --calendar stub')
     serve.add_argument('--calendar-stub-description', default='')
-    serve.add_argument('--nsdp', choices=['off', 'noam', 'stub'], default='noam',
-                       help='NSDP organizer token gate/fetch mode (default: noam CLI)')
-    serve.add_argument('--noam-bin', default='noam', help='noam CLI path for --nsdp noam')
-    serve.add_argument('--nsdp-timeout-s', type=float, default=60,
-                       help='per-call noam timeout for --nsdp noam (default 60; '
-                            'nsdp info walks the whole catalog and can take 30s+)')
-    serve.add_argument('--nsdp-join-budget-s', type=float, default=12,
-                       help='noam budget during join; on expiry the join degrades '
-                            'to no-NSDP-material and the supervisor backfills '
-                            '(default 12)')
-    serve.add_argument('--nsdp-refresh-s', type=float, default=900,
-                       help='NSDP material refresh interval seconds')
-    serve.add_argument('--nsdp-retry-s', type=float, default=60,
-                       help='NSDP re-auth retry interval seconds (session on hold)')
+    serve.add_argument('--nsdp', choices=['noam', 'stub'], default='noam',
+                       help='NSDP organizer notification mode; stub is for test beds '
+                            '(default: noam)')
     serve.add_argument('--nsdp-nag-s', type=float, default=300,
-                       help='NSDP re-auth DM reminder interval seconds')
+                       help='re-authorization DM reminder interval seconds')
 
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
@@ -97,21 +86,13 @@ def main() -> None:
                                 approval_ttl_s=args.approval_ttl_s,
                                 drain_deadline_s=args.drain_deadline_s,
                                 reply_validity_s=args.reply_validity_s,
-                               nsdp_refresh_seconds=args.nsdp_refresh_s,
-                               nsdp_retry_seconds=args.nsdp_retry_s,
-                               nsdp_nag_seconds=args.nsdp_nag_s)
+                                nsdp_nag_seconds=args.nsdp_nag_s)
     store = SessionStore(database)
 
-    nsdp_service = None
-    if args.nsdp == 'noam':
-        # Only the authorization notification path remains in advisor. The
-        # gateway's scoped tool performs actual NSDP lookups on demand.
-        from .nsdp import NsdpService, StubNsdpClient
-        nsdp_service = NsdpService(HttpAuthClient(args.auth_url),
-                                   StubNsdpClient(), store)
-    elif args.nsdp == 'stub':
-        from .nsdp import NsdpService, StubNsdpClient
-        nsdp_service = NsdpService(HttpAuthClient(args.auth_url), StubNsdpClient(), store)
+    # The gateway's scoped tool does actual NSDP lookups on demand; advisor only
+    # keeps the owner re-authorization notices (NSDP and Jira).
+    from .nsdp import NsdpService
+    nsdp_service = NsdpService(HttpAuthClient(args.auth_url), store)
 
     if args.model == 'rule':
         backend_factory = lambda: RuleBackend()  # noqa: E731
@@ -120,8 +101,6 @@ def main() -> None:
 
     ingest = IngestServer(store, RemoteSttSessionFactory(args.stt_url),
                           port=args.ingest_port)
-    from .nsdp import NsdpService, StubNsdpClient
-    jira_notifier = nsdp_service or NsdpService(HttpAuthClient(args.auth_url), StubNsdpClient(), store)
     auth_client = HttpAuthClient(args.auth_url)
     meeting_observer = None
     if args.calendar == 'feishu' and not args.calendar_stub:
@@ -133,7 +112,7 @@ def main() -> None:
                                    ingest_activity=ingest.activity_snapshot,
                                    close_ingest=ingest.close_session,
                                    source_connected=ingest.source_connected,
-                                   nsdp=nsdp_service, jira_notifier=jira_notifier,
+                                   nsdp=nsdp_service,
                                    meeting_observer=meeting_observer)
     if args.calendar == 'stub' or args.calendar_stub:
         calendar_validator = StubCalendarValidator(args.calendar_stub_description)
@@ -142,11 +121,10 @@ def main() -> None:
         calendar_validator = FeishuCalendarValidator(HttpAuthClient(args.auth_url))
     api = AdvisorApi(store, supervisor, auth_client=auth_client,
                       calendar_validator=calendar_validator,
-                      ingest_url=args.ingest_url, nsdp=nsdp_service,
+                      ingest_url=args.ingest_url,
                       approval_ttl_s=settings.approval_ttl_s,
                       drain_deadline_s=settings.drain_deadline_s,
-                      idle_timeout_s=settings.idle_timeout_s,
-                      nsdp_join_budget_s=args.nsdp_join_budget_s)
+                      idle_timeout_s=settings.idle_timeout_s)
     stop_ingest = start_ingest_thread(ingest)
     supervisor.start()
     server = build_api_server(api, host=args.api_host, port=args.api_port)

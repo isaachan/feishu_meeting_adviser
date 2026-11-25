@@ -12,6 +12,8 @@ from advisor.settings import AdviserSettings
 from advisor.store import SessionStore
 from advisor.supervisor import SessionSupervisor
 
+from fakes import MockNsdp
+
 SETTINGS = AdviserSettings(poll_interval=0.02)
 
 
@@ -51,7 +53,8 @@ class SupervisorBase(unittest.TestCase):
         self.activity = {}
         self.settings = AdviserSettings(poll_interval=0.02)
         self.supervisor = SessionSupervisor(
-            self.store, self.settings, backend_factory=lambda: self.backend,
+            self.store, self.settings, nsdp=MockNsdp(),
+            backend_factory=lambda: self.backend,
             ingest_activity=lambda: self.activity)
         self.addCleanup(self.supervisor.stop)
 
@@ -87,7 +90,7 @@ class AutoConsumeTests(SupervisorBase):
 
         session = self.create()
         auth = SimpleNamespace(jira_submit_url=lambda owner: 'https://auth/jira/submit?state=x')
-        self.supervisor.jira_notifier = NsdpService(auth, None, self.store, clock=lambda: 1000)
+        self.supervisor.jira_notifier = NsdpService(auth, self.store, clock=lambda: 1000)
         self.store.insert_owner_notice(session['session_id'], 'ou_A', 'NSDP notice', now=1000)
         self.store.fail_job = lambda *args, **kwargs: None
         result = SimpleNamespace(job={'session_id': session['session_id'], 'job_id': 'job'},
@@ -177,6 +180,7 @@ class RecoveryTests(SupervisorBase):
         self.assertEqual(self.store.require_session(session['session_id'])['phase'],
                          'running')
         reborn = SessionSupervisor(self.store, self.settings,
+                                   nsdp=MockNsdp(),
                                    backend_factory=lambda: self.backend,
                                    ingest_activity=lambda: self.activity)
         reborn.start()

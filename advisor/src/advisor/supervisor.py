@@ -12,11 +12,9 @@ import os
 import threading
 import time
 
-from .auth_client import AuthorizationRequired
 from .errors import ModelError, StorageError
 from .model_jobs import ModelJobExecutor
 from .model_backend import load_role
-from .nsdp import NsdpUnavailable
 from .settings import AdviserSettings
 from .store import SessionStore
 
@@ -25,9 +23,9 @@ LOG = logging.getLogger(__name__)
 
 class SessionSupervisor:
     def __init__(self, store: SessionStore, settings: AdviserSettings, *,
-                 backend_factory, ingest_activity=None, close_ingest=None,
+                 nsdp, backend_factory, ingest_activity=None, close_ingest=None,
                  source_connected=None, clock=time.time, monotonic=time.monotonic,
-                 nsdp=None, legacy_nsdp=False, jira_notifier=None, meeting_observer=None):
+                 jira_notifier=None, meeting_observer=None):
         self.store = store
         self.settings = settings
         self.backend_factory = backend_factory
@@ -39,9 +37,6 @@ class SessionSupervisor:
         self.monotonic = monotonic
         self.nsdp = nsdp
         self.jira_notifier = jira_notifier or nsdp
-        self.legacy_nsdp = legacy_nsdp
-        self._nsdp_next: dict[str, float] = {}
-        self._nsdp_last_nag: dict[str, float] = {}
         self._stop = threading.Event()
         self._threads: dict[str, threading.Thread] = {}
         self._guard = threading.Lock()
@@ -115,9 +110,6 @@ class SessionSupervisor:
                         session = self.store.require_session(session_id)
                     except StorageError:
                         return
-                    if not self.legacy_nsdp and session['nsdp_hold']:
-                        self.store.set_nsdp_hold(session_id, False, now=self.clock())
-                        session = self.store.require_session(session_id)
                     phase = session['phase']
                     if phase == 'ended':
                         return
@@ -138,8 +130,6 @@ class SessionSupervisor:
                         stop_event = getattr(backend, 'stop_event', None)
                         if isinstance(stop_event, threading.Event):
                             stop_event.set()  # gateway POST /cancel; local job already abandoned
-                    if self.legacy_nsdp:
-                        self._nsdp_maintenance(session_id, session, now)
                     result = executor.take_finished()
                     if result is not None:
                         self._apply_result(result, now, executor.diagnostic_metadata())
@@ -207,9 +197,6 @@ class SessionSupervisor:
             self.store.release_lease(session_id, self._lease_owner)
 
     def _launch(self, executor, session_id, role_version, now):
-        session = self.store.session(session_id)
-        if self.legacy_nsdp and session is not None and session['nsdp_hold']:
-            return  # hard gate: no model decisions while NSDP authorization is missing
         job = self.store.prepare_job(session_id, self.settings, role_version, now=now)
         if job is None:
             return
@@ -248,14 +235,12 @@ class SessionSupervisor:
             if isinstance(request_id, str):
                 persisted['request_id'] = request_id
             self.store.record_job_timings(result.job['job_id'], persisted)
-        if (self.nsdp is not None and
-                'nsdp_authorization_required' in timings.get('tool_events', [])):
+        if 'nsdp_authorization_required' in timings.get('tool_events', []):
             session = self.store.session(result.job['session_id'])
             if session:
                 self.nsdp.notify_owner(result.job['session_id'], session['owner_open_id'],
                                        dedupe_s=self.settings.nsdp_nag_seconds)
-        if (self.jira_notifier is not None and
-                'jira_authorization_required' in timings.get('tool_events', [])):
+        if 'jira_authorization_required' in timings.get('tool_events', []):
             session = self.store.session(result.job['session_id'])
             if session:
                 self.jira_notifier.notify_jira_owner(result.job['session_id'], session['owner_open_id'],
@@ -315,57 +300,6 @@ class SessionSupervisor:
         for source in self.store.live_sources(session_id):
             if not connected(session_id, source):
                 self.store.mark_source_lost(session_id, source)
-
-    # -- NSDP maintenance (hold / nag / resume) --------------------------------
-
-    def _nsdp_maintenance(self, session_id, session, now):
-        """Periodic refresh while healthy; fast retry + nag DMs while held."""
-        if self.nsdp is None or now < self._nsdp_next.get(session_id, 0.0):
-            return
-        if session['nsdp_hold']:
-            self._nsdp_next[session_id] = now + self.settings.nsdp_retry_seconds
-            self._nsdp_try_resume(session_id, session, now)
-        else:
-            self._nsdp_next[session_id] = now + self.settings.nsdp_refresh_seconds
-            self._nsdp_refresh(session_id, session, now)
-
-    def _nsdp_clues(self, session_id):
-        material = self.store.materials(session_id) or {}
-        return material.get('description') or ''
-
-    def _nsdp_refresh(self, session_id, session, now):
-        try:
-            self.nsdp.prefetch(session['owner_open_id'], session_id,
-                               self._nsdp_clues(session_id))
-        except AuthorizationRequired:
-            self.store.set_nsdp_hold(session_id, True, now=now)
-            self._nsdp_nag(session_id, session['owner_open_id'], now)
-            # a fresh 401 switches immediately to fast-retry cadence
-            self._nsdp_next[session_id] = now + self.settings.nsdp_retry_seconds
-            LOG.warning('session %s nsdp hold: token missing/rejected', session_id)
-        except NsdpUnavailable as exc:
-            LOG.warning('session %s nsdp refresh unavailable: %s', session_id, exc)
-
-    def _nsdp_try_resume(self, session_id, session, now):
-        try:
-            self.nsdp.prefetch(session['owner_open_id'], session_id,
-                               self._nsdp_clues(session_id))
-        except AuthorizationRequired:
-            self._nsdp_nag(session_id, session['owner_open_id'], now)
-        except NsdpUnavailable as exc:
-            LOG.warning('session %s nsdp resume unavailable: %s', session_id, exc)
-        else:
-            self.store.set_nsdp_hold(session_id, False, now=now)
-            self._nsdp_next[session_id] = now + self.settings.nsdp_refresh_seconds
-            LOG.info('session %s nsdp authorization restored; decisions resumed',
-                     session_id)
-
-    def _nsdp_nag(self, session_id, owner_open_id, now):
-        if now - self._nsdp_last_nag.get(session_id, 0.0) < self.settings.nsdp_nag_seconds:
-            return
-        self._nsdp_last_nag[session_id] = now
-        self.nsdp.notify_owner(session_id, owner_open_id,
-                               dedupe_s=self.settings.nsdp_nag_seconds)
 
     def _idle_expired(self, session_id, session=None):
         """STATE_MACHINES v2 §1.1: absolute persisted deadline, real audio only.

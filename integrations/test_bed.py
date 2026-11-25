@@ -181,12 +181,12 @@ class TestBed:
     """One-shot bring-up: auth(stub) + gateway(fake) + advisor(stub calendar) +
     fake STT + in-process BotService with the fake IM bus.
 
-    nsdp='stub' additionally enables the advisor NSDP gate with the stub
-    fetch client and fast refresh/retry intervals (real auth-side submission
-    flow over HTTP); default 'off' keeps prior beds unchanged.
+    nsdp selects advisor's ``--nsdp`` mode: ``stub`` (default for beds) adds the
+    stub NSDP client with fast refresh/retry intervals; ``noam`` mirrors
+    production. Actual NSDP lookups run in the gateway on demand.
     """
 
-    def __init__(self, *, nsdp='off', auto_personal_tokens=True,
+    def __init__(self, *, nsdp='stub', auto_personal_tokens=True,
                  extra_advisor_args=()):
         self.tmp = tempfile.mkdtemp(prefix='m1-bed-')
         self.processes = []
@@ -202,10 +202,9 @@ class TestBed:
         args = ['--model', 'remote', '--remote-backend', 'fake',
                 '--calendar-stub', '--calendar-stub-description', '集成床日历材料']
         if self.nsdp_mode == 'stub':
-            args += ['--nsdp', 'stub',
-                     '--nsdp-refresh-s', '2', '--nsdp-retry-s', '1', '--nsdp-nag-s', '2']
+            args += ['--nsdp', 'stub', '--nsdp-nag-s', '2']
         else:
-            args += ['--nsdp', 'off']
+            args += ['--nsdp', self.nsdp_mode]
         return args + self.extra_advisor_args
 
     def start(self):

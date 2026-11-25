@@ -21,6 +21,4 @@ class AdviserSettings:
     approval_ttl_s: float = 1800
     drain_deadline_s: float = 600
     reply_validity_s: float = 3600
-    nsdp_refresh_seconds: float = 900
-    nsdp_retry_seconds: float = 60
     nsdp_nag_seconds: float = 300

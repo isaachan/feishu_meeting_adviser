@@ -11,6 +11,8 @@ from advisor.settings import AdviserSettings
 from advisor.store import SessionStore
 from advisor.supervisor import SessionSupervisor
 
+from fakes import MockNsdp
+
 NOW = 1_762_800_000.0
 SETTINGS = AdviserSettings(poll_interval=0.02, drain_deadline_s=600,
                            reply_validity_s=3600)
@@ -42,7 +44,7 @@ class DrainBase(unittest.TestCase):
         self.sid = session['session_id']
         self.clock = [self.now]
         self.supervisor = SessionSupervisor(
-            self.store, self.settings, backend_factory=lambda: None,
+            self.store, self.settings, nsdp=MockNsdp(), backend_factory=lambda: None,
             close_ingest=lambda _sid, **_kw: None,
             source_connected=lambda *_a: True, clock=lambda: self.clock[0])
         self.store.create_subscription_request(self.sid, 'ou_B', now=self.now)

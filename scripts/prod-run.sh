@@ -25,7 +25,7 @@ case "$1" in
     exec "$VENV/bin/llm-gateway" serve --host 127.0.0.1 --port 8377 "${args[@]}" ;;
   advisor)
     exec >>"$DATA/logs/advisor.log" 2>&1
-    exec "$VENV/bin/advisor" serve --data-dir "$DATA/advisor" --api-host 127.0.0.1 --api-port 8380 --ingest-port 8400 --ingest-url "$INGEST_URL" --stt-url ws://127.0.0.1:8392 --gateway-url http://127.0.0.1:8377 --auth-url http://127.0.0.1:8381 --model remote --remote-backend "${REMOTE_BACKEND:-opencode}" --calendar feishu --nsdp noam --noam-bin "$NOAM_BIN" ;;
+    exec "$VENV/bin/advisor" serve --data-dir "$DATA/advisor" --api-host 127.0.0.1 --api-port 8380 --ingest-port 8400 --ingest-url "$INGEST_URL" --stt-url ws://127.0.0.1:8392 --gateway-url http://127.0.0.1:8377 --auth-url http://127.0.0.1:8381 --model remote --remote-backend "${REMOTE_BACKEND:-opencode}" --calendar feishu --nsdp noam ;;
   bot)
     exec >>"$DATA/logs/bot.log" 2>&1
     exec "$VENV/bin/bot" serve --advisor-url http://127.0.0.1:8380 ;;
