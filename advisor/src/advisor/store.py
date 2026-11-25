@@ -1201,16 +1201,19 @@ class SessionStore:
     # -- subscriptions ------------------------------------------------------
 
     @staticmethod
-    def _subscription_notice(tx, row, title, state, moment):
+    def _subscription_notice(tx, row, meeting, state, moment):
         number = row['request_no']
+        title = meeting['title'] or f"会议 {meeting['meeting_no']}"
+        label = (f'「{title}」（会议号 {meeting["meeting_no"]}）'
+                 if meeting['title'] else f'「{title}」')
         if state == 'approved':
-            content = f'你订阅的「{title}」已获同意，之后会收到会参谋的回答。'
+            content = f'你订阅的{label}已获同意，之后会收到会参谋的回答。'
         elif state == 'denied':
-            content = f'你订阅「{title}」的申请未获同意。'
+            content = f'你订阅{label}的申请未获同意。'
         elif state == 'owner_revoked':
-            content = f'「{title}」的订阅已被会议负责人取消，之后不会再收到回答。'
+            content = f'{label}的订阅已被会议负责人取消，之后不会再收到回答。'
         else:
-            content = f'你订阅「{title}」的申请已过期。如仍需要，请重新申请。'
+            content = f'你订阅{label}的申请已过期。如仍需要，请重新申请。'
         notice_uuid = str(uuid5(NAMESPACE_URL, f'subscription-notice:{number}:{state}'))
         tx.connection.execute(
             "INSERT OR IGNORE INTO outbox(uuid,session_id,kind,content,evidence,"
@@ -1232,9 +1235,10 @@ class SessionStore:
         for row in rows:
             tx.subscriptions.settle(row['request_no'], 'expired', now=moment,
                                     closed_by='system')
-            title = tx.connection.execute('SELECT title FROM sessions WHERE session_id=?',
-                                          (row['session_id'],)).fetchone()['title']
-            SessionStore._subscription_notice(tx, row, title, 'expired', moment)
+            meeting = tx.connection.execute(
+                'SELECT title,meeting_no FROM sessions WHERE session_id=?',
+                (row['session_id'],)).fetchone()
+            SessionStore._subscription_notice(tx, row, meeting, 'expired', moment)
             still_active = tx.connection.execute(
                 'SELECT 1 FROM subscriptions WHERE session_id=? '
                 "AND subscriber_open_id=? AND state IN ('requested','approved') LIMIT 1",
@@ -1314,7 +1318,7 @@ class SessionStore:
             settled = tx.subscriptions.settle(
                 request_no, 'approved' if decision == 'approve' else 'denied', now=moment,
                 closed_by='owner' if decision == 'deny' else None)
-            self._subscription_notice(tx, row, session['title'], settled['state'], moment)
+            self._subscription_notice(tx, row, session, settled['state'], moment)
             if settled['state'] == 'denied':
                 tx.connection.execute(
                     'UPDATE session_claims SET active=0,released_ns=? '
@@ -1359,7 +1363,7 @@ class SessionStore:
                     "UPDATE outbox SET state='cancelled' WHERE uuid=? AND state='pending'",
                     (approval_uuid,))
                 if caller_is_owner:
-                    self._subscription_notice(tx, row, session['title'], target, moment)
+                    self._subscription_notice(tx, row, session, target, moment)
         return {'request_no': request_no, 'state': settled['state']}
 
     @_locked

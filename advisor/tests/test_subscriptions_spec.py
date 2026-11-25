@@ -71,7 +71,7 @@ class StateMachineSpecTests(unittest.TestCase):
         notices = self.store.pending_im_rows()
         self.assertEqual(len(notices), 1)
         self.assertEqual(notices[0]['recipient_id'], 'ou_B')
-        self.assertIn('「周会」的申请已过期', notices[0]['content'])
+        self.assertIn('「周会」（会议号 123456789）的申请已过期', notices[0]['content'])
         self.assertEqual(self.store.expire_subscription_requests(now=self.now + 3), 0)
         self.assertEqual(len(self.store.pending_im_rows()), 1)
         with self.assertRaises(StateError):
@@ -89,7 +89,7 @@ class StateMachineSpecTests(unittest.TestCase):
         self.assertEqual(len(notices), 1)
         self.assertEqual(notices[0]['kind'], 'subscription_notice')
         self.assertEqual(notices[0]['recipient_id'], 'ou_B')
-        self.assertIn('「周会」已获同意', notices[0]['content'])
+        self.assertIn('「周会」（会议号 123456789）已获同意', notices[0]['content'])
         self.store.decide_subscription(first['request_no'], 'ou_A', 'approve', now=self.now + 2)
         self.assertEqual(len(self.store.pending_im_rows()), 1)
 
@@ -98,7 +98,21 @@ class StateMachineSpecTests(unittest.TestCase):
         notices = self.store.pending_im_rows()
         self.assertEqual(len(notices), 2)
         self.assertEqual(notices[-1]['recipient_id'], 'ou_C')
-        self.assertIn('申请未获同意', notices[-1]['content'])
+        self.assertIn('（会议号 123456789）的申请未获同意', notices[-1]['content'])
+
+    def test_blank_title_notice_falls_back_to_meeting_number(self):
+        session = self.store.create_session(
+            owner_open_id='ou_D', meeting_no='987654321', title='',
+            event_calendar_id='cal_z', event_id='evt_z', now=self.now)[0]
+        request = self.store.create_subscription_request(
+            session['session_id'], 'ou_E', now=self.now)
+        self.store.decide_subscription(request['request_no'], 'ou_D', 'approve',
+                                       now=self.now + 1)
+        notices = [r for r in self.store.pending_im_rows()
+                   if r['kind'] == 'subscription_notice']
+        self.assertEqual(len(notices), 1)
+        self.assertIn('「会议 987654321」已获同意', notices[0]['content'])
+        self.assertNotIn('「会议 987654321」（会议号', notices[0]['content'])
 
     def test_revoke_replaces_unsent_approval_notice(self):
         request = self.subscribe()
@@ -108,7 +122,7 @@ class StateMachineSpecTests(unittest.TestCase):
         notices = [r for r in self.store.pending_im_rows()
                    if r['kind'] == 'subscription_notice']
         self.assertEqual(len(notices), 1)
-        self.assertIn('已被会议负责人取消', notices[0]['content'])
+        self.assertIn('（会议号 123456789）的订阅已被会议负责人取消', notices[0]['content'])
 
     def test_expiry_and_approval_boundary_are_atomic(self):
         first = self.store.create_subscription_request(
