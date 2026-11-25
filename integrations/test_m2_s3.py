@@ -9,7 +9,7 @@ import time
 import unittest
 from urllib import request
 
-from test_bed import TestBed, http_get_json
+from test_bed import TestBed, http_get_json, wait_until
 
 OPENER = request.build_opener(request.ProxyHandler({}))
 
@@ -58,30 +58,18 @@ class S3SubscriptionTests(unittest.TestCase):
         bed.drain_acks(ws, start + count - 2, timeout=10)
         ws.close()
 
-    def admin_sessions(self):
-        return http_get_json(
-            f'http://127.0.0.1:{self.bed.ports["api"]}/admin/sessions')['sessions']
-
-    def wait_until(self, predicate, timeout=15):
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if predicate():
-                return True
-            time.sleep(0.2)
-        return False
-
     def tearDown(self):
         # A subscription holds the applicant's single claim until the session
         # ends; wait for ended so the next case starts with a free applicant.
         bus = self.bed.bus
-        for s in self.admin_sessions():
+        for s in self.bed.admin_sessions():
             if s['phase'] in ('running', 'draining'):
                 try:
                     bus.user_says(self.bed.service, s['owner_open_id'], '结束会议')
                 except Exception:
                     pass
-        self.wait_until(
-            lambda: all(s['phase'] == 'ended' for s in self.admin_sessions()),
+        wait_until(
+            lambda: all(s['phase'] == 'ended' for s in self.bed.admin_sessions()),
             timeout=20)
 
     def subscribe(self, applicant, owner, meeting_no):

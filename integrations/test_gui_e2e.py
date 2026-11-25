@@ -15,7 +15,7 @@ from urllib import error, parse, request
 from gui.api import ApiError, GuiApiClient
 from gui.capture import CaptureJob
 from recorder.audio import FakeSource
-from test_bed import TestBed
+from test_bed import TestBed, wait_until
 
 OPENER = request.build_opener(request.ProxyHandler({}))
 
@@ -28,15 +28,6 @@ def http_post_json(url, body, key=None):
                           headers=headers)
     with OPENER.open(req, timeout=10) as response:
         return response.status, json.loads(response.read())
-
-
-def wait_until(predicate, timeout=15.0, interval=0.1):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if predicate():
-            return True
-        time.sleep(interval)
-    return False
 
 
 class GuiE2eTests(unittest.TestCase):

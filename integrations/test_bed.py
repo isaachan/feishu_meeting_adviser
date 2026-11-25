@@ -32,6 +32,15 @@ def http_get_json(url, timeout=2):
         return json.loads(response.read())
 
 
+def wait_until(predicate, timeout=15.0, interval=0.1):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(interval)
+    return False
+
+
 def wait_healthz(url, timeout=40):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -282,6 +291,10 @@ class TestBed:
         for _name, _proc, log in self.processes:
             log.close()
         shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def admin_sessions(self):
+        return http_get_json(
+            f'http://127.0.0.1:{self.ports["api"]}/admin/sessions')['sessions']
 
     def log_text(self, name):
         for proc_name, _proc, log in self.processes:
