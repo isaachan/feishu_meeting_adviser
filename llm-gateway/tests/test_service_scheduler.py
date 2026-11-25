@@ -7,7 +7,8 @@ from pathlib import Path
 
 from llm_gateway.backends.base import BackendError
 from llm_gateway.backends.fake import FakeBackend, SleepingBackend
-from llm_gateway.decisions import REPLY_MARKDOWN_RULES, InvalidDecision, validate
+from llm_gateway.decisions import InvalidDecision, validate
+from llm_gateway.prompts import REPLY_MARKDOWN_RULES
 from llm_gateway.scheduler import ExecutionScheduler
 from llm_gateway.service import GatewayService, Limits, RequestError, canonical_hash
 from llm_gateway.store import GatewayStore

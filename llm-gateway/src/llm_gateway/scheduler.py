@@ -9,7 +9,8 @@ import threading
 import time
 
 from .backends.base import BackendError
-from .decisions import (InvalidDecision, REPLY_MARKDOWN_RULES, validate)
+from .decisions import InvalidDecision, validate
+from .prompts import REPLY_MARKDOWN_RULES
 from .store import GatewayStore
 
 LOG = logging.getLogger(__name__)
