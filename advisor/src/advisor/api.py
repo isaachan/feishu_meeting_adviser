@@ -623,6 +623,8 @@ class AdvisorApi:
                           'channel': r['channel'],
                           'recipient_open_id': r['recipient_id'],
                           'session_id': r['session_id'],
+                          'title': r['title'],
+                          'meeting_no': r['meeting_no'],
                           'payload': {'text': r['content'],
                                       'format': 'markdown' if r['kind'] == 'reply' else 'text'},
                           'created_at': r['created_ns'],

@@ -243,12 +243,14 @@ v1 中「revoked 终态再申请 → 409」作废（已定 2026-11-16）；旧 `
 ```json
 {"rows": [{"uuid": "u-1a2b", "kind": "reply", "channel": "im",
   "recipient_open_id": "ou_A", "session_id": "s-3f9c",
+  "title": "周会", "meeting_no": "123456789",
   "payload": {"text": "**结论**：建议补充预算数据…", "format": "markdown"},
   "created_at": "…", "attempts": 0}]}
 ```
 
 - 只返回 `channel=im` 且 `state=pending` 的行（`local` 行是决策事实来源，不经传输）；按 created_at 升序、limit 上限 50。
 - 行种类包括模型回答 `reply` 与审批结果/过期提醒 `subscription_notice`；后者不包含字幕或录音。
+- `title` / `meeting_no`（v2.10，2026-11-25）：行内携带会议标题与 9 位会议号（即用户入会/订阅时输入的编号），供 bot 投递时让接收者辨识会议归属；`meeting_no` 恒非空，`title` 可能为空串。
 - `payload.format` 为 `text | markdown`（v2.9，2026-11-22）：`kind=reply` 恒为 `markdown`，内容遵循 `reply-md-v1`（见 [FEISHU_RICH_TEXT_REPLY.md](FEISHU_RICH_TEXT_REPLY.md)）；其余行恒为 `text`。消费端可忽略该字段按纯文本处理。
 - `owner_open_id` 可选：缺省返回全部 owner 的待发行（bot 单实例拉全量）。
 

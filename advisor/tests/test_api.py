@@ -563,6 +563,8 @@ class SubscriptionApiTests(ApiBase):
         _, pending_notices = self.get('/outbox/pending')
         self.assertEqual(len(pending_notices['rows']), 1)
         self.assertEqual(pending_notices['rows'][0]['recipient_open_id'], 'ou_B')
+        self.assertEqual(pending_notices['rows'][0]['title'], '会议 123456789')
+        self.assertEqual(pending_notices['rows'][0]['meeting_no'], '123456789')
         self.assertEqual(pending_notices['rows'][0]['payload']['format'], 'text')
         self.assertIn('已获同意', pending_notices['rows'][0]['payload']['text'])
         status, revoked = self.post(
@@ -634,6 +636,8 @@ class OutboxApiTests(ApiBase):
         self.assertEqual(len(pending['rows']), 1)
         row = pending['rows'][0]
         self.assertEqual(row['recipient_open_id'], 'ou_A')
+        self.assertEqual(row['title'], '会议 123456789')
+        self.assertEqual(row['meeting_no'], '123456789')
         self.assertEqual(row['payload'], {'text': '回答文本', 'format': 'markdown'})
         status, result = self.post(f"/outbox/{row['uuid']}/result",
                                    {'status': 'sent'}, key='send-1')

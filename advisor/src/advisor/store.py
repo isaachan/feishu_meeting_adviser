@@ -1105,10 +1105,11 @@ class SessionStore:
     @_locked
     def pending_im_rows(self, *, limit=10):
         return [dict(row) for row in self.db.execute(
-            "SELECT uuid,session_id,kind,content,channel,recipient_id,created_ns,"
-            "0 AS attempts FROM outbox "
-            "WHERE kind IN ('reply','subscription_notice') AND channel='im' AND state='pending' "
-            'ORDER BY created_ns LIMIT ?', (limit,))]
+            "SELECT o.uuid,o.session_id,o.kind,o.content,o.channel,o.recipient_id,"
+            "o.created_ns,0 AS attempts,s.title,s.meeting_no FROM outbox o "
+            'JOIN sessions s ON s.session_id=o.session_id '
+            "WHERE o.kind IN ('reply','subscription_notice') AND o.channel='im' "
+            "AND o.state='pending' ORDER BY o.created_ns LIMIT ?", (limit,))]
 
     def mark_sending(self, message_uuid):
         with self.unit_of_work() as tx:
