@@ -10,7 +10,7 @@ requires-python = ">=3.11"
 dependencies = ["sounddevice>=0.5", "websockets>=17,<18"]
 
 [project.optional-dependencies]
-dev = ["coverage==7.16.2", "pyright==1.1.414", "ruff==0.17.0"]
+dev = ["coverage==7.16.2", "pyright==1.1.414", "ruff==0.17.0", "numpy>=2"]
 windows = ["numpy>=2", "soundcard>=0.4", "process-audio-capture==1.0.0", "uiautomation==2.0.29"]
 
 [project.scripts]
