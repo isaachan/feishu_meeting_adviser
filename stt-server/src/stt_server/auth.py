@@ -131,7 +131,7 @@ class FeishuAuthTransport:
         """Return the raw event object; caller checks organizer and times."""
         path = EVENT_PATH.format(calendar_id=quote(calendar_id, safe=''),
                                  event_id=quote(event_id, safe=''))
-        status, result = self._get(path, token)
+        _, result = self._get(path, token)
         code = result.get('code') if result else None
         if code == 0:
             data = result.get('data') if isinstance(result, dict) else None

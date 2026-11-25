@@ -367,7 +367,7 @@ class FeishuCalendarValidator:
         ids: set[str] = set()
         chats: list[str] = []
         page_token = ''
-        for page in range(1, ATTENDEE_PAGE_CAP + 1):
+        for _ in range(1, ATTENDEE_PAGE_CAP + 1):
             query = {'user_id_type': 'open_id', 'page_size': 100}
             if page_token:
                 query['page_token'] = page_token
@@ -425,7 +425,7 @@ class FeishuCalendarValidator:
                 event_id=parse.quote(str(event_id), safe=''),
                 attendee_id=parse.quote(str(attendee_id), safe=''))
             page_token = ''
-            for page in range(1, ATTENDEE_PAGE_CAP + 1):
+            for _ in range(1, ATTENDEE_PAGE_CAP + 1):
                 query = {'user_id_type': 'open_id', 'page_size': 100}
                 if page_token:
                     query['page_token'] = page_token
@@ -492,7 +492,7 @@ def _series_uid(event_id: str) -> str:
 
 def _instance_marker(event_id: str) -> int | None:
     """Trailing ``_<n>`` of an exception id = original occurrence start."""
-    base, sep, suffix = event_id.rpartition('_')
+    _, sep, suffix = event_id.rpartition('_')
     if sep and suffix.isdigit() and suffix != '0':
         return int(suffix)
     return None

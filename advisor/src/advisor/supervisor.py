@@ -262,7 +262,7 @@ class SessionSupervisor:
         else:
             try:
                 self.store.fail_job(result.job, result.error or 'model_failed',
-                                    retry_at=now + 5, now=now)
+                                    retry_at=now + 5)
             except StorageError:
                 # job was abandoned (paused/drain discard): late failures drop
                 LOG.info('late job failure dropped (job no longer running): '

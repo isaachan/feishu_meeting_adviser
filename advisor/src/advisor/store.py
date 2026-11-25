@@ -1025,8 +1025,7 @@ class SessionStore:
     def finish_job(self, job, decision, *, now=None, settings=None):
         return DecisionApplier(self).apply(job, decision, now=now, settings=settings)
 
-    def fail_job(self, job, reason, *, retry_at, now=None):
-        moment = time.time() if now is None else now
+    def fail_job(self, job, reason, *, retry_at):
         with self.unit_of_work() as tx:
             tx.jobs.retry(job['job_id'])
             tx.sessions.record_job_failure(job['session_id'], reason=reason, retry_at=retry_at)

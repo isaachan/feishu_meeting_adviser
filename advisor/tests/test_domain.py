@@ -321,7 +321,7 @@ class DrainTests(Base):
         job = self.prepare(sid)
         self.store.mark_job_running(job['job_id'])
         self.assertFalse(self.store.drain_ready(sid))
-        self.store.fail_job(job, 'model_unavailable', retry_at=self.now + 5, now=self.now)
+        self.store.fail_job(job, 'model_unavailable', retry_at=self.now + 5)
         self.assertFalse(self.store.drain_ready(sid))  # pending job remains
         self.assertTrue(self.decide(job, '回答', ['k1']))
         self.assertFalse(self.store.drain_ready(sid))  # pending im row blocks
