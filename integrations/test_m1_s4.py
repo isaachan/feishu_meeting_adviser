@@ -4,7 +4,6 @@ Four families: recorder disconnect/reconnect/retransmit, advisor restart
 recovery, bot restart resuming outbox delivery, duplicate event dedup.
 """
 import json
-import re
 import time
 import unittest
 from urllib import request
@@ -28,10 +27,7 @@ class ReliabilityTests(unittest.TestCase):
         bed.authorize(owner)
         _, reply = bus.join_says(bed.service, owner, f'入会 {meeting_no}')
         self.assertIn('已入会', reply)
-        session_id = re.search(r"--session '([^']+)'", reply).group(1)
-        token = re.search(r"--token '([^']+)'", reply).group(1)
-        event = re.search(r"--event '([^']+)'", reply).group(1)
-        return session_id, token, event
+        return bed.recorder_args(owner, meeting_no)
 
     def test_recorder_disconnect_reconnect_retransmit(self):
         bed = self.bed

@@ -3,7 +3,6 @@
 Coarse polling (100ms) — the fake-chain baseline only; real budgets get
 measured again at 6.4 per plan.
 """
-import re
 import time
 import unittest
 from urllib import request
@@ -26,9 +25,8 @@ class LatencyTests(unittest.TestCase):
         bed, bus = self.bed, self.bed.bus
         bed.authorize('ou_A')
         _, reply = bus.join_says(bed.service, 'ou_A', '入会 777000777')
-        session_id = re.search(r"--session '([^']+)'", reply).group(1)
-        token = re.search(r"--token '([^']+)'", reply).group(1)
-        event = re.search(r"--event '([^']+)'", reply).group(1)
+        self.assertIn('已入会', reply)
+        session_id, token, event = bed.recorder_args('ou_A', '777000777')
 
         ws = bed.ingest_connect(session_id, token)
         bed.ingest_start(ws, session_id, token, event=event)

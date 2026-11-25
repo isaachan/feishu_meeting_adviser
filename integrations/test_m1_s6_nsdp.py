@@ -14,14 +14,15 @@ class JoinCredentialTests(unittest.TestCase):
 
     def test_missing_links_then_submit_and_join(self):
         reply = self.join()
-        for expected in ('飞书授权', 'NSDP token', 'Jira PAT', '/nsdp/submit', '/jira/submit'):
+        for expected in ('授权飞书', '提交版本计划凭据', '提交 Jira 凭据',
+                         '/nsdp/submit', '/jira/submit'):
             self.assertIn(expected, reply)
         self.assertEqual(http_get_json(
             f'http://127.0.0.1:{self.bed.ports["api"]}/sessions?owner_open_id=ou_A')['sessions'], [])
 
         self.bed.authorize('ou_A')
         reply = self.join()
-        self.assertNotIn('飞书授权', reply)
+        self.assertNotIn('授权飞书', reply)
         self.assertIn('/nsdp/submit', reply)
         self.assertIn('/jira/submit', reply)
 
@@ -33,7 +34,7 @@ class JoinCredentialTests(unittest.TestCase):
         self.bed.token_submit('ou_A', 'jira', 'stub-jira-token')
         reply = self.join()
         self.assertIn('已入会', reply)
-        self.assertIn('recorder', reply)
+        self.assertIn('请确保会参谋客户端已开启', reply)
         self.assertFalse(self.bed.advisor_db_read(
             "SELECT 1 FROM session_materials WHERE body LIKE '%\"kind\":\"nsdp\"%'"))
 

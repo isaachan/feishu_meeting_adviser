@@ -5,7 +5,6 @@ Captions -> supervisor job -> gateway fake model -> decision -> outbox
 Then 结束会议 drains to ended; post-ended input is refused.
 """
 import json
-import re
 import time
 import unittest
 from urllib import request
@@ -29,10 +28,9 @@ class S2DecisionTests(unittest.TestCase):
         bed.authorize('ou_A')
         _, reply = bus.join_says(bed.service, 'ou_A', '入会 123456789')
         self.assertIn('已入会', reply)
-        session_id = re.search(r"--session '([^']+)'", reply).group(1)
-        token = re.search(r"--token '([^']+)'", reply).group(1)
+        session_id, token, event = bed.recorder_args('ou_A', '123456789')
         ws = bed.ingest_connect(session_id, token)
-        bed.ingest_start(ws, session_id, token)
+        bed.ingest_start(ws, session_id, token, event=event)
         for seq in range(1, frames + 1):
             bed.ingest_frame(ws, seq)
         bed.drain_acks(ws, frames - 2)
@@ -70,7 +68,7 @@ class S2DecisionTests(unittest.TestCase):
 
         # 结束会议 -> draining -> (pending cleared by bot) -> ended
         reply = bus.user_says(bed.service, 'ou_A', '结束会议')
-        self.assertIn('排空', reply)
+        self.assertIn('正在结束', reply)
         status = self.wait_phase(session_id, 'ended', timeout=30)
         self.assertEqual(status['phase'], 'ended')
 
@@ -92,8 +90,8 @@ class S2DecisionTests(unittest.TestCase):
         _, reply = bus.join_says(bed.service, 'ou_A', '入会 555000111')
         self.assertIn('已入会', reply)
         reply = bus.user_says(bed.service, 'ou_A', '状态')
-        self.assertIn('《会议 555000111》', reply)
-        self.assertIn('订阅 无', reply)
+        self.assertIn('「会议 555000111」', reply)
+        self.assertIn('订阅：无', reply)
         bus.user_says(bed.service, 'ou_A', '结束会议')
 
 

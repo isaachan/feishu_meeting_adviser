@@ -353,6 +353,56 @@ class TestBed:
             self.token_submit(open_id, 'jira', 'stub-jira-token')
         return payload['authorize_url']
 
+    def gui_device_token(self, open_id):
+        """Device-flow login for ``open_id`` exactly as the GUI client does:
+        start -> stub scan (code IS the open_id) -> poll until completed."""
+        from urllib import error, parse
+        base = f'http://127.0.0.1:{self.ports["api"]}'
+        opener = request.build_opener(request.ProxyHandler({}))
+        req = request.Request(base + '/gui/login/start', data=b'{}', method='POST',
+                              headers={'Content-Type': 'application/json'})
+        with opener.open(req, timeout=10) as response:
+            started = json.loads(response.read())
+        state = parse.parse_qs(parse.urlsplit(started['login_url']).query)['state'][0]
+        callback = (f'http://127.0.0.1:{self.ports["auth"]}/oauth/callback?'
+                    + parse.urlencode({'code': open_id, 'state': state}))
+        with opener.open(request.Request(callback, method='GET'), timeout=10) as page:
+            assert '登录成功' in page.read().decode(), 'gui scan failed'
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            poll_url = (base + '/gui/login/poll?'
+                        + parse.urlencode({'device_code': started['device_code']}))
+            try:
+                with opener.open(request.Request(poll_url, method='GET'), timeout=10) as r:
+                    poll = json.loads(r.read())
+            except error.HTTPError:
+                poll = {}
+            if poll.get('status') == 'completed':
+                return poll['device_token']
+            time.sleep(0.1)
+        raise AssertionError('gui device login poll timed out')
+
+    def recorder_args(self, owner, meeting_no):
+        """Fetch a live session's recorder args the way the GUI client does
+        (device login -> /gui/sessions -> recorder_command_args). Returns
+        ``(session_id, stream_token, event)``. The bot no longer forwards these
+        args in its DM; this mirrors the real capture client's discovery path."""
+        device_token = self.gui_device_token(owner)
+        opener = request.build_opener(request.ProxyHandler({}))
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            req = request.Request(f'http://127.0.0.1:{self.ports["api"]}/gui/sessions',
+                                  method='GET',
+                                  headers={'Authorization': f'Bearer {device_token}'})
+            with opener.open(req, timeout=10) as response:
+                snapshot = json.loads(response.read())
+            for item in snapshot['sessions']:
+                if item['meeting_no'] == meeting_no and item.get('recorder_command_args'):
+                    args = item['recorder_command_args']
+                    return args['session'], args['token'], args['event']
+            time.sleep(0.1)
+        raise AssertionError(f'no GUI-discoverable session for {owner}/{meeting_no}')
+
     def nsdp_submit(self, open_id, token):
         """Real NSDP submission flow over HTTP: start -> paste form -> saved."""
         return self.token_submit(open_id, 'nsdp', token)
@@ -405,7 +455,6 @@ class TestBed:
     @staticmethod
     def ingest_start(ws, session_id, token, *, source='loopback', resume=False,
                      first_sequence=1, event='cal_stub/evt_123456789'):
-        import struct
         ws.send(json.dumps({'type': 'start', 'protocol': 1, 'session_id': session_id,
                             'stream_token': token, 'source': source, 'event': event,
                             'resume': resume, 'first_sequence': first_sequence,

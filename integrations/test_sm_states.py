@@ -6,7 +6,6 @@ join idempotence, and the absolute drain deadline with a dead bot.
 Occurrence identity / paused transitions / STT isolation are covered by
 advisor unit suites (test_domain, test_observation, test_ingest).
 """
-import re
 import time
 import unittest
 
@@ -63,10 +62,10 @@ class StateMatrixTests(unittest.TestCase):
         _ack, first = bus.join_says(bed.service, 'ou_A', '入会 244000111')
         self.assertIn('已入会', first)
         _ack, second = bus.join_says(bed.service, 'ou_C', '入会 244000111')
-        self.assertIn('已由其他人启动', second)
+        self.assertIn('已由其他人开启', second)
         # same owner re-join stays idempotent
         _ack, again = bus.join_says(bed.service, 'ou_A', '入会 244000111')
-        self.assertIn('沿用原会话', again)
+        self.assertIn('已入会', again)
         owners = [s['owner_open_id'] for s in self.admin_sessions()
                   if s['meeting_no'] == '244000111']
         self.assertEqual(owners, ['ou_A'])
@@ -78,7 +77,7 @@ class StateMatrixTests(unittest.TestCase):
         _ack, reply = bus.join_says(bed.service, 'ou_D', '入会 244000222')
         self.assertIn('已入会', reply)
         _ack, conflict = bus.join_says(bed.service, 'ou_D', '入会 244000333')
-        self.assertIn('已归属另一场', conflict)
+        self.assertIn('请先结束或退出', conflict)
         # 结束后可再建（不同实例）——占位只到 ended 为止
         bus.user_says(bed.service, 'ou_D', '结束会议 244000222')
         self.assertTrue(self.wait_until(lambda: all(
@@ -92,9 +91,7 @@ class StateMatrixTests(unittest.TestCase):
         bed.authorize('ou_H')
         self.track('ou_H', '244000444')
         _ack, reply = bus.join_says(bed.service, 'ou_H', '入会 244000444')
-        session_id = re.search(r"--session '([^']+)'", reply).group(1)
-        token = re.search(r"--token '([^']+)'", reply).group(1)
-        event = re.search(r"--event '([^']+)'", reply).group(1)
+        session_id, token, event = bed.recorder_args('ou_H', '244000444')
         # kill the bot poller FIRST so generated replies stay pending
         bed.service.stop_polling()
         ws = bed.ingest_connect(session_id, token)

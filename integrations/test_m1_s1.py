@@ -38,15 +38,13 @@ class S1MainChainTests(unittest.TestCase):
         bed.authorize('ou_A')
         _, reply = bus.join_says(bed.service, 'ou_A', '入会 123456789')
         self.assertIn('已入会', reply)
-        self.assertIn('recorder real', reply)
-        # red line: no user credentials in the command text
+        self.assertIn('请确保会参谋客户端已开启', reply)
+        # red line: no user credentials leak into the chat reply
         self.assertNotIn('stub-ou_A', reply)
         self.assertNotIn('u-at-', reply)
 
-        # 3) extract the command args and run a fake recorder over ingest
-        session_id = re.search(r"--session '([^']+)'", reply).group(1)
-        token = re.search(r"--token '([^']+)'", reply).group(1)
-        event = re.search(r"--event '([^']+)'", reply).group(1)
+        # 3) discover the session args the way the GUI client does, then stream
+        session_id, token, event = bed.recorder_args('ou_A', '123456789')
         self.assertTrue(session_id.startswith('s-'))
         self.assertEqual(event, 'cal_stub/evt_123456789')
 
@@ -88,7 +86,7 @@ class S1MainChainTests(unittest.TestCase):
                                 '入会 https://vc.feishu.cn/j/987654321?pwd=abc')
         self.assertIn('已入会', reply)
         _, reply = bus.join_says(bed.service, 'ou_B', '入会 987654321')
-        self.assertIn('已在服务中', reply)  # duplicate join idempotence
+        self.assertIn('已入会', reply)  # duplicate join stays idempotent
 
 
 if __name__ == '__main__':
