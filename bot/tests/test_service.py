@@ -5,12 +5,8 @@ import time
 import unittest
 
 from bot.advisor_client import AdvisorApiError
-from bot.commands import CommandError, parse_command, parse_meeting_reference, strip_mentions
-from bot.recorder_command import CommandRenderError, render
+from bot.commands import CommandError, parse_command, parse_meeting_reference
 from bot.service import BotService
-
-ARGS = {'session': 's-3f9c2a', 'event': 'cal_x/evt_y',
-        'url': 'ws://127.0.0.1:8400/ingest', 'token': 'st-abcdefghijklmnop123456'}
 
 
 class MeetingReferenceTests(unittest.TestCase):
@@ -68,44 +64,6 @@ class ParseCommandTests(unittest.TestCase):
         self.assertIsNone(parse_command('@会参谋 在吗'))
 
 
-class RenderCommandTests(unittest.TestCase):
-    def test_renders_appendix_template(self):
-        text = render(ARGS)
-        self.assertIn("--session 's-3f9c2a'", text)
-        self.assertIn("--url 'ws://127.0.0.1:8400/ingest'", text)
-        self.assertNotIn('--mic', text)
-
-    def test_event_accepts_real_feishu_id_shapes(self):
-        # real calendar/event ids carry . @ ~ and inner slashes (2026-11-11 probe)
-        for event in ('cal_abc/evt_xyz', 'user@feishu.cn/evt.ics-1',
-                       'cal.primary/evt_outer/inner~part'):
-            text = render(ARGS | {'event': event})
-            self.assertIn(f"--event '{event}'", text)
-
-    def test_mic_and_speaker(self):
-        text = render(ARGS | {'mic': True})
-        self.assertIn('--mic', text)
-        self.assertNotIn('--mic-speaker', text)  # default label omitted
-        text = render(ARGS | {'mic': True, 'mic_speaker': '张三'})
-        self.assertIn("--mic-speaker '张三'", text)
-
-    def test_rejects_unknown_or_dangerous_values(self):
-        with self.assertRaises(CommandRenderError):
-            render(ARGS | {'session': 'local:abc'})
-        with self.assertRaises(CommandRenderError):
-            render(ARGS | {'token': "st-ok'; rm -rf /"})
-        with self.assertRaises(CommandRenderError):
-            render(ARGS | {'url': 'wss://127.0.0.1:8400/ingest'})
-        with self.assertRaises(CommandRenderError):
-            render(ARGS | {'extra': 'x'})
-
-    def test_red_line_no_user_credentials_in_text(self):
-        known_secrets = {'u-at-user-access-token', 'r-refresh-token-xyz'}
-        text = render(ARGS | {'mic': True})
-        for secret in known_secrets:
-            self.assertNotIn(secret, text)
-
-
 class FakeTransport:
     def __init__(self):
         self.replies = []
@@ -124,8 +82,7 @@ class FakeAdvisor:
     def __init__(self):
         self.calls = []
         self.session = {'session_id': 's-abc123', 'meeting_no': '123456789',
-                         'title': '周会', 'phase': 'running', 'existing': False,
-                        'recorder_command_args': dict(ARGS)}
+                         'title': '周会', 'phase': 'running', 'existing': False}
         self.error = None
         self.subscriptions = []
         self.pending = []
@@ -137,7 +94,6 @@ class FakeAdvisor:
         if self.error:
             raise self.error
         result = dict(self.session)
-        result['recorder_command_args'] = dict(self.session['recorder_command_args'])
         return result
 
     def list_sessions(self, owner):
