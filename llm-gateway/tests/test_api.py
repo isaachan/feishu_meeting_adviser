@@ -116,6 +116,9 @@ class ApiTests(unittest.TestCase):
     def test_validation_and_cancel_over_http(self):
         status, body = self.request('POST', '/v1/inference-jobs', {'schema_version': 9})
         self.assertEqual((status, body['error']['code']), (422, 'invalid_request'))
+        # Stop workers so the task stays queued; otherwise the fast fake backend
+        # can finish before the cancel request and legitimately return succeeded.
+        self.scheduler.stop()
         self.request('POST', '/v1/inference-jobs', payload('req-cancel-1'))
         status, body = self.request('POST', '/v1/inference-jobs/req-cancel-1/cancel')
         self.assertEqual((status, body['state']), (200, 'cancelled'))
