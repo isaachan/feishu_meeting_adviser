@@ -45,6 +45,26 @@ advisor 建会话始终需要 NSDP/Jira 凭据（即使 `--backend fake`）。�
 - 提示词在线编辑；保存为原子写。运行中禁止修改提示词或切换模型。
 - 切换模型会重启 gateway；NSDP catalog 按 session 冻结，首个决策可能较慢。
 
+## 飞书文档抓取（可选）
+
+用个人飞书 web session 抓取 docx/wiki 正文，避免手工复制：
+
+```bash
+# 一次性：my-lark 在 stable profile 默认关闭，dev profile 可用
+noam features enable my-lark        # 或每条命令加 --noam-profile dev
+noam my-lark auth qr-login
+
+# 追加到场景 documents[]（推荐）
+.venv-local/bin/prompt-studio doc fetch --url 'https://nio.feishu.cn/docx/...' \
+  --scene meeting.json --noam-profile dev
+
+# 或只导出 markdown，再用 --document 重放
+.venv-local/bin/prompt-studio doc fetch --url 'https://nio.feishu.cn/wiki/...' \
+  --output doc.md --noam-profile dev
+```
+
+只接受 `https://*.feishu.cn` / `https://*.larksuite.com` 的 `/docx/`、`/wiki/` URL；URL 作为单个 argv 传给 noam，不经 shell。studio 不保存 session cookie。抓取失败时命令返回非零并提示配置；可退回 `replay --document <file>` 手填。
+
 ## 隔离 server
 
 UI 只监听 `127.0.0.1`，不要在公网直接暴露。远端部署：

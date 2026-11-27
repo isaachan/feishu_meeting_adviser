@@ -11,6 +11,8 @@ import sys
 
 from . import __version__
 from .clients import ClientError
+from .doc_fetch import (DocFetchError, append_scene_document, fetch_doc,
+                        write_text)
 from .replay import ReplayError, ReplayRun
 from .results import ReplayResult
 from .stack import PROMPT_FILES, ROOT, Stack, StackConfig, StackError
@@ -88,6 +90,25 @@ def build_parser() -> argparse.ArgumentParser:
     web.add_argument('--nsdp-token-file', type=Path, default=None)
     web.add_argument('--jira-token-file', type=Path, default=None)
     web.add_argument('--debug', action='store_true')
+
+    doc = sub.add_parser('doc', help='飞书文档工具')
+    doc_sub = doc.add_subparsers(dest='doc_command', required=True)
+    fetch = doc_sub.add_parser(
+        'fetch', help='用个人 noam/my-lark 抓取飞书文档为 markdown')
+    fetch.add_argument('--url', required=True, help='飞书 docx/wiki URL')
+    fetch.add_argument('--title', default=None, help='覆盖文档标题')
+    fetch.add_argument('--output', type=Path, default=None,
+                       help='把正文写入文件（markdown）')
+    fetch.add_argument('--scene', type=Path, default=None,
+                       help='把文档追加到场景 JSON 的 documents[]')
+    fetch.add_argument('--account', default=None, help='my-lark 账号名')
+    fetch.add_argument('--noam', type=Path, default=None,
+                       help='noam 可执行文件路径')
+    fetch.add_argument('--noam-profile', default=None,
+                       help='传给 noam 的 NOAM_PROFILE（如 dev）')
+    fetch.add_argument('--timeout', type=float, default=90.0)
+    fetch.add_argument('--json', action='store_true', help='输出文档 JSON')
+    fetch.add_argument('--debug', action='store_true')
     return parser
 
 
@@ -103,6 +124,8 @@ def main(argv: list[str] | None = None) -> int:
             return command_submit_tokens(args)
         if args.command == 'serve':
             return command_serve(args)
+        if args.command == 'doc':
+            return command_doc_fetch(args)
         parser.error(f'unknown command: {args.command}')
     except KeyboardInterrupt:
         print('\nprompt-studio: interrupted', file=sys.stderr)
@@ -163,6 +186,41 @@ def command_submit_tokens(args) -> int:
     print(f'owner: {owner}')
     print('submitted: ' + ', '.join(providers))
     print(f'data-dir: {data_dir}')
+    return 0
+
+
+def command_doc_fetch(args) -> int:
+    if args.timeout <= 0:
+        raise CommandError('--timeout 必须大于 0')
+    try:
+        doc = fetch_doc(args.url, noam=args.noam, account=args.account,
+                        profile=args.noam_profile, timeout=args.timeout)
+        title = doc.title if args.title is None else args.title.strip()
+        if not title:
+            raise CommandError('文档标题不能为空')
+        scene_path = output_path = None
+        if args.scene is not None:
+            scene_path = append_scene_document(args.scene, title, doc.text)
+        if args.output is not None:
+            output_path = write_text(args.output, doc.text)
+    except DocFetchError as exc:
+        raise CommandError(str(exc)) from None
+    payload = {'title': title, 'text': doc.text, 'url': doc.url}
+    if scene_path is not None:
+        payload['scene'] = str(scene_path)
+    if output_path is not None:
+        payload['output'] = str(output_path)
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    elif scene_path is not None or output_path is not None:
+        if scene_path is not None:
+            print(f'added: {title} -> {scene_path}')
+        if output_path is not None:
+            print(f'wrote: {output_path}')
+    else:
+        sys.stdout.write(doc.text)
+        if not doc.text.endswith('\n'):
+            sys.stdout.write('\n')
     return 0
 
 

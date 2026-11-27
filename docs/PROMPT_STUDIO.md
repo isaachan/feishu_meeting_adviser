@@ -53,7 +53,7 @@ prompt-studio/
 ├── README.md
 ├── src/prompt_studio/
 │   ├── __init__.py
-│   ├── __main__.py        # CLI: init / replay / serve
+│   ├── __main__.py        # CLI: init / replay / serve / doc fetch
 │   ├── transcript.py      # admin TXT 解析、可编辑模型、JSON 场景
 │   ├── material.py        # advisor sqlite material patch
 │   ├── clients.py         # auth / advisor HTTP 客户端
@@ -61,6 +61,7 @@ prompt-studio/
 │   ├── fake_stt.py        # 脚本化 STT WS 服务
 │   ├── ingest.py          # ingest WS 客户端（start/frame/stream_end）
 │   ├── replay.py          # 编排：建会话/patch/喂字幕/等决策/读结果
+│   ├── doc_fetch.py       # 个人 noam/my-lark 抓取飞书文档
 │   ├── results.py         # decision/log 读取与对照
 │   ├── web.py             # 单次 run 的后台 worker 与 step 视图
 │   ├── web_app.py         # UI 应用状态：parse/prompt/model/run
@@ -178,9 +179,11 @@ admin-site 导出的 TXT（`admin-site/src/admin_site/static/index.html`）：
   - 根 README 模块列表补充。
   - 验收：CI 路径触发正确；本地 `ruff/pyright/unittest` 与 `integrations` 全绿。
 
-- [ ] **PS8 ·（可选）飞书文档抓取**
-  - `prompt-studio doc fetch --url <feishu-doc>` 走个人 `noam`/my-lark，把正文写入场景 `documents[]`。
-  - 验收：能抓一篇文档并注入 material；失败时降级为手填。默认不阻塞 PS1–PS7。
+- [x] **PS8 ·（可选）飞书文档抓取**
+  - `prompt-studio doc fetch --url <feishu-doc> [--scene scene.json] [--output doc.md] [--json]` 走个人 `noam my-lark docs +fetch`，只接受 HTTPS 的 `*.feishu.cn`/`*.larksuite.com` docx/wiki URL。
+  - 子进程不经 shell；默认输出 markdown，`--scene` 追加到 `documents[]`，`--output` 写文件；失败时提示手填 `--document`。
+  - my-lark 在 stable profile 默认关闭：用 `--noam-profile dev`，或 `noam features enable my-lark` 后完成 `noam my-lark auth qr-login`。
+  - 验收：fake noam 覆盖 URL/参数/失败提示/场景追加；无会话时清晰失败，不阻塞 PS1–PS7。
 
 ## 11. 风险与已知边界
 
