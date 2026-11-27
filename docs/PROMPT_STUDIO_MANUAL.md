@@ -10,7 +10,7 @@
 - 仓库：`feishu_meeting_adviser`
 - Python 3.11+
 - 依赖模块：`auth`、`advisor`、`llm-gateway`、`prompt-studio`
-- 运行 replay/serve：需要 `opencode`、OpenCode `auth.json`、真实 NSDP/Jira token
+- 运行 replay/serve：需要 `opencode`、OpenCode `auth.json`、`provider.json`（默认模型 `nio/...` 必需）、真实 NSDP/Jira token
 - 无模型自检：仓库自动化测试内部使用 fake backend，不需要模型
 - 飞书文档抓取（可选）：`noam` + 个人飞书 web session
 
@@ -53,12 +53,13 @@ cd ..
 data/prompt-studio/
 ├── auth/                 # auth stub 的私有状态
 ├── prompts/              # agent_prompt.txt / snapshot_rules.txt / reply_markdown_rules.txt
+├── provider.json         # 自定义 provider 定义；默认模型 nio 必需
 ├── gateway.sqlite3       # gateway 缓存
 ├── logs/                 # 常驻服务日志
 └── runs/<run-id>/        # 每次 replay 的 advisor DB / 日志
 ```
 
-`init` 从已安装的 `llm-gateway` 复制提示词；已有文件默认保留，`--force` 才覆盖。
+`init` 从已安装的 `llm-gateway` 复制提示词；已有文件默认保留，`--force` 才覆盖。`init` 不会生成 `provider.json`，需要按 [3.3](#33-编写-providerjson默认模型必需) 手动创建。
 
 ### 3.2 提交 NSDP/Jira 凭据
 
@@ -71,6 +72,48 @@ advisor 建会话前会校验 NSDP/Jira 凭据。提交真实模型所需凭据�
 ```
 
 token 文件建议 `chmod 600`。凭据会持久化在该 data-dir 的 `auth/` 下，后续 `replay` / `serve` 直接复用。token 不会回显、不会写入结果或日志。
+
+### 3.3 编写 provider.json（默认模型必需）
+
+`prompt-studio` 默认模型是 `nio/DeepSeek-V4.1-Flash`。`nio` 不在 OpenCode 内置模型目录中，而且 gateway 会启动隔离的 OpenCode 实例，**不会读取** `~/.config/opencode/opencode.jsonc`。因此 `serve` 和 `replay` 都必须显式传入：
+
+```bash
+--opencode-provider-config ./data/prompt-studio/provider.json
+```
+
+省略时进程仍可能启动，但第一次决策会在 `verify_provider` 阶段失败，表现为 `backend_unavailable`。以下路径以仓库根目录为当前目录；如果 `--data-dir` 不是默认目录，provider 文件也要放到对应目录，或改成绝对路径。
+
+创建 `data/prompt-studio/provider.json`，内容如下（`nio` 是 provider 名，必须与 `--model nio/...` 的前缀一致）：
+
+```json
+{
+  "nio": {
+    "npm": "@ai-sdk/openai-compatible",
+    "name": "NIO ModelSight",
+    "api": "https://model.nioint.com/v1",
+    "models": {
+      "DeepSeek-V4.1-Flash": {
+        "name": "DeepSeek V4.1 Flash"
+      }
+    }
+  }
+}
+```
+
+API key 放在 OpenCode `auth.json`，不要写进 `provider.json`。`prompt-studio` 默认读取 `~/.local/share/opencode/auth.json`，也可以用 `--opencode-auth` 指定：
+
+```json
+{
+  "nio": {
+    "type": "api",
+    "key": "<NIO_MODELSIGHT_API_KEY>"
+  }
+}
+```
+
+如果希望 key 走环境变量，在 `provider.json` 的 `nio` 对象里追加 `"options": { "apiKey": "{env:MODELSIGHT_API_KEY}" }`，并在启动前 `export MODELSIGHT_API_KEY=...`；此时 `auth.json` 仍必须存在且可读。两种方式选一种即可。
+
+文件要求：普通文件（不能是符号链接）、不超过 100 KB、顶层是 `{provider: object}`，且必须包含当前 `--model` 使用的 provider。建议 `chmod 600 data/prompt-studio/provider.json`，并确认 `data/prompt-studio/` 不被提交到 git。
 
 ## 4. 准备输入
 
@@ -130,12 +173,12 @@ Web/CLI 可保存和复用场景：
   --description "预算评审" \
   --model nio/DeepSeek-V4.1-Flash \
   --opencode-auth ~/.local/share/opencode/auth.json \
-  --opencode-provider-config /path/to/provider.json
+  --opencode-provider-config ./data/prompt-studio/provider.json
 ```
 
 - `opencode` 必须在 `PATH` 中。CLI 固定使用 `opencode`，没有 `--backend` 选项。
-- `--opencode-auth` 指向包含对应 provider API key 的 `auth.json`。
-- 自定义 provider 需要 `--opencode-provider-config`。
+- `--opencode-auth` 指向包含对应 provider API key 的 `auth.json`；默认读取 `~/.local/share/opencode/auth.json`。
+- **`--opencode-provider-config` 不是可选项**：默认模型 `nio/...` 每次 `replay`/`serve` 都要指向 `provider.json`，写法见 [3.3](#33-编写-providerjson默认模型必需)。
 - 真实 NSDP/Jira token 必须已提交，否则 scoped tool 查询会失败。
 
 ### 5.2 auto / paced
@@ -160,6 +203,8 @@ prompt-studio replay ... --mode paced --paced-seconds 5
 - `--mode`：`auto` 一次灌完；`paced` 按间隔发送。
 - `--paced-seconds`：paced 模式每行间隔秒数，默认 5；0 表示尽快。
 - `--data-dir` / `--prompt-dir`：覆盖默认目录。
+- `--opencode-auth`：OpenCode `auth.json` 路径；默认 `~/.local/share/opencode/auth.json`。
+- `--opencode-provider-config`：自定义 provider 定义 JSON；默认模型 `nio/...` 必填，见 [3.3](#33-编写-providerjson默认模型必需)。
 - `--nsdp-token-file` / `--jira-token-file`：本次运行临时提交凭据。
 
 ## 6. Web UI
@@ -167,10 +212,12 @@ prompt-studio replay ... --mode paced --paced-seconds 5
 ### 6.1 默认：只绑 loopback
 
 ```bash
-.venv-local/bin/prompt-studio serve --port 8765
+.venv-local/bin/prompt-studio serve \
+  --port 8765 \
+  --opencode-provider-config ./data/prompt-studio/provider.json
 ```
 
-本机打开 `http://127.0.0.1:8765`。远端通过 SSH 隧道：
+本机打开 `http://127.0.0.1:8765`。默认读取 `~/.local/share/opencode/auth.json`；auth 在别处时补 `--opencode-auth <path>`。远端通过 SSH 隧道：
 
 ```bash
 ssh -N -L 8765:127.0.0.1:8765 user@server
@@ -181,7 +228,8 @@ ssh -N -L 8765:127.0.0.1:8765 user@server
 
 ```bash
 .venv-local/bin/prompt-studio serve \
-  --host 0.0.0.0 --port 8765
+  --host 0.0.0.0 --port 8765 \
+  --opencode-provider-config ./data/prompt-studio/provider.json
 ```
 
 启动后会打印：
@@ -212,13 +260,13 @@ prompt-studio: http://<server-ip>:8765
 
 ### 6.4 启动配置
 
-`serve` 支持与 `replay` 相同的模型/token 参数；默认模型为 `nio/DeepSeek-V4.1-Flash`。paced 间隔在 Web UI 上设置：
+`serve` 支持与 `replay` 相同的模型/token 参数；默认模型为 `nio/DeepSeek-V4.1-Flash`。paced 间隔在 Web UI 上设置。**使用默认模型时，每次启动 `serve` 都必须带 `--opencode-provider-config`**，否则会在 `verify_provider` 阶段报 `backend_unavailable`：
 
 ```bash
 .venv-local/bin/prompt-studio serve \
   --model nio/DeepSeek-V4.1-Flash \
   --opencode-auth ~/.local/share/opencode/auth.json \
-  --opencode-provider-config /path/to/provider.json \
+  --opencode-provider-config ./data/prompt-studio/provider.json \
   --nsdp-token-file /path/nsdp.txt \
   --jira-token-file /path/jira.txt
 ```
@@ -294,6 +342,7 @@ CLI `--json` 与 Web 结果都来自 advisor DB 的只读查询：
 | `healthz timeout` / advisor exited | 看结果里的 advisor log 或 `data/prompt-studio/logs/`；常见是端口/依赖/opencode 启动失败。 |
 | `captions did not land` | fake STT/ingest 未连通或 advisor 未订阅；看 advisor log 与 STT 连接。 |
 | `decision not settled` | 模型慢/超时/工具卡住；看 job timings、gateway 日志和 advisor log。 |
+| `failed_stage=verify_provider` / `backend_unavailable` | 检查 `replay`/`serve` 是否带 `--opencode-provider-config ./data/prompt-studio/provider.json`；确认 `provider.json` 含 `nio`、`auth.json` 含 `nio` 的 `type=api` key。 |
 | 有字幕但没有 reply | 先看 `control` 与 `pending_reply`；`ignore`/待审批是正常决策。 |
 | 改了提示词不生效 | 运行中禁止编辑；保存后开新 run 最稳。确认三个 prompt 文件是一套。 |
 | 切换模型后失败 | 确认 `opencode`、auth.json、provider config 和 model id；gateway 会重启。 |
