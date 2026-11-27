@@ -114,17 +114,21 @@ def main() -> None:
                                    source_connected=ingest.source_connected,
                                    nsdp=nsdp_service,
                                    meeting_observer=meeting_observer)
+    docs_fetcher = None
     if args.calendar == 'stub' or args.calendar_stub:
         calendar_validator = StubCalendarValidator(args.calendar_stub_description)
     else:
         from .calendar import FeishuCalendarValidator
+        from .feishu_docs import FeishuDocsFetcher
         calendar_validator = FeishuCalendarValidator(HttpAuthClient(args.auth_url))
+        docs_fetcher = FeishuDocsFetcher(auth_client)
     api = AdvisorApi(store, supervisor, auth_client=auth_client,
                       calendar_validator=calendar_validator,
                       ingest_url=args.ingest_url,
                       approval_ttl_s=settings.approval_ttl_s,
                       drain_deadline_s=settings.drain_deadline_s,
-                      idle_timeout_s=settings.idle_timeout_s)
+                      idle_timeout_s=settings.idle_timeout_s,
+                      docs_fetcher=docs_fetcher)
     stop_ingest = start_ingest_thread(ingest)
     supervisor.start()
     server = build_api_server(api, host=args.api_host, port=args.api_port)

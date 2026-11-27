@@ -10,6 +10,7 @@ from urllib import error, parse, request
 
 from advisor.api import AdvisorApi, CalendarError, StubCalendarValidator, build_api_server
 from advisor.auth_client import AuthorizationRequired, AuthUnavailable
+from advisor.feishu_docs import DocsFetch
 from advisor.models import Caption
 from advisor.store import SessionStore
 
@@ -62,6 +63,19 @@ class SupervisorSpy:
         self.started.append(session_id)
 
 
+class FakeDocsFetcher:
+    def __init__(self):
+        self.documents = []
+        self.partial = False
+        self.reauthorize = False
+        self.calls = []
+
+    def fetch(self, owner, description):
+        self.calls.append((owner, description))
+        return DocsFetch(documents=list(self.documents), partial=self.partial,
+                         reauthorize=self.reauthorize)
+
+
 class ApiBase(unittest.TestCase):
     def setUp(self):
         self.tmp = TemporaryDirectory()
@@ -73,9 +87,11 @@ class ApiBase(unittest.TestCase):
         self.auth = FakeAuth()
         self.calendar = FakeCalendar()
         self.spy = SupervisorSpy()
+        self.docs = FakeDocsFetcher()
         self.api = AdvisorApi(self.store, self.spy, auth_client=self.auth,
                               calendar_validator=self.calendar,
-                              ingest_url='ws://127.0.0.1:8400/ingest')
+                              ingest_url='ws://127.0.0.1:8400/ingest',
+                              docs_fetcher=self.docs)
         self.server = build_api_server(self.api, host='127.0.0.1', port=0)
         self.port = self.server.server_address[1]
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -314,6 +330,40 @@ class CreateSessionTests(ApiBase):
         self.assertEqual(self.spy.started, [body['session_id']])
         record = self.store.materials(body['session_id'])
         self.assertEqual(record['description'], '日历描述')
+
+    def test_document_material_is_stored_on_new_session(self):
+        self.docs.documents = [{'kind': 'docx', 'title': '', 'url': 'https://x/docx/a',
+                                'text': '文档正文', 'truncated': False}]
+        status, body = self.join(key='docs-new')
+        self.assertEqual(status, 200)
+        record = self.store.materials(body['session_id'])
+        self.assertEqual(record['state'], 'ready')
+        self.assertEqual(record['description'], '日历描述')
+        self.assertEqual(record['documents'], self.docs.documents)
+        self.assertEqual(self.docs.calls, [('ou_A', '日历描述')])
+
+    def test_partial_document_material_is_marked_partial(self):
+        self.docs.documents = [{'kind': 'wiki', 'title': '知识库', 'url': 'https://x/wiki/a',
+                                'text': '正文', 'truncated': False}]
+        self.docs.partial = True
+        status, body = self.join(key='docs-partial')
+        self.assertEqual(status, 200)
+        self.assertEqual(self.store.materials(body['session_id'])['state'], 'partial')
+
+    def test_missing_document_scope_still_joins_and_notifies_owner(self):
+        self.docs.reauthorize = True
+        self.docs.partial = True
+        status, body = self.join(key='docs-scope')
+        self.assertEqual(status, 200)
+        self.assertEqual(self.store.materials(body['session_id'])['state'], 'partial')
+        rows = self.store.db.execute(
+            'SELECT content,recipient_id,channel FROM outbox WHERE session_id=?',
+            (body['session_id'],)).fetchall()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['recipient_id'], 'ou_A')
+        self.assertEqual(rows[0]['channel'], 'im')
+        self.assertIn('重新授权飞书', rows[0]['content'])
+        self.assertIn('intent=docs:material', rows[0]['content'])
 
     def test_authorization_required_carries_url(self):
         self.auth.mode = 'missing'

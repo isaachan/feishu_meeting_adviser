@@ -14,6 +14,7 @@ from urllib import parse
 
 from .auth_client import AuthorizationRequired, AuthUnavailable
 from .errors import StateError, StorageError
+from .feishu_docs import DocsFetch
 from .persistence import meeting_instance_key
 from .store import SessionStore
 
@@ -124,11 +125,12 @@ class AdvisorApi:
     def __init__(self, store: SessionStore, supervisor, *,
                  auth_client, calendar_validator, ingest_url, host='127.0.0.1',
                  clock=time.time, email_domain='nio.com', approval_ttl_s: float = 1800,
-                 drain_deadline_s: float = 600, idle_timeout_s=900):
+                 drain_deadline_s: float = 600, idle_timeout_s=900, docs_fetcher=None):
         self.store = store
         self.supervisor = supervisor
         self.auth = auth_client
         self.calendar = calendar_validator
+        self.docs_fetcher = docs_fetcher
         self.ingest_url = ingest_url.rstrip('/')
         self.host = host
         self.clock = clock
@@ -219,11 +221,15 @@ class AdvisorApi:
                 raise ApiError(409, 'not_invited',
                                'supervisor is not on this occurrence invite list')
 
+        description = binding.get('description') or ''
+        documents = self._fetch_documents(owner, description)
         try:
             session, existing = self.store.create_session(
                 owner_open_id=owner, meeting_no=meeting_no,
                 title=binding['title'], event_calendar_id=binding['event_calendar_id'],
-                event_id=binding['event_id'], description=binding.get('description') or '',
+                event_id=binding['event_id'], description=description,
+                documents=documents.documents,
+                material_state='partial' if documents.partial else None,
                 now=self.clock(),
                 idle_timeout_s=self._effective_idle_timeout_s(),
                 instance_key=meeting_instance_key(
@@ -238,10 +244,39 @@ class AdvisorApi:
         assert session is not None
         if not existing:
             self.supervisor.start_session(session['session_id'])
+            if documents.reauthorize:
+                self._notify_docs_reauthorize(session['session_id'], owner)
         LOG.info('session created: session=%s meeting=%s owner=%s instance=%s existing=%s',
                  session['session_id'], meeting_no, owner,
                  session['meeting_instance_key'], existing)
         return self._session_response(session, existing=existing)
+
+    def _fetch_documents(self, owner, description):
+        """Best-effort document material; never blocks session creation."""
+        if self.docs_fetcher is None or not description:
+            return DocsFetch()
+        try:
+            return self.docs_fetcher.fetch(owner, description)
+        except Exception:  # noqa: BLE001 - material is background, not a gate
+            LOG.exception('feishu document material failed; degrading')
+            return DocsFetch(partial=True)
+
+    def _notify_docs_reauthorize(self, session_id, owner):
+        """One deduped nudge when the credential lacks a document scope."""
+        try:
+            url = self.auth.authorize_url(owner, 'docs:material')
+        except Exception:  # noqa: BLE001 - notice is best-effort
+            LOG.info('docs re-authorize link unavailable: session=%s', session_id)
+            url = None
+        content = '会参谋未能读取会议描述中的飞书文档背景。请重新授权飞书以启用文档读取。'
+        if url:
+            content += '\n' + url
+        try:
+            self.store.insert_owner_notice(
+                session_id, owner, content, now=self.clock(), dedupe_s=3600,
+                provider='feishu-docs')
+        except Exception:  # noqa: BLE001 - notice failure must not fail join
+            LOG.exception('docs re-authorize notice failed: session=%s', session_id)
 
     def _chat_invite_hit(self, owner, binding, caller_ids):
         """v2.6: invite proof via an invited chat group (lazy expansion).
