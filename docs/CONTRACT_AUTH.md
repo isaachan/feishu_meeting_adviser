@@ -26,7 +26,7 @@
 | 刷新 | `https://accounts.feishu.cn/oauth/v3/token` |
 | 身份 | `https://open.feishu.cn/open-apis/authen/v1/user_info` |
 
-- scopes（v1.6）：**BASE**（校验下限，存量与刷新必须满足）= `calendar:calendar:read`、`calendar:calendar.event:read`、`offline_access`；**请求集合**（授权/换取/刷新时实际申请）= BASE + `vc:meeting.meetingevent:read`（用户版，用于 advisor 会话观测轮询）。凭据记录校验（换取/刷新/读取）只要求 ⊇ BASE，多出的 scope 允许；因此新增 scope 不使存量凭据失效。
+- scopes（v1.7）：**BASE**（校验下限，存量与刷新必须满足）= `calendar:calendar:read`、`calendar:calendar.event:read`、`offline_access`；**请求集合**（授权/换取/刷新时实际申请）= BASE + `vc:meeting.meetingevent:read`（用户版，用于 advisor 会话观测轮询）+ `docx:document:readonly` + `wiki:wiki:readonly`（用于建会时读取会议描述中的飞书文档作为背景材料）。凭据记录校验（换取/刷新/读取）只要求 ⊇ BASE，多出的 scope 允许；因此新增 scope 不使存量凭据失效。**存量凭据没有新增的文档 scope**：advisor 侧检测到缺失时降级为只带会议描述建会，并给组织者发一次重新授权提示（1 小时去重），不阻塞入会。
 - redirect URI 必须与飞书应用后台注册值**精确匹配**（`https://<域名>/oauth/callback`）。
 - **红线**：user_access_token/refresh_token 绝不进入 IM 文本、不下发 laptop；内部 API 响应仅给 advisor，用后不留存。**v1.1 起红线同样覆盖 NSDP token（§8）。**
 - **v1.1**：`GET /credentials/{open_id}/token` 接受 `?provider=feishu|nsdp`（缺省 feishu，向后兼容）；飞书响应 `{access_token, expires_at, scopes}`，NSDP 响应 `{token, updated_at}`。

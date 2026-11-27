@@ -9,7 +9,8 @@ NSDP_SUBMIT_PATH = '/nsdp/submit'
 NSDP_INTENT = 'nsdp:token'
 GUI_LOGIN_INTENT = 'gui:login'
 BASE_SCOPES = ('calendar:calendar:read', 'calendar:calendar.event:read', 'offline_access')
-SCOPES = BASE_SCOPES + ('vc:meeting.meetingevent:read',)
+SCOPES = BASE_SCOPES + ('vc:meeting.meetingevent:read',
+                        'docx:document:readonly', 'wiki:wiki:readonly')
 MAX_FILE_BYTES = 65_536
 DEFAULT_STATE_TTL_S = 600
 DEFAULT_PORT = 8381

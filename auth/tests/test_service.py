@@ -116,6 +116,8 @@ class AuthorizeFlowTests(unittest.TestCase):
             self.assertEqual(query['code_challenge_method'], ['S256'])
             self.assertEqual(query['prompt'], ['consent'])
             self.assertIn('vc:meeting.meetingevent:read', query['scope'][0].split())
+            self.assertIn('docx:document:readonly', query['scope'][0].split())
+            self.assertIn('wiki:wiki:readonly', query['scope'][0].split())
             self.assertEqual(query['redirect_uri'], ['https://auth.internal/oauth/callback'])
             self.assertTrue((Path(tmp) / 'pending_states.json').exists())
 
