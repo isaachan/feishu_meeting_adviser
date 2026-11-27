@@ -49,7 +49,10 @@ class _JsonClient:
                 except ValueError:
                     return text
         except error.HTTPError as exc:
-            raw = exc.read()
+            try:
+                raw = exc.read()
+            finally:
+                exc.close()
             code, message = 'http_error', exc.reason or 'request failed'
             try:
                 payload = json.loads(raw or b'{}')

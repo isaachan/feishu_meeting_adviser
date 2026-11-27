@@ -148,7 +148,7 @@ admin-site 导出的 TXT（`admin-site/src/admin_site/static/index.html`）：
   - `clients.py`：auth authorize + token submit；advisor create/status/transcript/timings/end。
   - 验收：parser 覆盖头部/LLM/未知时间/续行/speaker 冒号；material patch 对最小 schema 生效；客户端错误映射。
 
-- [ ] **PS3 · 脚本化 fake STT + ingest keepalive**
+- [x] **PS3 · 脚本化 fake STT + ingest keepalive**
   - `fake_stt.py`：v2 协议；`started`/`final`/`stopped`/`error`；按 `source_id` 路由；可单步/自动发字幕。
   - `ingest.py`：`start` + 静音帧 + `stream_end`。
   - 验收：协议单测；advisor 能连上并落字幕。
