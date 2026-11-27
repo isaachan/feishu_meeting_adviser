@@ -54,16 +54,17 @@ prompt-studio/
 ├── src/prompt_studio/
 │   ├── __init__.py
 │   ├── __main__.py        # CLI: init / replay / serve
-│   ├── config.py          # 路径、端口、owner、模型、prompt dir
 │   ├── transcript.py      # admin TXT 解析、可编辑模型、JSON 场景
 │   ├── material.py        # advisor sqlite material patch
 │   ├── clients.py         # auth / advisor HTTP 客户端
-│   ├── stack.py           # 子进程：auth / gateway / advisor；healthz
+│   ├── stack.py           # 长驻子进程：auth / gateway / fake STT；healthz
 │   ├── fake_stt.py        # 脚本化 STT WS 服务
 │   ├── ingest.py          # ingest WS 客户端（start/frame/stream_end）
 │   ├── replay.py          # 编排：建会话/patch/喂字幕/等决策/读结果
 │   ├── results.py         # decision/log 读取与对照
-│   ├── web.py             # 极简 stdlib HTTP UI
+│   ├── web.py             # 单次 run 的后台 worker 与 step 视图
+│   ├── web_app.py         # UI 应用状态：parse/prompt/model/run
+│   ├── web_http.py        # stdlib HTTP 路由与服务启动
 │   └── static/index.html
 └── tests/
 ```
@@ -166,9 +167,10 @@ admin-site 导出的 TXT（`admin-site/src/admin_site/static/index.html`）：
   - `serve` 在 PS6 接入。
   - 验收：命令可跑通 fake backend；参数错误清晰；不泄露 token。
 
-- [ ] **PS6 · 极简 Web UI**
-  - `web.py` + `static/index.html`：导入/编辑 TXT、设描述/文档、prompt 目录、模型、step/auto、结果列表与 snapshot/decision 展示。
-  - 验收：路由单测；浏览器可完成一次 fake replay。
+- [x] **PS6 · 极简 Web UI**
+  - `web.py`/`web_app.py`/`web_http.py` + `static/index.html`：导入/编辑 TXT、设描述、prompt 编辑、模型切换、step/auto、结果与 snapshot/decision 展示。
+  - `prompt-studio serve --host 127.0.0.1 --port 8765`：只绑 loopback；prompt 原子写、运行中禁止改 prompt/模型。
+  - 验收：HTTP 路由单测覆盖 auto/step fake replay、prompt 读写/越界、模型切换；`tests/test_web.py` 全绿。
 
 - [ ] **PS7 · 隔离/文档/CI 接线**
   - `prompt-studio/README.md`：隔离 server 部署、token、SSH 隧道、常见问题。

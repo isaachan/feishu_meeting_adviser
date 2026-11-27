@@ -184,5 +184,42 @@ class ReplayArgumentTests(unittest.TestCase):
         self.assertEqual(len(transcript.human_turns), 2)
 
 
+class ServeTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.data_dir = Path(self.temp.name) / 'data'
+
+    def test_rejects_non_loopback_host(self):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = cli.main(['serve', '--host', '0.0.0.0',
+                             '--data-dir', str(self.data_dir)])
+        self.assertEqual(code, 1)
+        self.assertIn('127.0.0.1', err.getvalue())
+
+    def test_rejects_bad_port(self):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = cli.main(['serve', '--port', '70000',
+                             '--data-dir', str(self.data_dir)])
+        self.assertEqual(code, 1)
+        self.assertIn('port', err.getvalue())
+
+    def test_default_prompt_dir_is_seeded(self):
+        prompt_dir = cli._ensure_web_prompts(self.data_dir, None)
+        source = cli._gateway_prompts()
+        self.assertEqual(prompt_dir, self.data_dir / 'prompts')
+        for name in PROMPT_FILES:
+            self.assertEqual((prompt_dir / name).read_text(encoding='utf-8'),
+                             (source / name).read_text(encoding='utf-8'))
+
+    def test_explicit_prompt_dir_must_be_complete(self):
+        prompt_dir = Path(self.temp.name) / 'prompts'
+        prompt_dir.mkdir()
+        with self.assertRaises(cli.CommandError):
+            cli._ensure_web_prompts(self.data_dir, prompt_dir)
+
+
 if __name__ == '__main__':
     unittest.main()

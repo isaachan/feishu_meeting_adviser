@@ -74,6 +74,20 @@ def build_parser() -> argparse.ArgumentParser:
     submit.add_argument('--nsdp-token-file', type=Path, default=None)
     submit.add_argument('--jira-token-file', type=Path, default=None)
     submit.add_argument('--debug', action='store_true')
+
+    web = sub.add_parser('serve', help='启动本地 Web UI')
+    web.add_argument('--host', default='127.0.0.1')
+    web.add_argument('--port', type=int, default=8765)
+    web.add_argument('--data-dir', type=Path, default=None)
+    web.add_argument('--prompt-dir', type=Path, default=None)
+    web.add_argument('--owner', default=None)
+    web.add_argument('--model', default=None)
+    web.add_argument('--backend', choices=['fake', 'opencode'], default=None)
+    web.add_argument('--opencode-auth', type=Path, default=None)
+    web.add_argument('--opencode-provider-config', type=Path, default=None)
+    web.add_argument('--nsdp-token-file', type=Path, default=None)
+    web.add_argument('--jira-token-file', type=Path, default=None)
+    web.add_argument('--debug', action='store_true')
     return parser
 
 
@@ -87,6 +101,8 @@ def main(argv: list[str] | None = None) -> int:
             return command_replay(args)
         if args.command == 'submit-tokens':
             return command_submit_tokens(args)
+        if args.command == 'serve':
+            return command_serve(args)
         parser.error(f'unknown command: {args.command}')
     except KeyboardInterrupt:
         print('\nprompt-studio: interrupted', file=sys.stderr)
@@ -148,6 +164,57 @@ def command_submit_tokens(args) -> int:
     print('submitted: ' + ', '.join(providers))
     print(f'data-dir: {data_dir}')
     return 0
+
+
+def command_serve(args) -> int:
+    if args.host != '127.0.0.1':
+        raise CommandError('Web UI 只能绑定 127.0.0.1（请用 SSH 隧道访问）')
+    if not 0 <= args.port <= 65535:
+        raise CommandError('port 必须在 0-65535')
+    from .web_http import serve
+
+    data_dir = _data_dir(args)
+    owner = _owner(args)
+    backend = args.backend or os.environ.get('PROMPT_STUDIO_BACKEND') or 'opencode'
+    model = args.model or os.environ.get('PROMPT_STUDIO_MODEL') or DEFAULT_MODEL
+    prompt_dir = _ensure_web_prompts(data_dir, args.prompt_dir)
+    nsdp = _read_token(args.nsdp_token_file, 'NSDP_TOKEN')
+    jira = _read_token(args.jira_token_file, 'JIRA_TOKEN')
+    config = StackConfig(
+        root=ROOT, data_dir=data_dir, prompt_dir=prompt_dir, backend=backend,
+        model=model, owner=owner, opencode_auth=args.opencode_auth,
+        opencode_provider_config=args.opencode_provider_config)
+    stack = Stack(config)
+    try:
+        stack.start()
+        if nsdp or jira:
+            stack.ensure_owner(owner, nsdp_token=nsdp, jira_token=jira)
+        else:
+            stack.ensure_owner(owner)
+        serve(stack, args.host, args.port, prompt_dir, owner)
+    finally:
+        stack.stop()
+    return 0
+
+
+def _ensure_web_prompts(data_dir: Path, explicit: Path | None) -> Path:
+    prompt_dir = Path(explicit) if explicit else data_dir / 'prompts'
+    try:
+        prompt_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(prompt_dir, 0o700)
+    except OSError as exc:
+        raise CommandError(f'无法创建 prompt dir: {exc}') from None
+    missing = [name for name in PROMPT_FILES
+               if not (prompt_dir / name).is_file()]
+    if not missing:
+        return prompt_dir
+    if explicit is not None:
+        raise CommandError(f'prompt dir 缺少文件: {missing}')
+    source = _gateway_prompts()
+    for name in missing:
+        shutil.copyfile(source / name, prompt_dir / name)
+        os.chmod(prompt_dir / name, 0o600)
+    return prompt_dir
 
 
 def command_replay(args) -> int:

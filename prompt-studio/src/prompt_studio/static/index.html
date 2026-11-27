@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prompt Studio</title>
+<style>
+  :root { color-scheme: dark; --bg:#111417; --panel:#191e23; --line:#2c343c;
+          --text:#d9e0e6; --muted:#8d9aa6; --accent:#59a6ff; --warn:#ffb454;
+          --bad:#ff6b6b; --good:#57d38c; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font:13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  header { display:flex; gap:12px; align-items:center; flex-wrap:wrap;
+           padding:10px 16px; border-bottom:1px solid var(--line);
+           background:var(--panel); position:sticky; top:0; z-index:2; }
+  h1 { font-size:15px; margin:0 12px 0 0; }
+  main { display:grid; grid-template-columns: minmax(320px, 1fr) minmax(320px, 1fr);
+         gap:12px; padding:12px; align-items:start; }
+  section { background:var(--panel); border:1px solid var(--line);
+            border-radius:6px; padding:10px; margin-bottom:12px; }
+  h2 { font-size:13px; margin:0 0 8px; color:var(--muted); font-weight:600; }
+  textarea, input, select { width:100%; background:#0e1114; color:var(--text);
+            border:1px solid var(--line); border-radius:4px; padding:6px;
+            font:inherit; }
+  textarea { resize:vertical; }
+  button { background:#24303a; color:var(--text); border:1px solid var(--line);
+           border-radius:4px; padding:5px 10px; cursor:pointer; font:inherit; }
+  button:hover { border-color:var(--accent); }
+  button:disabled { opacity:.45; cursor:default; border-color:var(--line); }
+  button.primary { background:#1f4f80; border-color:#2f6fa8; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap;
+         margin:6px 0; }
+  .row > label { color:var(--muted); }
+  .grow { flex:1; min-width:160px; }
+  .muted { color:var(--muted); }
+  .pill { border:1px solid var(--line); border-radius:99px; padding:1px 8px;
+          color:var(--muted); }
+  .pill.running { color:var(--warn); border-color:var(--warn); }
+  .pill.done { color:var(--good); border-color:var(--good); }
+  .pill.error { color:var(--bad); border-color:var(--bad); }
+  #banner { display:none; margin:12px 16px 0; padding:8px 10px;
+            border:1px solid var(--bad); color:var(--bad); border-radius:4px;
+            white-space:pre-wrap; }
+  pre { margin:0; white-space:pre-wrap; overflow-wrap:anywhere;
+        background:#0e1114; border:1px solid var(--line); border-radius:4px;
+        padding:8px; max-height:360px; overflow:auto; }
+  .record { border-top:1px solid var(--line); padding:6px 0; }
+  .record:first-child { border-top:0; }
+  .who { color:var(--accent); }
+  .who.llm { color:var(--good); }
+  .card { border:1px solid var(--line); border-radius:4px; padding:8px;
+          margin:8px 0; background:#0e1114; }
+  .stat { display:flex; gap:14px; flex-wrap:wrap; color:var(--muted); }
+  code { color:var(--warn); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Prompt Studio</h1>
+  <span class="pill" id="run-state">idle</span>
+  <span class="muted">owner</span><code id="owner">-</code>
+  <span class="muted">backend</span><code id="backend">-</code>
+  <span class="muted">model</span>
+  <input id="model" style="width:240px" spellcheck="false">
+  <button id="apply-model">切换模型</button>
+</header>
+<div id="banner"></div>
+<main>
+  <div>
+    <section>
+      <h2>文字记录</h2>
+      <textarea id="transcript" rows="14" spellcheck="false"
+        placeholder="粘贴 admin-site 导出的“会参谋 · 文字记录”TXT"></textarea>
+      <div class="row">
+        <input id="title" class="grow" placeholder="标题（可选）">
+      </div>
+      <div class="row">
+        <input id="description" class="grow" placeholder="会议描述 / 背景（写入 material）">
+      </div>
+      <div class="row">
+        <label for="mode">模式</label>
+        <select id="mode" style="width:120px">
+          <option value="auto">auto</option>
+          <option value="step">step</option>
+        </select>
+        <button id="parse">解析</button>
+        <button id="start" class="primary">开始重放</button>
+        <button id="next" disabled>下一句</button>
+        <button id="finish" disabled>结束</button>
+      </div>
+      <div class="muted" id="parse-info">尚未解析</div>
+    </section>
+    <section>
+      <h2>提示词</h2>
+      <div class="row">
+        <select id="prompt-name" class="grow"></select>
+        <button id="save-prompt">保存</button>
+        <button id="reload-prompts">重载</button>
+      </div>
+      <textarea id="prompt-text" rows="16" spellcheck="false"></textarea>
+      <div class="muted" id="prompt-info"></div>
+    </section>
+  </div>
+  <div>
+    <section>
+      <h2>运行</h2>
+      <div class="stat" id="run-meta"><span>等待开始</span></div>
+      <div id="steps"></div>
+    </section>
+    <section>
+      <h2>结果</h2>
+      <div id="result" class="muted">尚无结果</div>
+    </section>
+  </div>
+</main>
+<script>
+'use strict';
+const $ = (id) => document.getElementById(id);
+const state = { run: null, prompts: {}, poll: null };
+
+function el(tag, attrs, ...children) {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(attrs || {})) {
+    if (key === 'class') node.className = value;
+    else if (key === 'text') node.textContent = value;
+    else node.setAttribute(key, value);
+  }
+  for (const child of children) {
+    if (child == null) continue;
+    node.append(child instanceof Node ? child : document.createTextNode(String(child)));
+  }
+  return node;
+}
+
+function showError(error) {
+  const banner = $('banner');
+  banner.textContent = error ? String(error.message || error) : '';
+  banner.style.display = error ? 'block' : 'none';
+}
+
+async function api(path, options) {
+  const response = await fetch(path, options);
+  let data = null;
+  try { data = await response.json(); } catch (_) { data = null; }
+  if (!response.ok) {
+    const message = data && (data.message || data.error)
+      ? `${data.error || response.status}: ${data.message || ''}`
+      : `HTTP ${response.status}`;
+    throw new Error(message);
+  }
+  return data;
+}
+
+function setBusy(busy) {
+  $('start').disabled = busy;
+  $('apply-model').disabled = busy;
+  $('save-prompt').disabled = busy;
+}
+
+async function refreshConfig() {
+  const config = await api('/api/config');
+  $('owner').textContent = config.owner;
+  $('backend').textContent = config.backend;
+  $('model').value = config.model;
+  setBusy(config.active);
+}
+
+async function loadPrompts() {
+  const data = await api('/api/prompts');
+  state.prompts = data.files || {};
+  const names = Object.keys(state.prompts).sort();
+  const select = $('prompt-name');
+  const current = select.value;
+  select.replaceChildren(...names.map((name) => el('option', { value: name, text: name })));
+  if (names.includes(current)) select.value = current;
+  showPrompt();
+  $('prompt-info').textContent = data.prompt_dir;
+}
+
+function showPrompt() {
+  const name = $('prompt-name').value;
+  $('prompt-text').value = state.prompts[name] || '';
+}
+
+async function parseTranscript() {
+  showError(null);
+  const data = await api('/api/parse', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      text: $('transcript').value,
+      title: $('title').value || null,
+      description: $('description').value || null,
+    }),
+  });
+  const human = data.turns.filter((turn) => turn.kind === 'human').length;
+  $('parse-info').textContent =
+    `解析成功：${data.turns.length} 条记录，${human} 条人类发言` +
+    (data.title ? `，标题 ${data.title}` : '');
+}
+
+async function startRun() {
+  showError(null);
+  const run = await api('/api/run/start', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      text: $('transcript').value,
+      title: $('title').value || null,
+      description: $('description').value || null,
+      mode: $('mode').value,
+    }),
+  });
+  applyRun(run);
+}
+
+async function nextStep() {
+  showError(null);
+  applyRun(await api('/api/run/next', { method: 'POST' }));
+}
+
+async function finishRun() {
+  showError(null);
+  applyRun(await api('/api/run/finish', { method: 'POST' }));
+}
+
+function jobSummary(job) {
+  const summary = job.snapshot_summary || {};
+  return `captions=${summary.captions || 0}` +
+    ` fresh=${(summary.fresh_input_keys || []).length}` +
+    ` reply_keys=${(summary.reply_allowed_keys || []).length}` +
+    ` pending=${summary.pending_reply ? 'yes' : 'no'}` +
+    ` context=${summary.meeting_context ? 'yes' : 'no'}`;
+}
+
+function renderRun(run) {
+  if (!run) return;
+  if (run.error) showError(run.error);
+  const active = ['opening', 'running', 'step'].includes(run.state);
+  setBusy(active);
+  $('start').disabled = active;
+  $('next').disabled = run.state !== 'step';
+  $('finish').disabled = !(active && run.mode === 'step');
+  $('transcript').readOnly = active;
+
+  const meta = $('run-meta');
+  meta.replaceChildren(
+    el('span', { text: `state: ${run.state}` }),
+    el('span', { text: `mode: ${run.mode || '-'}` }),
+    el('span', { text: `run: ${run.run_id || '-'}` }),
+    el('span', { text: `session: ${run.session_id || '-'}` }),
+  );
+
+  const steps = $('steps');
+  steps.replaceChildren();
+  for (const step of run.steps || []) {
+    steps.append(el('div', { class: 'card' },
+      el('div', { class: 'muted', text: `#${step.index} ${step.speaker || '未识别'}` }),
+      el('div', { text: step.text }),
+      el('div', { class: 'who llm', text: `decision: ${step.decision ? step.decision.control : step.job_state || '-'}` }),
+      el('div', { text: `reply: ${step.reply || '(无)'}` }),
+    ));
+  }
+  if (run.result) renderResult(run.result);
+}
+
+function renderResult(result) {
+  const root = $('result');
+  const complete = (result.jobs || []).filter((job) => job.state === 'complete');
+  const replies = (result.records || []).filter((record) => record.type === 'llm');
+  const head = el('div', { class: 'stat' },
+    el('span', { text: `jobs=${(result.jobs || []).length}` }),
+    el('span', { text: `complete=${complete.length}` }),
+    el('span', { text: `replies=${replies.length}` }),
+    el('span', { text: `session=${result.session_id}` }),
+    el('span', { text: `meeting=${result.meeting_no}` }),
+  );
+  const records = el('div', {});
+  for (const record of result.records || []) {
+    records.append(el('div', { class: 'record' },
+      el('span', { class: record.type === 'llm' ? 'who llm' : 'who',
+                   text: `${record.speaker || '未识别'}: ` }),
+      el('span', { text: record.text }),
+    ));
+  }
+  const jobs = el('div', {});
+  for (const job of result.jobs || []) {
+    const control = job.decision ? job.decision.control : '-';
+    const reply = job.decision ? job.decision.reply : '-';
+    jobs.append(el('div', { class: 'card' },
+      el('div', { class: 'muted', text: `generation ${job.generation} · ${job.state} · ${job.role_version}` }),
+      el('div', { text: `control: ${control}` }),
+      el('div', { text: `reply: ${reply || '(无)'}` }),
+      el('div', { class: 'muted', text: jobSummary(job) }),
+    ));
+  }
+  const material = result.material
+    ? el('pre', { text: JSON.stringify(result.material, null, 2) })
+    : el('div', { class: 'muted', text: 'material: (无)' });
+  root.replaceChildren(
+    head,
+    el('h2', { text: '记录' }), records,
+    el('h2', { text: '决策' }), jobs,
+    el('h2', { text: 'material' }), material,
+    el('div', { class: 'muted', text: `advisor log: ${result.advisor_log || '-'}` }),
+  );
+}
+
+function applyRun(run) {
+  state.run = run;
+  $('run-state').textContent = run.state;
+  $('run-state').className = `pill ${run.state === 'done' ? 'done'
+    : run.state === 'error' ? 'error'
+    : (run.state === 'opening' || run.state === 'running') ? 'running' : ''}`;
+  renderRun(run);
+}
+
+async function poll() {
+  try {
+    const run = await api('/api/run');
+    applyRun(run);
+  } catch (error) {
+    showError(error);
+  }
+}
+
+function bind() {
+  $('parse').onclick = () => parseTranscript().catch(showError);
+  $('start').onclick = () => startRun().catch(showError);
+  $('next').onclick = () => nextStep().catch(showError);
+  $('finish').onclick = () => finishRun().catch(showError);
+  $('prompt-name').onchange = showPrompt;
+  $('reload-prompts').onclick = () => loadPrompts().catch(showError);
+  $('save-prompt').onclick = async () => {
+    showError(null);
+    const name = $('prompt-name').value;
+    if (!name) return;
+    const data = await api(`/api/prompts/${encodeURIComponent(name)}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: $('prompt-text').value }),
+    });
+    state.prompts[name] = $('prompt-text').value;
+    $('prompt-info').textContent = `已保存 ${data.name} (${data.bytes} bytes)`;
+  };
+  $('apply-model').onclick = async () => {
+    showError(null);
+    await api('/api/config', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: $('model').value }),
+    });
+    await refreshConfig();
+  };
+}
+
+async function boot() {
+  bind();
+  try {
+    await refreshConfig();
+    await loadPrompts();
+  } catch (error) {
+    showError(error);
+  }
+  poll();
+  state.poll = setInterval(poll, 1000);
+}
+
+boot();
+</script>
+</body>
+</html>

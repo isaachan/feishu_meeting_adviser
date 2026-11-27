@@ -4,28 +4,28 @@
 
 设计与任务拆分见 [docs/PROMPT_STUDIO.md](../docs/PROMPT_STUDIO.md)。本模块不导入其他模块源码，只通过 HTTP/WS/子进程与 `auth`、`advisor`、`llm-gateway` 交接。
 
-```bash
-# 在仓库根 venv 中安装（需要同时安装 auth/advisor/llm-gateway）
-.venv-local/bin/pip install -e ./prompt-studio
+## 安装
 
+在仓库根 venv 中安装（`auth`/`advisor`/`llm-gateway` 也需已安装）：
+
+```bash
+.venv-local/bin/pip install -e ./prompt-studio
 .venv-local/bin/prompt-studio --help
 ```
-
-完整使用方式（隔离 server、token、SSH 隧道、step/auto replay）随实现补齐。
 
 ## 快速开始
 
 ```bash
-# 在仓库根 venv 中安装（auth/advisor/llm-gateway 也需已安装）
-.venv-local/bin/pip install -e ./prompt-studio
-
 # 1) 创建 data/prompt-studio 与 prompts/（从 llm-gateway 复制）
 .venv-local/bin/prompt-studio init
 
 # 2) 提交一次 NSDP/Jira token（值不会回显；也可用 --*-token-file）
 NSDP_TOKEN=... JIRA_TOKEN=... .venv-local/bin/prompt-studio submit-tokens
 
-# 3) 用真实模型重放
+# 3a) Web UI（只绑 loopback；远端请用 SSH 隧道）
+.venv-local/bin/prompt-studio serve --backend opencode
+
+# 3b) 或命令行重放
 .venv-local/bin/prompt-studio replay --transcript meeting.txt \
   --description "预算评审" --mode auto --model zai-coding-plan/glm-5.3
 
@@ -34,3 +34,28 @@ NSDP_TOKEN=... JIRA_TOKEN=... .venv-local/bin/prompt-studio submit-tokens
 ```
 
 `--mode step` 在每条人类字幕落库并产生决策后停顿，交互终端按 Enter 继续；`--json` 只输出结果 JSON。默认 data-dir 为 `data/prompt-studio/`，prompt 目录为其中的 `prompts/`。
+
+advisor 建会话始终需要 NSDP/Jira 凭据（即使 `--backend fake`）。第 2 步会把凭据持久化到 data-dir，之后的 `replay`/`serve` 复用；也可以直接给 `serve`/`replay` 传 `--nsdp-token-file`/`--jira-token-file`。
+
+## Web UI
+
+- 粘贴 TXT，填写标题/会议描述，选择 `auto` 或 `step` 后开始。
+- `step` 模式用“下一句”推进，“结束”收尾；`auto` 一次跑完。
+- 右侧展示每条决策、reply、snapshot 摘要、material 与完整记录。
+- 提示词在线编辑；保存为原子写。运行中禁止修改提示词或切换模型。
+- 切换模型会重启 gateway；NSDP catalog 按 session 冻结，首个决策可能较慢。
+
+## 隔离 server
+
+UI 只监听 `127.0.0.1`，不要在公网直接暴露。远端部署：
+
+```bash
+ssh -L 8765:127.0.0.1:8765 user@server
+# 然后在本地打开 http://127.0.0.1:8765
+```
+
+token 只从环境变量或 `--nsdp-token-file`/`--jira-token-file` 读取，不会写入日志或结果。advisor 的 ingest 端口当前绑 `0.0.0.0`，隔离 server 需配合防火墙/安全组限制来源。
+
+## 进程模型
+
+`serve` 启动 auth(stub)、llm-gateway 与 fake STT；每次 run 另起一个 fresh advisor，避免旧 session 的未投递消息与 single-claim 干扰。Ctrl-C 会停止所有子进程。
