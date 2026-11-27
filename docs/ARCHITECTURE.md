@@ -39,7 +39,7 @@
 
   ① 小A 对 bot："入会 <会议号|链接>"，bot 经内部API 转给 advisor
   ② 首次/失效：advisor 返回授权链接 → bot 转发小A → 浏览器OAuth → 回调auth → token云端保存
-  ③ advisor 校验（用 auth 提供的 user token 读日历）：会议存在 + 小A 是组织者 + 时间窗；事件描述顺带存为会话材料
+  ③ advisor 校验（用 auth 提供的 user token 读日历）：会议存在 + 小A 是组织者 + 时间窗；事件描述及其中的飞书 docx/wiki 文档正文顺带存为会话材料（文档抓取 best-effort，失败不阻塞建会）
   ④ 通过：advisor 建会 + 铸流令牌 + 监督器自动consume → bot 下发 recorder 命令 → 小A 粘贴执行
   ⑤ 音频上行（流令牌鉴权，int16/16k/mono，每路约 32 KB/s；每条音频源一条 WS 连接）
   ⑥ ⑦ ⑧ ⑨ 均为云内调用；⑩ = 云内 localhost API：bot↔advisor、advisor↔auth
@@ -112,7 +112,7 @@ laptop 对云端只有一种入口：ingest WS（流令牌鉴权）。**每条�
 ### 4.1 回答分发（S2/S3 主链路）
 
 ```
-音频 → 字幕(final) → 会话上下文（字幕 + 建会时带出的会议描述材料）→ 模型任务(gateway) → 决策复核
+音频 → 字幕(final) → 会话上下文（字幕 + 建会时带出的会议描述及描述内飞书文档材料）→ 模型任务(gateway) → 决策复核
   → outbox: 1 行 local（事实来源）+ N 行 im（组织者 + approved 小B，逐行独立状态机）
   → bot 逐行发送（uuid 幂等）→ sent / uncertain（人工裁决工具沿用）
 ```
