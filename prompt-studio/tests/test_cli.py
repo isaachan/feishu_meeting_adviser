@@ -8,7 +8,7 @@ import unittest
 from unittest import mock
 
 from prompt_studio import cli
-from prompt_studio.stack import PROMPT_FILES
+from prompt_studio.stack import PROMPT_FILES, Stack, StackConfig
 
 SAMPLE = """会参谋 · 文字记录
 会话 s-old · 会议 111111111 · 预算会
@@ -227,6 +227,17 @@ class ServeTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn('port', err.getvalue())
 
+    def test_passes_jira_url_to_stack(self):
+        FakeStack.instances = []
+        url = 'https://jira.example.com'
+        with mock.patch.object(cli, 'Stack', FakeStack), \
+                mock.patch('prompt_studio.web_http.serve'):
+            code = cli.main([
+                'serve', '--port', '0', '--data-dir', str(self.data_dir),
+                '--jira-url', url])
+        self.assertEqual(code, 0)
+        self.assertEqual(FakeStack.instances[0].config.jira_url, url)
+
     def test_default_prompt_dir_is_seeded(self):
         prompt_dir = cli._ensure_web_prompts(self.data_dir, None)
         source = cli._gateway_prompts()
@@ -240,6 +251,20 @@ class ServeTests(unittest.TestCase):
         prompt_dir.mkdir()
         with self.assertRaises(cli.CommandError):
             cli._ensure_web_prompts(self.data_dir, prompt_dir)
+
+
+class StackGatewayArgsTests(unittest.TestCase):
+    def test_jira_url_is_forwarded_to_gateway(self):
+        stack = Stack(StackConfig(jira_url='https://jira.example.com'))
+        stack.ports = {'auth': 1, 'gateway': 2}
+        args = stack._gateway_args()
+        index = args.index('--jira-url')
+        self.assertEqual(args[index + 1], 'https://jira.example.com')
+
+    def test_jira_url_is_omitted_when_unset(self):
+        stack = Stack(StackConfig())
+        stack.ports = {'auth': 1, 'gateway': 2}
+        self.assertNotIn('--jira-url', stack._gateway_args())
 
 
 if __name__ == '__main__':

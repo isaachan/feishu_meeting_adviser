@@ -114,8 +114,10 @@ class CliReplayTests(unittest.TestCase):
                 code = cli.main(['init', '--data-dir', str(data_dir)])
             self.assertEqual(code, 0)
             real_stack = Stack
+            seen = {}
 
             def fake_stack(config):
+                seen['jira_url'] = config.jira_url
                 config.backend = 'fake'
                 return real_stack(config)
 
@@ -127,12 +129,14 @@ class CliReplayTests(unittest.TestCase):
                     '--description', 'CLI 测试', '--document', str(document),
                     '--data-dir', str(data_dir), '--owner', 'ou_cli_test',
                     '--nsdp-token-file', str(nsdp),
-                    '--jira-token-file', str(jira), '--json'])
+                    '--jira-token-file', str(jira),
+                    '--jira-url', 'https://jira.example.com', '--json'])
             self.assertEqual(code, 0, err.getvalue())
             payload = json.loads(out.getvalue())
             complete = [job for job in payload['jobs']
                         if job['state'] == 'complete']
             self.assertTrue(complete, payload)
+            self.assertEqual(seen['jira_url'], 'https://jira.example.com')
             self.assertEqual(complete[-1]['decision']['reply'], '网关合成回答')
             self.assertEqual(payload['material']['description'], 'CLI 测试')
             self.assertEqual(payload['material']['documents'][0]['title'], '预算表')

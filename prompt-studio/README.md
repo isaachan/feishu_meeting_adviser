@@ -27,17 +27,21 @@ NSDP_TOKEN=... JIRA_TOKEN=... .venv-local/bin/prompt-studio submit-tokens
 
 # 4a) Web UI（默认只绑 loopback；远端用 SSH 隧道）
 .venv-local/bin/prompt-studio serve \
-  --opencode-provider-config ./data/prompt-studio/provider.json
+  --opencode-provider-config ./data/prompt-studio/provider.json \
+  --jira-url https://jira.example.com
 
 # 4b) 或命令行重放（默认模型 nio/DeepSeek-V4.1-Flash）
 .venv-local/bin/prompt-studio replay --transcript meeting.txt \
   --description "预算评审" --mode auto \
-  --opencode-provider-config ./data/prompt-studio/provider.json
+  --opencode-provider-config ./data/prompt-studio/provider.json \
+  --jira-url https://jira.example.com
 ```
 
 `--mode paced --paced-seconds 5` 按固定间隔喂字幕（默认 5 秒/行；0 表示尽快），模型任务会和字幕到达重叠，接近真实会议；`--mode auto` 则一次灌完。`--json` 只输出结果 JSON。默认 data-dir 为 `data/prompt-studio/`，prompt 目录为其中的 `prompts/`。
 
 默认模型 `nio/DeepSeek-V4.1-Flash` 不在 OpenCode 内置模型目录，且 gateway 使用隔离的 OpenCode 实例、不读取 `~/.config/opencode/opencode.jsonc`。因此每次 `serve`/`replay` 都要带 `--opencode-provider-config ./data/prompt-studio/provider.json`；遗漏时第一次决策会在 `verify_provider` 阶段报 `backend_unavailable`。provider.json 与 auth.json 的写法见 [使用手册 §3.3](../docs/PROMPT_STUDIO_MANUAL.md#33-编写-providerjson默认模型必需)。
+
+Jira 查询还需要 Jira Data Center 的 HTTPS 基地址：给 `serve`/`replay` 加 `--jira-url https://<jira-host>`，或设置 `JIRA_URL`。只提交 token 不够；缺失时通常表现为 `Jira query failed: unavailable`。说明见 [使用手册 §3.4](../docs/PROMPT_STUDIO_MANUAL.md#34-配置-jira-url真实-jira-查询必需)。
 
 advisor 建会话始终需要 NSDP/Jira 凭据。第 2 步会把凭据持久化到 data-dir，之后的 `replay`/`serve` 复用；也可以直接给 `serve`/`replay` 传 `--nsdp-token-file`/`--jira-token-file`。CLI 固定使用真实 `opencode` 后端；无模型的 fake backend 仅用于仓库自动化测试。
 
@@ -80,7 +84,8 @@ ssh -L 8765:127.0.0.1:8765 user@server
 
 # 方式 B：可信内网直连（UI 没有登录）
 .venv-local/bin/prompt-studio serve --host 0.0.0.0 --port 8765 \
-  --opencode-provider-config ./data/prompt-studio/provider.json
+  --opencode-provider-config ./data/prompt-studio/provider.json \
+  --jira-url https://jira.example.com
 # 在服务器内网 IP 上打开 http://<server-ip>:8765
 ```
 

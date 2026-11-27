@@ -62,6 +62,8 @@ def build_parser() -> argparse.ArgumentParser:
     replay.add_argument('--prompt-dir', type=Path, default=None)
     replay.add_argument('--opencode-auth', type=Path, default=None)
     replay.add_argument('--opencode-provider-config', type=Path, default=None)
+    replay.add_argument('--jira-url', default=None,
+                        help='Jira Data Center HTTPS base URL；默认继承 JIRA_URL')
     replay.add_argument('--nsdp-token-file', type=Path, default=None)
     replay.add_argument('--jira-token-file', type=Path, default=None)
     replay.add_argument(
@@ -89,6 +91,8 @@ def build_parser() -> argparse.ArgumentParser:
     web.add_argument('--model', default=None)
     web.add_argument('--opencode-auth', type=Path, default=None)
     web.add_argument('--opencode-provider-config', type=Path, default=None)
+    web.add_argument('--jira-url', default=None,
+                     help='Jira Data Center HTTPS base URL；默认继承 JIRA_URL')
     web.add_argument('--nsdp-token-file', type=Path, default=None)
     web.add_argument('--jira-token-file', type=Path, default=None)
     web.add_argument('--debug', action='store_true')
@@ -245,7 +249,8 @@ def command_serve(args) -> int:
     config = StackConfig(
         root=ROOT, data_dir=data_dir, prompt_dir=prompt_dir,
         model=model, owner=owner, opencode_auth=args.opencode_auth,
-        opencode_provider_config=args.opencode_provider_config)
+        opencode_provider_config=args.opencode_provider_config,
+        jira_url=args.jira_url)
     stack = Stack(config)
     try:
         stack.start()
@@ -300,7 +305,8 @@ def command_replay(args) -> int:
     config = StackConfig(
         root=ROOT, data_dir=data_dir, prompt_dir=prompt_dir,
         model=model, owner=owner, opencode_auth=args.opencode_auth,
-        opencode_provider_config=args.opencode_provider_config)
+        opencode_provider_config=args.opencode_provider_config,
+        jira_url=args.jira_url)
     stack = Stack(config)
     result: ReplayResult | None = None
     try:

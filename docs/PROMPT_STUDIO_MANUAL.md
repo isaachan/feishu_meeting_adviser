@@ -10,7 +10,7 @@
 - 仓库：`feishu_meeting_adviser`
 - Python 3.11+
 - 依赖模块：`auth`、`advisor`、`llm-gateway`、`prompt-studio`
-- 运行 replay/serve：需要 `opencode`、OpenCode `auth.json`、`provider.json`（默认模型 `nio/...` 必需）、真实 NSDP/Jira token
+- 运行 replay/serve：需要 `opencode`、OpenCode `auth.json`、`provider.json`（默认模型 `nio/...` 必需）、真实 NSDP/Jira token，以及 Jira URL（`--jira-url` 或 `JIRA_URL`）
 - 无模型自检：仓库自动化测试内部使用 fake backend，不需要模型
 - 飞书文档抓取（可选）：`noam` + 个人飞书 web session
 
@@ -115,6 +115,22 @@ API key 放在 OpenCode `auth.json`，不要写进 `provider.json`。`prompt-stu
 
 文件要求：普通文件（不能是符号链接）、不超过 100 KB、顶层是 `{provider: object}`，且必须包含当前 `--model` 使用的 provider。建议 `chmod 600 data/prompt-studio/provider.json`，并确认 `data/prompt-studio/` 不被提交到 git。
 
+### 3.4 配置 Jira URL（真实 Jira 查询必需）
+
+Jira 工具需要知道 Jira Data Center 的基地址。只提交 Jira token 不够：没有 URL 时，模型会看到 `Jira query failed: unavailable`，但 NSDP 查询可能仍然正常。
+
+`serve` 和 `replay` 都支持 `--jira-url`：
+
+```bash
+--jira-url https://jira.example.com
+```
+
+也可以在启动 shell 里设置 `JIRA_URL`（gateway 子进程会继承）；显式 `--jira-url` 优先。要求：
+
+- 必须是 `https://`。
+- 填 Jira 基地址，不带用户名/密码、query 或 fragment，例如 `https://jira.example.com`。
+- 不是 Jira issue 的完整 URL，不要带 `/browse/KEY-123`。
+
 ## 4. 准备输入
 
 ### 4.1 admin-site TXT
@@ -173,7 +189,8 @@ Web/CLI 可保存和复用场景：
   --description "预算评审" \
   --model nio/DeepSeek-V4.1-Flash \
   --opencode-auth ~/.local/share/opencode/auth.json \
-  --opencode-provider-config ./data/prompt-studio/provider.json
+  --opencode-provider-config ./data/prompt-studio/provider.json \
+  --jira-url https://jira.example.com
 ```
 
 - `opencode` 必须在 `PATH` 中。CLI 固定使用 `opencode`，没有 `--backend` 选项。
@@ -205,6 +222,7 @@ prompt-studio replay ... --mode paced --paced-seconds 5
 - `--data-dir` / `--prompt-dir`：覆盖默认目录。
 - `--opencode-auth`：OpenCode `auth.json` 路径；默认 `~/.local/share/opencode/auth.json`。
 - `--opencode-provider-config`：自定义 provider 定义 JSON；默认模型 `nio/...` 必填，见 [3.3](#33-编写-providerjson默认模型必需)。
+- `--jira-url`：Jira Data Center HTTPS 基地址；也可用 `JIRA_URL`，见 [3.4](#34-配置-jira-url真实-jira-查询必需)。
 - `--nsdp-token-file` / `--jira-token-file`：本次运行临时提交凭据。
 
 ## 6. Web UI
@@ -214,7 +232,8 @@ prompt-studio replay ... --mode paced --paced-seconds 5
 ```bash
 .venv-local/bin/prompt-studio serve \
   --port 8765 \
-  --opencode-provider-config ./data/prompt-studio/provider.json
+  --opencode-provider-config ./data/prompt-studio/provider.json \
+  --jira-url https://jira.example.com
 ```
 
 本机打开 `http://127.0.0.1:8765`。默认读取 `~/.local/share/opencode/auth.json`；auth 在别处时补 `--opencode-auth <path>`。远端通过 SSH 隧道：
@@ -229,7 +248,8 @@ ssh -N -L 8765:127.0.0.1:8765 user@server
 ```bash
 .venv-local/bin/prompt-studio serve \
   --host 0.0.0.0 --port 8765 \
-  --opencode-provider-config ./data/prompt-studio/provider.json
+  --opencode-provider-config ./data/prompt-studio/provider.json \
+  --jira-url https://jira.example.com
 ```
 
 启动后会打印：
@@ -267,6 +287,7 @@ prompt-studio: http://<server-ip>:8765
   --model nio/DeepSeek-V4.1-Flash \
   --opencode-auth ~/.local/share/opencode/auth.json \
   --opencode-provider-config ./data/prompt-studio/provider.json \
+  --jira-url https://jira.example.com \
   --nsdp-token-file /path/nsdp.txt \
   --jira-token-file /path/jira.txt
 ```
@@ -343,6 +364,7 @@ CLI `--json` 与 Web 结果都来自 advisor DB 的只读查询：
 | `captions did not land` | fake STT/ingest 未连通或 advisor 未订阅；看 advisor log 与 STT 连接。 |
 | `decision not settled` | 模型慢/超时/工具卡住；看 job timings、gateway 日志和 advisor log。 |
 | `failed_stage=verify_provider` / `backend_unavailable` | 检查 `replay`/`serve` 是否带 `--opencode-provider-config ./data/prompt-studio/provider.json`；确认 `provider.json` 含 `nio`、`auth.json` 含 `nio` 的 `type=api` key。 |
+| Jira 查不到 / `Jira query failed: unavailable` | 确认 `serve`/`replay` 带 `--jira-url https://<jira-host>`（或 `JIRA_URL`），且必须是 HTTPS 基地址；再确认 Jira token。 |
 | 有字幕但没有 reply | 先看 `control` 与 `pending_reply`；`ignore`/待审批是正常决策。 |
 | 改了提示词不生效 | 运行中禁止编辑；保存后开新 run 最稳。确认三个 prompt 文件是一套。 |
 | 切换模型后失败 | 确认 `opencode`、auth.json、provider config 和 model id；gateway 会重启。 |

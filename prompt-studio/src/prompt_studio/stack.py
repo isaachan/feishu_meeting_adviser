@@ -106,6 +106,7 @@ class StackConfig:
     health_timeout: float = 40.0
     opencode_auth: Path | None = None
     opencode_provider_config: Path | None = None
+    jira_url: str | None = None
     gateway_extra_args: tuple[str, ...] = ()
     owner: str = 'ou_prompt_studio'
 
@@ -216,6 +217,8 @@ class Stack:
         if self.config.opencode_provider_config is not None:
             args += ['--opencode-provider-config',
                      str(self.config.opencode_provider_config)]
+        if self.config.jira_url:
+            args += ['--jira-url', self.config.jira_url]
         args += list(self.config.gateway_extra_args)
         return args
 
