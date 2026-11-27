@@ -36,12 +36,14 @@ class Base(unittest.TestCase):
         self.addCleanup(self.store.close)
         self.now = NOW
 
-    def create(self, *, description='讨论预算', meeting_no='123456789', owner='ou_A',
-               start=1762800000, event_id='evt_y'):
+    def create(self, *, description='讨论预算', documents=None, material_state=None,
+               meeting_no='123456789', owner='ou_A', start=1762800000,
+               event_id='evt_y'):
         session, _existing = self.store.create_session(
             owner_open_id=owner, meeting_no=meeting_no, title='周会',
             event_calendar_id='cal_x', event_id=event_id,
-            description=description, now=self.now,
+            description=description, documents=documents,
+            material_state=material_state, now=self.now,
             instance_key=meeting_instance_key(meeting_no, 'cal_x', event_id, start))
         return session
 
@@ -89,6 +91,24 @@ class SessionLifecycleTests(Base):
         self.assertEqual(self.store.materials(session['session_id'])['state'], 'disabled')
         self.assertNotIn('meeting_context', self.store.snapshot(
             session['session_id'], SETTINGS, now=self.now))
+
+    def test_documents_alone_make_material_ready(self):
+        documents = [{'kind': 'docx', 'title': '', 'url': 'https://x/docx/a',
+                      'text': '文档正文', 'truncated': False}]
+        session = self.create(description='', documents=documents)
+        material = self.store.materials(session['session_id'])
+        self.assertEqual(material['state'], 'ready')
+        self.assertEqual(material['documents'], documents)
+        snapshot = self.store.snapshot(session['session_id'], SETTINGS, now=self.now)
+        self.assertEqual(snapshot['meeting_context']['documents'], documents)
+
+    def test_documents_can_mark_material_partial_and_change_version(self):
+        documents = [{'kind': 'wiki', 'title': '知识库', 'url': 'https://x/wiki/a',
+                      'text': '正文', 'truncated': True}]
+        session = self.create(documents=documents, material_state='partial')
+        self.assertEqual(self.store.materials(session['session_id'])['state'], 'partial')
+        other = self.create(owner='ou_B', meeting_no='223456789')
+        self.assertNotEqual(session['material_version'], other['material_version'])
 
     def test_duplicate_same_owner_returns_existing(self):
         first = self.create()

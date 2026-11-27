@@ -299,8 +299,9 @@ class SessionStore:
     # -- sessions ---------------------------------------------------------
 
     def create_session(self, *, owner_open_id, meeting_no, title, event_calendar_id,
-                       event_id, description='', idle_timeout_s=900, now=None,
-                       instance_key=None, organizer_open_id=None):
+                       event_id, description='', documents=None, material_state=None,
+                       idle_timeout_s=900, now=None, instance_key=None,
+                       organizer_open_id=None):
         """STATE_MACHINES v2 S1: non-ended-instance creation with claim checks.
 
         Returns ``(session, existing)``. Raises StateError('session_claimed' |
@@ -316,9 +317,12 @@ class SessionStore:
         session_id = 's-' + uuid4().hex
         stream_token = 'st-' + secrets.token_urlsafe(32)
         description = description or ''
-        documents = []
-        has_content = bool(description)
-        material = {'state': MaterialState.READY.value if has_content else MaterialState.DISABLED.value,
+        documents = list(documents or [])
+        has_content = bool(description) or bool(documents)
+        state = (material_state if has_content and material_state
+                 else MaterialState.READY.value if has_content
+                 else MaterialState.DISABLED.value)
+        material = {'state': state,
                     'context_version': self._material_version(description, documents)
                     if has_content else None,
                     'description': description, 'documents': documents}
