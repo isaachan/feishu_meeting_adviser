@@ -122,13 +122,13 @@ Jira 工具需要知道 Jira Data Center 的基地址。只提交 Jira token 不
 `serve` 和 `replay` 都支持 `--jira-url`：
 
 ```bash
---jira-url https://jira.example.com
+--jira-url https://jira.nioint.com/
 ```
 
 也可以在启动 shell 里设置 `JIRA_URL`（gateway 子进程会继承）；显式 `--jira-url` 优先。要求：
 
 - 必须是 `https://`。
-- 填 Jira 基地址，不带用户名/密码、query 或 fragment，例如 `https://jira.example.com`。
+- 填 Jira 基地址，不带用户名/密码、query 或 fragment，例如 `https://jira.nioint.com/`。
 - 不是 Jira issue 的完整 URL，不要带 `/browse/KEY-123`。
 
 ## 4. 准备输入
@@ -190,7 +190,7 @@ Web/CLI 可保存和复用场景：
   --model nio/DeepSeek-V4.1-Flash \
   --opencode-auth ~/.local/share/opencode/auth.json \
   --opencode-provider-config ./data/prompt-studio/provider.json \
-  --jira-url https://jira.example.com
+  --jira-url https://jira.nioint.com/
 ```
 
 - `opencode` 必须在 `PATH` 中。CLI 固定使用 `opencode`，没有 `--backend` 选项。
@@ -233,7 +233,7 @@ prompt-studio replay ... --mode paced --paced-seconds 5
 .venv-local/bin/prompt-studio serve \
   --port 8765 \
   --opencode-provider-config ./data/prompt-studio/provider.json \
-  --jira-url https://jira.example.com
+  --jira-url https://jira.nioint.com/
 ```
 
 本机打开 `http://127.0.0.1:8765`。默认读取 `~/.local/share/opencode/auth.json`；auth 在别处时补 `--opencode-auth <path>`。远端通过 SSH 隧道：
@@ -249,7 +249,7 @@ ssh -N -L 8765:127.0.0.1:8765 user@server
 .venv-local/bin/prompt-studio serve \
   --host 0.0.0.0 --port 8765 \
   --opencode-provider-config ./data/prompt-studio/provider.json \
-  --jira-url https://jira.example.com
+  --jira-url https://jira.nioint.com/
 ```
 
 启动后会打印：
@@ -287,7 +287,7 @@ prompt-studio: http://<server-ip>:8765
   --model nio/DeepSeek-V4.1-Flash \
   --opencode-auth ~/.local/share/opencode/auth.json \
   --opencode-provider-config ./data/prompt-studio/provider.json \
-  --jira-url https://jira.example.com \
+  --jira-url https://jira.nioint.com/ \
   --nsdp-token-file /path/nsdp.txt \
   --jira-token-file /path/jira.txt
 ```
