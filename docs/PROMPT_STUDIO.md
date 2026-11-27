@@ -159,10 +159,11 @@ admin-site 导出的 TXT（`admin-site/src/admin_site/static/index.html`）：
   - `results.py`：读 `jobs`/transcript，输出决策记录。
   - 验收：fake backend 下端到端产出至少一个 decision + reply；step 模式在每条后等待。
 
-- [ ] **PS5 · CLI + 配置**
+- [x] **PS5 · CLI + 配置**
   - `prompt-studio init`：创建 data-dir/prompts（从已安装 gateway prompts 复制）。
   - `prompt-studio replay --transcript ... --description ... --mode step|auto --model ...`
-  - `prompt-studio serve`：启动 UI。
+  - `prompt-studio submit-tokens`：从 `NSDP_TOKEN`/`JIRA_TOKEN` 或 token 文件提交，不回显 token。
+  - `serve` 在 PS6 接入。
   - 验收：命令可跑通 fake backend；参数错误清晰；不泄露 token。
 
 - [ ] **PS6 · 极简 Web UI**

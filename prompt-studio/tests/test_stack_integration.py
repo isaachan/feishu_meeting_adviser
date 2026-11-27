@@ -3,10 +3,14 @@
 Skipped when auth/advisor/llm-gateway are not installed in this interpreter.
 """
 import importlib.util
+import io
+import json
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 import tempfile
 import unittest
 
+from prompt_studio import cli
 from prompt_studio.replay import ReplayRun
 from prompt_studio.stack import Stack, StackConfig
 from prompt_studio.transcript import parse_text
@@ -97,3 +101,42 @@ class StackReplayTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+@unittest.skipUnless(modules_installed(), 'auth/advisor/llm-gateway not installed')
+class CliReplayTests(unittest.TestCase):
+    def test_cli_init_and_auto_replay(self):
+        with tempfile.TemporaryDirectory(prefix='prompt-studio-cli-') as temp:
+            root = Path(temp)
+            data_dir = root / 'data'
+            transcript = root / 'meeting.txt'
+            transcript.write_text(SAMPLE, encoding='utf-8')
+            document = root / '预算表.txt'
+            document.write_text('总预算 500 万', encoding='utf-8')
+            nsdp = root / 'nsdp.txt'
+            nsdp.write_text('stub-nsdp-token', encoding='utf-8')
+            jira = root / 'jira.txt'
+            jira.write_text('stub-jira-token', encoding='utf-8')
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                code = cli.main(['init', '--data-dir', str(data_dir)])
+            self.assertEqual(code, 0)
+            out, err = io.StringIO(), io.StringIO()
+            with redirect_stdout(out), redirect_stderr(err):
+                code = cli.main([
+                    'replay', '--transcript', str(transcript),
+                    '--description', 'CLI 测试', '--document', str(document),
+                    '--backend', 'fake', '--data-dir', str(data_dir),
+                    '--owner', 'ou_cli_test',
+                    '--nsdp-token-file', str(nsdp),
+                    '--jira-token-file', str(jira), '--json'])
+            self.assertEqual(code, 0, err.getvalue())
+            payload = json.loads(out.getvalue())
+            complete = [job for job in payload['jobs']
+                        if job['state'] == 'complete']
+            self.assertTrue(complete, payload)
+            self.assertEqual(complete[-1]['decision']['reply'], '网关合成回答')
+            self.assertEqual(payload['material']['description'], 'CLI 测试')
+            self.assertEqual(payload['material']['documents'][0]['title'], '预算表')
+            self.assertIn('网关合成回答',
+                          [record['text'] for record in payload['records']
+                           if record['type'] == 'llm'])

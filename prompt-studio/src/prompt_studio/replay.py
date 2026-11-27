@@ -146,6 +146,25 @@ class ReplayRun:
 
     def _spawn_advisor(self):
         assert self.stack.stt is not None
+        last_error: StackError | None = None
+        for attempt in range(5):
+            self._spawn_advisor_once()
+            assert self._process is not None
+            try:
+                wait_healthz(self.api_url + '/healthz', self._process.process,
+                             self._process.log_path,
+                             self.stack.config.health_timeout)
+                return
+            except StackError as exc:
+                last_error = exc
+                self._stop_advisor()
+                if 'address already in use' not in str(exc):
+                    raise ReplayError(str(exc)) from None
+                time.sleep(0.1 * (attempt + 1))
+        raise ReplayError(str(last_error)) from None
+
+    def _spawn_advisor_once(self):
+        assert self.stack.stt is not None
         api_port, ingest_port = free_port(), free_port()
         self.api_url = f'http://127.0.0.1:{api_port}'
         args = [
@@ -164,11 +183,14 @@ class ReplayRun:
         ]
         self._process = self.stack.spawn_process(
             self._process_name, 'advisor', args, log_path=self.advisor_log)
-        try:
-            wait_healthz(self.api_url + '/healthz', self._process.process,
-                         self._process.log_path, self.stack.config.health_timeout)
-        except StackError as exc:
-            raise ReplayError(str(exc)) from None
+
+    def _stop_advisor(self):
+        if self._process is None:
+            return
+        self._process.stop()
+        if self.stack.processes.get(self._process_name) is self._process:
+            self.stack.processes.pop(self._process_name, None)
+        self._process = None
 
     @staticmethod
     def _client_message(action: str, exc: ClientError) -> str:
@@ -331,11 +353,7 @@ class ReplayRun:
             self.ingest.abort()
         if (self.session_id is not None and self.stack.stt is not None):
             self.stack.stt.forget(self.session_id)
-        if self._process is not None:
-            self._process.stop()
-            if self.stack.processes.get(self._process_name) is self._process:
-                self.stack.processes.pop(self._process_name, None)
-            self._process = None
+        self._stop_advisor()
         self._opened = False
 
     def __enter__(self) -> 'ReplayRun':

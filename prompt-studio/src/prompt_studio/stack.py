@@ -30,8 +30,9 @@ class StackError(RuntimeError):
 
 
 def free_port() -> int:
+    # Reserve on all interfaces: the advisor ingest binds 0.0.0.0.
     with socket.socket() as sock:
-        sock.bind(('127.0.0.1', 0))
+        sock.bind(('0.0.0.0', 0))
         return sock.getsockname()[1]
 
 
@@ -123,7 +124,7 @@ class Stack:
         self.stt: FakeSttServer | None = None
         self.auth: AuthClient | None = None
 
-    def start(self) -> 'Stack':
+    def start(self, *, auth_only: bool = False) -> 'Stack':
         if self.processes:
             return self
         try:
@@ -134,26 +135,30 @@ class Stack:
         except OSError as exc:
             raise StackError(f'cannot prepare private data dir: {exc}') from None
         (self.data_dir / 'auth').mkdir(mode=0o700, exist_ok=True)
-        if self.config.prompt_dir is not None:
+        if self.config.prompt_dir is not None and not auth_only:
             missing = [name for name in PROMPT_FILES
                        if not (self.config.prompt_dir / name).is_file()]
             if missing:
                 raise StackError(f'prompt dir missing files: {missing}')
         try:
-            self.ports = {'auth': free_port(), 'gateway': free_port()}
+            self.ports = {'auth': free_port()}
             self._spawn_auth()
-            self._spawn_gateway()
-            self.stt = FakeSttServer().start()
+            if not auth_only:
+                self.ports['gateway'] = free_port()
+                self._spawn_gateway()
+                self.stt = FakeSttServer().start()
             self.auth = AuthClient(self.auth_url)
-            self._wait_all()
+            self._wait_all(auth_only=auth_only)
         except BaseException:
             self.stop()
             raise
         return self
 
-    def _wait_all(self):
+    def _wait_all(self, *, auth_only: bool = False):
         wait_healthz(self.auth_url + '/healthz', self.processes['auth'].process,
                      self.processes['auth'].log_path, self.config.health_timeout)
+        if auth_only:
+            return
         wait_healthz(self.gateway_url + '/healthz', self.processes['gateway'].process,
                      self.processes['gateway'].log_path, self.config.health_timeout)
 
