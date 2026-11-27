@@ -7,21 +7,24 @@ import json
 import logging
 import threading
 import time
+from pathlib import Path
 
 from .backends.base import BackendError
 from .decisions import InvalidDecision, validate
-from .prompts import REPLY_MARKDOWN_RULES
+from .prompts import load_reply_markdown_rules
 from .store import GatewayStore
 
 LOG = logging.getLogger(__name__)
 
 
 class ExecutionScheduler:
-    def __init__(self, store: GatewayStore, backend_factory, *, workers: int = 4):
+    def __init__(self, store: GatewayStore, backend_factory, *, workers: int = 4,
+                 prompt_dir: Path | None = None):
         if workers < 1:
             raise ValueError('workers must be positive')
         self.store = store
         self.backend_factory = backend_factory
+        self.prompt_dir = prompt_dir
         self.stop_event = threading.Event()
         self._cancellations: dict[str, threading.Event] = {}
         self._lock = threading.Lock()
@@ -74,8 +77,11 @@ class ExecutionScheduler:
                 backend.timing_request_id = request_id
                 system = task['system'] or ''
                 if task['output'] == 'decision-v2':
-                    system = (system + '\n\n' + REPLY_MARKDOWN_RULES
-                              if system else REPLY_MARKDOWN_RULES)
+                    try:
+                        rules = load_reply_markdown_rules(self.prompt_dir)
+                    except (OSError, UnicodeError):
+                        raise BackendError('backend_unavailable') from None
+                    system = (system + '\n\n' + rules if system else rules)
                 decision = backend.decide(
                     system, json.loads(task['input'] or '{}'),
                     deadline_seconds=task['deadline_seconds'],

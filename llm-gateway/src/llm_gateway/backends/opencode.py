@@ -26,7 +26,7 @@ from urllib import error, request
 
 from .._private import FileLock, LockBusy, private_directory
 from ..decisions import InvalidDecision, validate
-from ..prompts import AGENT_PROMPT
+from ..prompts import load_agent_prompt
 from .base import BackendError
 
 LOG = logging.getLogger(__name__)
@@ -144,7 +144,8 @@ class OpenCodeBackend:
                  skills_dir: Path | None = None, auth_url: str = 'http://127.0.0.1:8381',
                  noam_bin: str = 'noam', jira_url: str = '',
                  provider_config: Path | None = None,
-                 nsdp_cache_db: Path | None = None):
+                 nsdp_cache_db: Path | None = None,
+                 prompt_dir: Path | None = None):
         self.executable = executable
         self.auth_path = Path(auth_path) if auth_path else None
         self.provider_config = (Path(provider_config) if provider_config else None)
@@ -153,6 +154,7 @@ class OpenCodeBackend:
         self.auth_url = auth_url
         self.noam_bin = noam_bin
         self.nsdp_cache_db = Path(nsdp_cache_db) if nsdp_cache_db else None
+        self.prompt_dir = Path(prompt_dir) if prompt_dir else None
         self.jira_url = jira_url
         self.owner_open_id = None
         self.workdir = Path(runtime_base or (Path(tempfile.gettempdir()) /
@@ -455,6 +457,10 @@ class OpenCodeBackend:
                             '--owner', self.owner_open_id, '--auth-url', self.auth_url,
                             '--noam-bin', self.noam_bin, '--jira-url', self.jira_url,
                             '--timing-file', timing_file]}}
+        try:
+            agent_prompt = load_agent_prompt(self.prompt_dir)
+        except (OSError, UnicodeError):
+            raise BackendError('backend_unavailable') from None
         config = {
             'model': f'{self.provider}/{self.model_name}',
             'enabled_providers': [self.provider],
@@ -463,7 +469,7 @@ class OpenCodeBackend:
             'instructions': [], 'skills': {'paths': [str(self.skills_dir)]},
             'agent': {AGENT: {'mode': 'primary', 'description': 'Meeting decisions only',
                               'permission': permission, 'steps': 12,
-                              'prompt': AGENT_PROMPT}}}
+                              'prompt': agent_prompt}}}
         if self.provider_config is not None:
             # Custom providers (not in opencode's catalog) must be declared here;
             # the per-run XDG store never sees the operator's global config.

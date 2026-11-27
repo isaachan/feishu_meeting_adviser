@@ -20,10 +20,11 @@ class OpenCodeBackendTests(unittest.TestCase):
         self.auth.write_text('{"zai-coding-plan": {"type": "api", "key": "synthetic-key"}}')
         self.auth.chmod(0o600)
 
-    def backend(self, mode, capture='capture'):
+    def backend(self, mode, capture='capture', prompt_dir=None):
         return OpenCodeBackend(
             executable='opencode', model='zai-coding-plan/glm-5.3',
             auth_path=self.auth, runtime_base=self.root / 'runtime',
+            prompt_dir=prompt_dir,
             command=[__import__('sys').executable, str(PEER), mode, str(self.root / capture)])
 
     def decide(self, backend, deadline=8):
@@ -48,6 +49,29 @@ class OpenCodeBackendTests(unittest.TestCase):
         config = json.loads(backend._environment()['OPENCODE_CONFIG_CONTENT'])
         self.assertEqual(config['provider'], spec)
         self.assertEqual(config['enabled_providers'], ['synthetic'])
+
+    def test_prompt_dir_is_read_for_each_environment(self):
+        prompts = self.root / 'prompts'
+        prompts.mkdir()
+        (prompts / 'agent_prompt.txt').write_text('CUSTOM AGENT PROMPT')
+        (prompts / 'snapshot_rules.txt').write_text('CUSTOM SNAPSHOT RULES')
+        (prompts / 'reply_markdown_rules.txt').write_text('CUSTOM REPLY RULES')
+        backend = self.backend('reply', prompt_dir=prompts)
+        backend.runtime = self.root / 'runtime' / 'run-test'
+        backend.runtime.mkdir(parents=True)
+        backend.password = 'synthetic-password'
+        backend.owner_open_id = 'ou_A'
+        prompt = json.loads(backend._environment()['OPENCODE_CONFIG_CONTENT'])[
+            'agent']['meeting-decision']['prompt']
+        self.assertIn('CUSTOM AGENT PROMPT', prompt)
+        self.assertIn('CUSTOM SNAPSHOT RULES', prompt)
+        self.assertIn('additionalProperties', prompt)
+        # Edits are visible on the next environment build (per-decision reload).
+        (prompts / 'agent_prompt.txt').write_text('EDITED AGENT PROMPT')
+        prompt = json.loads(backend._environment()['OPENCODE_CONFIG_CONTENT'])[
+            'agent']['meeting-decision']['prompt']
+        self.assertIn('EDITED AGENT PROMPT', prompt)
+        self.assertNotIn('CUSTOM AGENT PROMPT', prompt)
 
     def test_nsdp_mcp_receives_trusted_cache_path(self):
         backend = self.backend('reply')

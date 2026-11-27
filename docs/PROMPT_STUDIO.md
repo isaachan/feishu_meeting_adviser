@@ -135,7 +135,7 @@ admin-site 导出的 TXT（`admin-site/src/admin_site/static/index.html`）：
 
 ## 10. 任务拆分
 
-- [ ] **PS1 · gateway `--prompt-dir` + 每次 decide 读取**
+- [x] **PS1 · gateway `--prompt-dir` + 每次 decide 读取**
   - `prompts/__init__.py` 提供 `load_prompts(dir)`；保留默认常量兼容。
   - `OpenCodeBackend` 每次 `_environment` 读取 agent prompt；`ExecutionScheduler` 每任务读取 reply markdown rules。
   - `llm-gateway serve --prompt-dir`；默认 None = 打包 prompts。

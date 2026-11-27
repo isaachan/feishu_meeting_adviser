@@ -269,6 +269,25 @@ class SchedulerTests(unittest.TestCase):
         self.assertNotIn(REPLY_MARKDOWN_RULES, systems[0])
         self.assertIn(REPLY_MARKDOWN_RULES, systems[1])
 
+    def test_decision_v2_reads_markdown_rules_from_prompt_dir(self):
+        prompts = Path(self.tmp.name) / 'prompts'
+        prompts.mkdir()
+        (prompts / 'reply_markdown_rules.txt').write_text('CUSTOM MARKDOWN RULES')
+        systems = []
+
+        class CaptureBackend(FakeBackend):
+            def decide(self, system, *args, **kwargs):
+                systems.append(system)
+                return super().decide(system, *args, **kwargs)
+
+        scheduler = ExecutionScheduler(self.store, lambda backend: CaptureBackend(),
+                                       workers=1, prompt_dir=prompts)
+        scheduler.start()
+        self.addCleanup(lambda: scheduler.stop())
+        self.service.submit(payload('req-0001', output='decision-v2'))
+        self.wait_state('req-0001', 'succeeded')
+        self.assertIn('CUSTOM MARKDOWN RULES', systems[0])
+
     def test_invalid_output_is_recorded_as_output_invalid(self):
         self.scheduler(lambda backend: FakeBackend())
         self.service.submit(payload(metadata={'fake': {'behavior': 'invalid'}}))

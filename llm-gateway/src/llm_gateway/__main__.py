@@ -37,6 +37,9 @@ def parser():
                        help='opencode auth.json providing the model provider key')
     serve.add_argument('--opencode-provider-config', type=Path, default=None,
                        help='JSON provider definitions for models absent from the catalog')
+    serve.add_argument('--prompt-dir', type=Path, default=None,
+                       help='prompt text directory (default: packaged prompts); '
+                            'read again on every decision')
     serve.add_argument('--skills-dir', type=Path, default=None,
                        help='OpenCode skill directory (default: packaged skills)')
     serve.add_argument('--auth-url', default='http://127.0.0.1:8381',
@@ -67,7 +70,8 @@ def backend_factory(options):
                 runtime_base=options.runtime_dir,
                 skills_dir=options.skills_dir, auth_url=options.auth_url,
                 noam_bin=options.noam_bin, jira_url=options.jira_url,
-                nsdp_cache_db=getattr(options, 'nsdp_cache_db', None))
+                nsdp_cache_db=getattr(options, 'nsdp_cache_db', None),
+                prompt_dir=options.prompt_dir)
         raise ValueError('unsupported backend')
     return factory
 
@@ -94,7 +98,8 @@ def main(argv=None):
         release_cache = OwnerReleaseCache(catalog_path)
         args.nsdp_cache_db = catalog_path
         service = GatewayService(store, limits=Limits(queue=args.queue), catalogs=catalogs)
-        scheduler = ExecutionScheduler(store, backend_factory(args), workers=args.workers)
+        scheduler = ExecutionScheduler(store, backend_factory(args), workers=args.workers,
+                                       prompt_dir=args.prompt_dir)
         scheduler.start()
         server = create_server(GatewayApp(service, scheduler),
                                host=args.host, port=args.port)
