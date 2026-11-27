@@ -141,7 +141,7 @@ admin-site 导出的 TXT（`admin-site/src/admin_site/static/index.html`）：
   - `llm-gateway serve --prompt-dir`；默认 None = 打包 prompts。
   - 验收：默认输出不变；自定义目录生效；缺文件明确失败；gateway 单测全绿。
 
-- [ ] **PS2 · 模块骨架 + TXT 解析 + material patch + HTTP 客户端**
+- [x] **PS2 · 模块骨架 + TXT 解析 + material patch + HTTP 客户端**
   - 新建 `prompt-studio/`，pyproject/README/包骨架。
   - `transcript.py`：解析/格式化/场景 JSON。
   - `material.py`：一事务 patch `session_materials` + `sessions.material_version/material_state`。

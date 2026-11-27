@@ -1,0 +1,14 @@
+# prompt-studio
+
+本地提示词测试平台：把 admin-site 导出的会议文字记录（TXT）重新灌进真实的 advisor + llm-gateway，观察会参谋的 decision/reply。
+
+设计与任务拆分见 [docs/PROMPT_STUDIO.md](../docs/PROMPT_STUDIO.md)。本模块不导入其他模块源码，只通过 HTTP/WS/子进程与 `auth`、`advisor`、`llm-gateway` 交接。
+
+```bash
+# 在仓库根 venv 中安装（需要同时安装 auth/advisor/llm-gateway）
+.venv-local/bin/pip install -e ./prompt-studio
+
+.venv-local/bin/prompt-studio --help
+```
+
+完整使用方式（隔离 server、token、SSH 隧道、step/auto replay）随实现补齐。
