@@ -32,6 +32,7 @@ done
     --hidden-import recorder.audio.macos_mic \
     --hidden-import recorder.audio.macos_mute \
     --add-binary "$helpers/sck_capture:." --add-binary "$helpers/macos_mute:." \
+    --add-data "$root/assets/icon.png:assets" \
     "$gui/launcher.py"
 
 app=$gui/dist/macos/MeetingAdvisor.app

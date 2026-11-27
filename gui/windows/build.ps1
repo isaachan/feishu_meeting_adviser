@@ -24,6 +24,7 @@ if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed" }
     --hidden-import recorder.audio.windows_loopback `
     --hidden-import recorder.audio.windows_mic `
     --hidden-import recorder.audio.windows_mute `
+    --add-data "$root\assets\icon.png;assets" `
     "$gui\launcher.py"
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
 $builtExe = Join-Path $gui "dist\windows\MeetingAdvisor\MeetingAdvisor.exe"

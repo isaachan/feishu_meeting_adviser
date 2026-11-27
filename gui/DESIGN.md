@@ -15,7 +15,7 @@ GUI 客户端 = recorder 的图形分发形态：**同样的采集与上行能�
 4. 手动模式点「连接」，自动模式发现会话后连接；本机麦克风固定启用；
 5. 主界面只显示连接状态及静音图标；「断开」走干净收尾；关窗隐藏窗口、连接继续。
 
-**非目标（v1）**：GUI 内入会/结束会议（仍走飞书 bot 指令）、托盘图标、暂停/恢复、Windows loopback（WASAPI 属 recorder 侧后续任务）。
+**非目标（v1）**：GUI 内入会/结束会议（仍走飞书 bot 指令）、暂停/恢复、Windows loopback（WASAPI 属 recorder 侧后续任务）。托盘/常驻交互见 D8、§6.5（v1.1 立项）。
 
 ## 2. 决策记录（2026-11-12 对齐）
 
@@ -28,7 +28,7 @@ GUI 客户端 = recorder 的图形分发形态：**同样的采集与上行能�
 | D5 | 能力边界 | 只做发现 + 确认 + 监控 + 停止采集 |
 | D6 | 单会话 | 主界面不提供选择；意外返回多个会话时拒绝任意连接并显示错误 |
 | D7 | 关窗语义 | 采集中关窗 = 隐藏窗口继续采集（Dock 图标恢复）；无采集关窗 = 退出；Cmd-Q 采集中 = 确认「停止采集并退出？」→ 干净收尾后退出 |
-| D8 | 托盘 | v1 不做 |
+| D8 | 托盘/常驻形态 | v1.1 做：定位为后台常驻程序，最小化＝收进托盘（macOS 为菜单栏图标），不占任务栏/程序坞；图标颜色反映状态，单击恢复窗口，右键菜单含打开/连接·断开/设置/退出；关闭与退出沿用 D7。详见 §6.5 |
 | D9 | 命名 | 目录与 Python 包名于 2026-11-23 由 `macos-gui`/`macos_gui` 统一更名为 `gui`/`gui`（跨平台形态）。2026-11-24 将 `windows-gui/` 合并进 `gui/`：平台构建脚本在 `gui/macos/`、`gui/windows/`，平台差异集中在 `src/gui/platforms/`；共用 `gui/launcher.py` |
 
 ## 3. 架构
@@ -164,6 +164,24 @@ boot → 无 device_token：扫码登录 → 单会话主页
 - 登录页保留二维码与浏览器打开入口，二维码缩至 ≤260px。主窗体登录后收敛为小型监视器；无需选择会话。服务意外返回多个会话时客户端拒绝任意选择并报告异常。
 - 自动连接每个会话只尝试一次，避免失败后反复启动。paused 后停止连接，恢复 running 不自动重录，沿用 STATE_MACHINES v2 决策。
 
+### 6.5 常驻形态与托盘交互（2026-11-27 增补，v1.1）
+
+定位：客户端是**后台常驻程序**，启动后无需用户持续关注；用户只在需要时唤回窗口。
+
+- **最小化语义**：点最小化 → 窗口隐藏并收进托盘（macOS 为菜单栏图标），进程与采集继续；不再占用任务栏/程序坞窗口位。`changeEvent` 捕获 `QEvent.WindowStateChange` + `Qt.WindowMinimized` 后 `hide()`。
+- **关闭/退出语义**：沿用 D7 不变。关闭(X)：采集中 mac 隐藏、Windows 拒绝；空闲退出。托盘菜单「退出」与 Cmd-Q/Alt-F4 统一走「采集中先确认停止采集并退出」。
+- **托盘图标 = 状态 + 恢复入口**：
+  - 颜色：灰=无会话/未登录、绿=已入会、红=断开/异常；悬停 tooltip 显示状态与会话标题。
+  - 左键单击/双击 → `showNormal()` + `activateWindow()` + `raise_()`（Windows/Linux）；macOS 菜单栏图标按平台惯例点击即弹出菜单，用首项「打开会参谋」恢复窗口。
+  - 右键菜单：打开会参谋 / 连接·断开（按状态显示）/ 设置 / 退出。
+- **首次收进托盘**：发一次 toast/气泡「会参谋已转入后台，点击托盘图标可找回」，可持久化「不再提示」。
+- **平台映射**：
+  - Windows：`QSystemTrayIcon`（通知区域），窗口从任务栏移除。
+  - macOS：同一 `QSystemTrayIcon` 呈现为菜单栏图标；`setQuitOnLastWindowClosed(False)`；监听 Dock/应用激活（`applicationStateChanged`、`QEvent.ApplicationActivate`）恢复窗口。
+  - D7 旧路径「采集中关窗 = hide() 后点 Dock 恢复」此前的恢复缺口，在本任务一并补齐。
+  - 其他平台：generic 用 `QSystemTrayIcon` 兜底；`isSystemTrayAvailable()==false` 时回退为最小化到任务栏。
+- **图标资源**：现无图标，需新增三态图标（建议 `QPainter` 运行时绘制圆点+会话图形，避免多套位图）；Windows exe 的窗口/托盘图标另置静态 `.ico`。
+- **待定项**：macOS 是否隐藏程序坞图标（`LSUIElement`）。建议 v1.1 **保留** Dock 图标（可 Cmd-Tab 找到，减少“程序消失”误解），菜单栏为主入口。
 
 ## 7. 运行与分发形态
 
@@ -171,7 +189,7 @@ boot → 无 device_token：扫码登录 → 单会话主页
 - **macOS 打包**：`gui/macos/build.sh` → PyInstaller onedir `.app`（PySide6 + gui + recorder 包 + 预编译 SCK/mute helper；打包时 swiftc 编译 helper 放入 bundle，经 `LOCAL_MEETING_RECORDER_SCK_BIN`/`LOCAL_MEETING_RECORDER_MUTE_BIN` 指向——recorder 已支持该覆盖）。产物在 `gui/dist/macos/`（`.app` + `MeetingAdvisor-macos-<arch>.zip`）。
 - 不签名/不公证：README 引导右键打开绕 Gatekeeper；TCC 弹窗（屏幕录制=SCK、麦克风=开 mic 时）一次授权长期有效（TCC 记 .app）。
 - **Windows 打包**：`gui/windows/build.ps1` → PyInstaller onefile `MeetingAdvisor-<timestamp>.exe`（`recorder[windows]`：process_audio_capture 进程环回 + soundcard/uiautomation mic 门控），产物在 `gui/dist/windows/`。两端共用 `gui/launcher.py`。
-- **平台策略**：`src/gui/platforms/` 按 `sys.platform` 选择采集源、本地留存目录与关窗语义。macOS 采集中关窗=隐藏继续；Windows 拒绝关闭并提示先断开；其他平台按隐藏处理（CI 用 generic 源）。
+- **平台策略**：`src/gui/platforms/` 按 `sys.platform` 选择采集源、本地留存目录与关窗语义。macOS 采集中关窗=隐藏继续；Windows 拒绝关闭并提示先断开；其他平台按隐藏处理（CI 用 generic 源）。最小化统一收进托盘/菜单栏（§6.5），无托盘环境回退为最小化到任务栏。
 
 ## 8. 任务拆分
 
@@ -185,6 +203,7 @@ boot → 无 device_token：扫码登录 → 单会话主页
 | G6a | 命令行形态验收 | 干净 venv + `python -m gui` 跑真实链路 | §10 阶段一取证 |
 | G6b | 打包验收 | PyInstaller .app + 文档 + 干净 Mac 实测 | §10 阶段二取证（重点 TCC/Gatekeeper/打包差异） |
 | G7 | Windows（后续） | recorder WASAPI loopback + win 打包 | 独立立项，不阻塞 G1–G6 |
+| G8 | 常驻托盘（v1.1） | `QSystemTrayIcon` + 三态图标 + 托盘菜单 + 最小化收进托盘 + 恢复/退出 + 首次提示；Win/mac 平台细节（§6.5） | Win/mac 手动最小化→托盘、单击恢复、右键菜单动作正确；采集中退出走确认收尾；无托盘环境回退任务栏 |
 
 ## 9. 风险与显式接受项
 
@@ -199,7 +218,7 @@ boot → 无 device_token：扫码登录 → 单会话主页
 
 ## 10. 验收口径（G6a 命令行形态 → G6b 打包形态）
 
-**阶段一（G6a，命令行）**：干净 venv 安装 → `python -m gui` → 设置页输入服务器地址 → 扫码登录（顶栏出现身份）→ 飞书发「入会」→ 主页 ≤10s 显示唯一会话 → 手动／自动连接 → 绿色「已入会」与静音图标 → bot 收到决策通知 → 关窗采集继续（Dock 恢复）→ 断开连接干净收尾（`stopped` 确认）→ 飞书「结束会议」→ 会话 ended、GUI 自动回主页。
+**阶段一（G6a，命令行）**：干净 venv 安装 → `python -m gui` → 设置页输入服务器地址 → 扫码登录（顶栏出现身份）→ 飞书发「入会」→ 主页 ≤10s 显示唯一会话 → 手动／自动连接 → 绿色「已入会」与静音图标 → bot 收到决策通知 → 最小化收进托盘、从托盘恢复（D8）→ 关窗采集继续（Dock 恢复）→ 断开连接干净收尾（`stopped` 确认）→ 飞书「结束会议」→ 会话 ended、GUI 自动回主页。
 
 **阶段二（G6b，打包 .app）**：干净 Mac 装 .app → 右键打开（Gatekeeper 引导）→ TCC 授权一次 → 重复阶段一关键路径（登录/发现/采集/干净停止/关窗继续）；对比确认打包形态无行为差异。
 

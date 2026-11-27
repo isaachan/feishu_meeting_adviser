@@ -36,6 +36,12 @@ class MemoryStoreTests(unittest.TestCase):
         config.clear_device_token(store)
         self.assertIsNone(config.load_state(store)['device_token'])
 
+    def test_tray_hint_flag_persists(self):
+        store = config.MemoryConfigStore()
+        self.assertFalse(config.tray_hint_shown(store))
+        config.mark_tray_hint_shown(store)
+        self.assertTrue(config.tray_hint_shown(store))
+
     def test_server_url_validation(self):
         store = config.MemoryConfigStore()
         for bad in ('', 'advisor.internal', 'ftp://x', None, 7, 'x' * 600):

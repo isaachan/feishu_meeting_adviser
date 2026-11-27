@@ -11,6 +11,7 @@ LEGACY_SERVICE = 'macos-gui'  # 2026-11-23 模块更名前的服务名；仅用�
 KEY_SERVER_URL = 'server_url'
 KEY_DEVICE_TOKEN = 'device_token'
 KEY_AUTO_CONNECT = 'auto_connect'
+KEY_TRAY_HINT_SHOWN = 'tray_hint_shown'
 
 # 首开免配置：未显式保存过地址时使用的默认会参谋服务器（docs/DEPLOYMENT.md）。
 DEFAULT_SERVER_URL = 'http://meeting-advisor.nioint.com'
@@ -109,6 +110,14 @@ def load_state(store):
 
 def save_auto_connect(store, enabled):
     store.set(KEY_AUTO_CONNECT, 'true' if enabled else 'false')
+
+
+def tray_hint_shown(store):
+    return store.get(KEY_TRAY_HINT_SHOWN) == 'true'
+
+
+def mark_tray_hint_shown(store):
+    store.set(KEY_TRAY_HINT_SHOWN, 'true')
 
 
 def save_server_url(store, url):

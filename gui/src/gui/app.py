@@ -6,9 +6,11 @@ make the UI responsive. HTTP calls block only inside the worker thread.
 """
 import logging
 import threading
+from typing import cast
 
-from PySide6.QtCore import QObject, QTimer, Signal
-from PySide6.QtWidgets import QMainWindow, QStackedWidget
+from PySide6.QtCore import QEvent, QObject, Qt, QTimer, Signal
+from PySide6.QtWidgets import (QApplication, QMainWindow, QMessageBox,
+                               QStackedWidget)
 
 from . import config as config_mod
 from . import platforms
@@ -16,6 +18,7 @@ from .api import ApiError, GuiApiClient, NetworkError
 from .login import LoginFlow
 from .sessions import normalize_sessions
 from .ui.pages import DashboardPage, LoginPage, SettingsPage
+from .ui.tray import IDLE_COLOR, TrayIcon, brand_icon
 
 LOG = logging.getLogger(__name__)
 
@@ -23,6 +26,11 @@ LOGIN_POLL_INTERVAL_MS = 2500
 SESSION_POLL_INTERVAL_MS = 10_000
 SESSION_POLL_CAPTURING_MS = 5_000
 CAPTURE_STATS_INTERVAL_MS = 1_000
+
+
+def _qt_app():
+    """QApplication.instance() typed for pyright (QGuiApplication API)."""
+    return cast(QApplication | None, QApplication.instance())
 
 
 class Controller(QObject):
@@ -283,6 +291,12 @@ class MainWindow(QMainWindow):
         super().__init__(parent)
         self.controller = controller
         self.setWindowTitle('会参谋')
+        self.setWindowIcon(brand_icon())
+        self._hidden_to_tray = False
+        self._handling_minimize = False
+        self._quit_pending = False
+        self._quit_ticks = 0
+        self._app = _qt_app()
         self.stack = QStackedWidget()
         self.setCentralWidget(self.stack)
         self.settings_page = SettingsPage()
@@ -305,6 +319,21 @@ class MainWindow(QMainWindow):
         self._stats_timer = QTimer(self)
         self._stats_timer.setInterval(CAPTURE_STATS_INTERVAL_MS)
         self._stats_timer.timeout.connect(self.controller.poll_capture_stats)
+
+        self._quit_timer = QTimer(self)
+        self._quit_timer.setInterval(100)
+        self._quit_timer.timeout.connect(self._poll_quit)
+
+        self.tray = TrayIcon(self)
+        self.tray.open_requested.connect(self._show_from_tray)
+        self.tray.connect_requested.connect(self._tray_connect)
+        self.tray.disconnect_requested.connect(self.controller.do_stop_capture)
+        self.tray.settings_requested.connect(self._tray_settings)
+        self.tray.quit_requested.connect(self._tray_quit)
+        self.dashboard_page.visual_state_changed.connect(self._on_visual_state)
+        if self._app is not None:
+            self._app.installEventFilter(self)
+            self._app.applicationStateChanged.connect(self._on_app_state)
 
         controller.page_changed.connect(self._on_page_changed)
         controller.login_started.connect(
@@ -334,8 +363,102 @@ class MainWindow(QMainWindow):
                 self.dashboard_page.set_error('请先断开连接，再关闭窗口')
             else:
                 self.hide()
+                self._after_hide()
         else:
+            if self._app is not None:
+                self._app.removeEventFilter(self)
             event.accept()
+
+    def changeEvent(self, event):
+        """最小化收进托盘（D8）：仅在系统托盘可用时接管。"""
+        if (event.type() == QEvent.Type.WindowStateChange and
+                self.tray.available and self.isMinimized() and
+                not self._handling_minimize):
+            self._handling_minimize = True
+            try:
+                self.setWindowState(
+                    self.windowState() & ~Qt.WindowState.WindowMinimized)
+                self.hide()
+            finally:
+                self._handling_minimize = False
+            self._after_hide()
+        super().changeEvent(event)
+
+    def eventFilter(self, obj, event):
+        """Cmd-Q / 应用退出请求统一走「采集中先确认停止」。"""
+        if (obj is self._app and event.type() == QEvent.Type.Quit and
+                not self._request_quit()):
+            return True
+        return super().eventFilter(obj, event)
+
+    def _after_hide(self):
+        self._hidden_to_tray = True
+        self._show_tray_hint_once()
+
+    def _on_visual_state(self, state):
+        self.tray.set_state(**state)
+
+    def _show_from_tray(self):
+        self._hidden_to_tray = False
+        self.showNormal()
+        self.activateWindow()
+        self.raise_()
+
+    def _on_app_state(self, state):
+        # macOS：窗口隐藏后点 Dock 图标 / Cmd-Tab 回来时恢复窗口。
+        if (state == Qt.ApplicationState.ApplicationActive and
+                self._hidden_to_tray and not self.isVisible()):
+            self._show_from_tray()
+
+    def _show_tray_hint_once(self):
+        store = self.controller.store
+        if config_mod.tray_hint_shown(store):
+            return
+        if self.tray.show_hint():
+            config_mod.mark_tray_hint_shown(store)
+
+    def _tray_connect(self):
+        session = self.dashboard_page.session
+        if session is not None and not self.controller.capturing:
+            self._start_capture(session)
+
+    def _tray_settings(self):
+        self._show_from_tray()
+        self.controller.do_edit_server()
+
+    def _tray_quit(self):
+        if self._request_quit():
+            self._close_and_quit()
+
+    def _request_quit(self):
+        """True when the app may quit now; False when deferred or cancelled."""
+        if self._quit_pending:
+            return True
+        if not self.controller.capturing:
+            return True
+        answer = QMessageBox.question(
+            self, '退出会参谋', '正在连接会议，停止连接并退出？',
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if answer != QMessageBox.StandardButton.Yes:
+            return False
+        self._quit_pending = True
+        self._quit_ticks = 0
+        self.controller.do_stop_capture()
+        self.tray.set_state(color=IDLE_COLOR, label='正在退出…',
+                            capturing=True)
+        self._quit_timer.start()
+        return False
+
+    def _poll_quit(self):
+        self._quit_ticks += 1
+        if not self.controller.capturing or self._quit_ticks >= 60:
+            self._quit_timer.stop()
+            self._close_and_quit()
+
+    def _close_and_quit(self):
+        if self._app is not None:
+            self._app.quit()
 
     def _save_server(self, url, auto_connect):
         try:
@@ -366,6 +489,8 @@ class MainWindow(QMainWindow):
             self._login_timer.start()
             if self.controller.job is not None:
                 self._stats_timer.start()
+            self.tray.set_state(color=IDLE_COLOR, label='未登录',
+                                capturing=self.controller.capturing)
         else:
             self._login_timer.stop()
         if state == 'listing':
@@ -416,9 +541,9 @@ class MainWindow(QMainWindow):
 
 
 def run(argv=None):
-    from PySide6.QtWidgets import QApplication
     import sys
     app = QApplication(sys.argv if argv is None else argv)
+    app.setWindowIcon(brand_icon())
     controller = Controller(config_mod.default_store())
     window = MainWindow(controller)
     window.resize(380, 340)

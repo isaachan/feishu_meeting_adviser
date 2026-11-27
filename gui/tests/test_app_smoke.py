@@ -2,13 +2,16 @@
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 try:
     import PySide6  # noqa: F401
     import segno  # noqa: F401
-    from PySide6.QtWidgets import QApplication, QLabel, QPushButton
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import (QApplication, QLabel, QMessageBox,
+                                   QPushButton)
     PYSIDE_READY = True
 except ImportError:
     PYSIDE_READY = False
@@ -44,6 +47,9 @@ class AppSmokeTests(unittest.TestCase):
         self.addCleanup(self.window._login_timer.stop)
         self.addCleanup(self.window._session_timer.stop)
         self.addCleanup(self.window._stats_timer.stop)
+        self.addCleanup(self.window._quit_timer.stop)
+        self.addCleanup(lambda: self.window._app.removeEventFilter(self.window)
+                        if self.window._app else None)
 
     def login_with_stored_token(self):
         config_mod.save_device_token(self.store, 'dt-x')
@@ -244,6 +250,83 @@ class AppSmokeTests(unittest.TestCase):
 
         self.assertGreater(red_pixels('muted'), 20)
         self.assertEqual(red_pixels('open'), 0)
+
+    def test_minimize_moves_to_tray_and_restores(self):
+        self.window.tray.available = True
+        self.window.show()
+        self.app.processEvents()
+        self.assertTrue(self.window.isVisible())
+        self.window.showMinimized()
+        self.app.processEvents()
+        self.assertFalse(self.window.isVisible())
+        self.assertTrue(self.window._hidden_to_tray)
+        self.window._on_app_state(Qt.ApplicationState.ApplicationActive)
+        self.app.processEvents()
+        self.assertTrue(self.window.isVisible())
+        self.assertFalse(self.window._hidden_to_tray)
+
+    def test_minimize_is_native_without_tray(self):
+        self.window.tray.available = False
+        self.window.show()
+        self.window.showMinimized()
+        self.app.processEvents()
+        self.assertTrue(self.window.isMinimized())
+        self.assertFalse(self.window._hidden_to_tray)
+
+    def test_dashboard_state_drives_tray_tooltip(self):
+        self.login_with_stored_token()
+        self.controller.do_poll_sessions()
+        self.assertIn('已断开', self.window.tray.tray.toolTip())
+        self.assertIn('周会', self.window.tray.tray.toolTip())
+
+    def test_tray_connect_and_disconnect_actions(self):
+        self.login_with_stored_token()
+        self.controller.do_poll_sessions()
+        self.window._tray_connect()
+        job = self.controller.job
+        self.assertIsNone(job)  # run_async is disabled in tests
+        self.controller.run_async = lambda work: work()
+        self.window._tray_connect()
+        job = self.controller.job
+        self.assertIsNotNone(job)
+        self.window.tray.disconnect_action.trigger()
+        self.assertTrue(job.stop_requested)
+
+    def test_first_tray_hint_is_shown_once(self):
+        with patch.object(self.window.tray, 'show_hint',
+                          return_value=True) as hint:
+            self.window._after_hide()
+            self.assertTrue(config_mod.tray_hint_shown(self.store))
+            self.window._after_hide()
+        hint.assert_called_once()
+
+    def test_quit_allowed_when_idle(self):
+        self.assertTrue(self.window._request_quit())
+        self.assertFalse(self.window._quit_pending)
+
+    def test_quit_confirm_can_cancel_while_connected(self):
+        self.login_with_stored_token()
+        self.controller.do_poll_sessions()
+        job = self.controller.do_start_capture(
+            self.client.sessions_payload['sessions'][0])
+        with patch('gui.app.QMessageBox.question',
+                   return_value=QMessageBox.StandardButton.No):
+            self.assertFalse(self.window._request_quit())
+        self.assertFalse(job.stop_requested)
+        self.assertFalse(self.window._quit_pending)
+
+    def test_quit_confirm_stops_and_defers_while_connected(self):
+        self.login_with_stored_token()
+        self.controller.do_poll_sessions()
+        job = self.controller.do_start_capture(
+            self.client.sessions_payload['sessions'][0])
+        with patch('gui.app.QMessageBox.question',
+                   return_value=QMessageBox.StandardButton.Yes):
+            self.assertFalse(self.window._request_quit())
+        self.assertTrue(job.stop_requested)
+        self.assertTrue(self.window._quit_pending)
+        self.assertTrue(self.window._quit_timer.isActive())
+        self.window._quit_timer.stop()
 
 
 class ScriptedClient:

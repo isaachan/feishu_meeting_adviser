@@ -153,6 +153,7 @@ class DashboardPage(QWidget):
     connect_clicked = Signal(dict)
     disconnect_clicked = Signal()
     settings_clicked = Signal()
+    visual_state_changed = Signal(dict)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -280,9 +281,16 @@ class DashboardPage(QWidget):
         self.orb.set_state(color, show_mic=bool(session and self.capturing),
                            mic_state=self.mic_state)
         self.status_label.setText(label)
+        can_connect = bool(session and session.get('phase') == 'running' and
+                           session.get('recorder_command_args'))
         self.connect_button.setVisible(not self.auto_connect)
         self.connect_button.setText('断开' if self.capturing else '连接')
-        self.connect_button.setEnabled(self.capturing or bool(
-            session and session.get('phase') == 'running' and
-            session.get('recorder_command_args')))
+        self.connect_button.setEnabled(self.capturing or can_connect)
         self.settings_button.setEnabled(True)
+        self.visual_state_changed.emit({
+            'color': color,
+            'label': label,
+            'title': self.meeting_label.text(),
+            'capturing': self.capturing,
+            'can_connect': can_connect,
+        })
