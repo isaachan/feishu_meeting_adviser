@@ -172,11 +172,11 @@ admin-site 导出的 TXT（`admin-site/src/admin_site/static/index.html`）：
   - `prompt-studio serve --host 127.0.0.1 --port 8765`：只绑 loopback；prompt 原子写、运行中禁止改 prompt/模型。
   - 验收：HTTP 路由单测覆盖 auto/step fake replay、prompt 读写/越界、模型切换；`tests/test_web.py` 全绿。
 
-- [ ] **PS7 · 隔离/文档/CI 接线**
-  - `prompt-studio/README.md`：隔离 server 部署、token、SSH 隧道、常见问题。
-  - `.github/workflows/quality.yml` 加 `prompt-studio`（module），integration 装 `./prompt-studio` 并跑其 stack 测试（或跳过真实模型）。
+- [x] **PS7 · 隔离/文档/CI 接线**
+  - `prompt-studio/README.md`：隔离 server 部署、token、SSH 隧道、常见问题；说明 advisor ingest 仍绑 `0.0.0.0` 的防火墙边界。
+  - `.github/workflows/quality.yml` 加 `prompt-studio`（module + paths），integration 装 `./prompt-studio[dev]` 并跑其全部测试（fake backend，无需真实模型）。
   - 根 README 模块列表补充。
-  - 验收：CI 路径触发正确；本地 `ruff/pyright/unittest` 全绿。
+  - 验收：CI 路径触发正确；本地 `ruff/pyright/unittest` 与 `integrations` 全绿。
 
 - [ ] **PS8 ·（可选）飞书文档抓取**
   - `prompt-studio doc fetch --url <feishu-doc>` 走个人 `noam`/my-lark，把正文写入场景 `documents[]`。

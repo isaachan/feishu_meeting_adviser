@@ -11,6 +11,7 @@ on:
       - "llm-gateway/**"
       - "gui/**"
       - "admin-site/**"
+      - "prompt-studio/**"
       - "integrations/**"
       - ".github/workflows/quality.yml"
   pull_request:
@@ -23,6 +24,7 @@ on:
       - "llm-gateway/**"
       - "gui/**"
       - "admin-site/**"
+      - "prompt-studio/**"
       - "integrations/**"
       - ".github/workflows/quality.yml"
 
@@ -35,7 +37,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        module: [recorder, advisor, bot, auth, stt-server, llm-gateway, gui, admin-site]
+        module: [recorder, advisor, bot, auth, stt-server, llm-gateway, gui, admin-site, prompt-studio]
         python-version: ["3.11", "3.14"]
         exclude:
           # stt-server's migrated sync-client WS test harness is flaky on 3.11
@@ -86,6 +88,8 @@ jobs:
             llm-gateway/pyproject.toml
             gui/pyproject.toml
             admin-site/pyproject.toml
-      - run: python -m pip install -e './recorder[dev]' -e ./advisor -e ./bot -e ./auth -e ./stt-server -e ./llm-gateway -e ./gui
+            prompt-studio/pyproject.toml
+      - run: python -m pip install -e './recorder[dev]' -e ./advisor -e ./bot -e ./auth -e ./stt-server -e ./llm-gateway -e ./gui -e './prompt-studio[dev]'
       - run: ruff check --config advisor/pyproject.toml integrations
       - run: python -m unittest discover -s integrations -v
+      - run: python -m unittest discover -s prompt-studio/tests -v

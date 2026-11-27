@@ -34,6 +34,7 @@
 ├── stt-server/            # 流式 STT 服务（自旧 stt-server 平移，退化纯内网）
 ├── llm-gateway/           # 模型执行网关（自旧 llm-gateway 平移）
 ├── gui/             # laptop 端 GUI 客户端
+├── prompt-studio/         # 提示词/模型本地重放与 Web UI（开发工具）
 ├── integrations/          # 跨模块集成测试床
 ├── scripts/               # 本地全栈起停（local-up.sh / local-down.sh）
 └── data/                  # 运行时数据（不入库）

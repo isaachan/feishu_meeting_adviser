@@ -59,3 +59,13 @@ token 只从环境变量或 `--nsdp-token-file`/`--jira-token-file` 读取，不
 ## 进程模型
 
 `serve` 启动 auth(stub)、llm-gateway 与 fake STT；每次 run 另起一个 fresh advisor，避免旧 session 的未投递消息与 single-claim 干扰。Ctrl-C 会停止所有子进程。
+
+## 常见问题
+
+- **`authorization_required: join credentials missing`**：先跑 `submit-tokens`（或给命令传 token 文件）。`--backend fake` 仍需要凭据，因为 advisor 建会话前会校验 NSDP/Jira。
+- **第一个决策很慢**：每个 session 会后台执行 `noam nsdp info` 拉取版本目录；等待即可。没有 catalog 时早期决策可能缺少版本事实。
+- **有字幕但没有 reply**：看右侧 `decision.control` 与 `snapshot_summary.pending_reply`。`ignore`/`pending` 是正常决策；错误看结果里的 advisor log 路径。
+- **改了提示词不生效**：gateway 在每次 decide 重新读取文件；运行中平台禁止编辑。最稳妥是保存后开新 run，并确认三个提示词文件是一套完整链路。
+- **端口被占用/远端访问**：用 `--port` 换端口；远端只做 `ssh -L 8765:127.0.0.1:8765`，不要把 UI 反代到公网。advisor ingest 端口由 advisor 绑 `0.0.0.0`，隔离机需用防火墙限制来源。
+- **token 过期**：NSDP/Jira token 无 refresh，重新 `submit-tokens` 即可。
+- **磁盘增长**：每次 run 在 `data/prompt-studio/runs/<run-id>/` 保留独立 advisor DB 与日志；确认不再需要后可整目录删除。
