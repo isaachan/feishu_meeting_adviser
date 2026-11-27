@@ -2,6 +2,8 @@
 
 状态：2026-11-27 设计定稿，按本文任务依次实施。本文只描述本地/隔离环境下的提示词测试工具，不改变生产链路、部署形态或现有契约。
 
+日常使用见 [Prompt Studio 使用手册](PROMPT_STUDIO_MANUAL.md)。
+
 ## 1. 目标
 
 在同一台隔离服务器上，把 admin-site 导出的会议文字记录（TXT）重新灌进**真实的 advisor + 真实的 llm-gateway**，观察会参谋的 decision/reply，用于快速迭代提示词与模型。
