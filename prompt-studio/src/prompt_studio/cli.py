@@ -13,7 +13,8 @@ from . import __version__
 from .clients import ClientError
 from .doc_fetch import (DocFetchError, append_scene_document, fetch_doc,
                         write_text)
-from .replay import ReplayError, ReplayRun
+from .replay import (DEFAULT_PACED_SECONDS, ReplayError, ReplayRun,
+                     validate_paced_seconds)
 from .results import ReplayResult
 from .stack import PROMPT_FILES, ROOT, Stack, StackConfig, StackError
 from .transcript import Transcript, TranscriptError, parse_text
@@ -55,7 +56,7 @@ def build_parser() -> argparse.ArgumentParser:
     replay.add_argument('--meeting-no', default=None)
     replay.add_argument('--run-id', default=None)
     replay.add_argument('--owner', default=None)
-    replay.add_argument('--mode', choices=['auto', 'step'], default='auto')
+    replay.add_argument('--mode', choices=['auto', 'paced'], default='auto')
     replay.add_argument('--model', default=None)
     replay.add_argument('--data-dir', type=Path, default=None)
     replay.add_argument('--prompt-dir', type=Path, default=None)
@@ -63,8 +64,9 @@ def build_parser() -> argparse.ArgumentParser:
     replay.add_argument('--opencode-provider-config', type=Path, default=None)
     replay.add_argument('--nsdp-token-file', type=Path, default=None)
     replay.add_argument('--jira-token-file', type=Path, default=None)
-    replay.add_argument('--no-pause', action='store_true',
-                        help='step 模式不等待回车（非 TTY 默认不等待）')
+    replay.add_argument(
+        '--paced-seconds', type=float, default=DEFAULT_PACED_SECONDS,
+        help='paced 模式每行之间的等待秒数（默认 5；0 表示尽快）')
     replay.add_argument('--json', action='store_true', help='只输出结果 JSON')
     replay.add_argument('--debug', action='store_true')
 
@@ -287,6 +289,12 @@ def command_replay(args) -> int:
         _validate_meeting_no(args.meeting_no)
     if args.run_id is not None:
         _validate_run_id(args.run_id)
+    paced_seconds = None
+    if args.mode == 'paced':
+        try:
+            paced_seconds = validate_paced_seconds(args.paced_seconds)
+        except ValueError as exc:
+            raise CommandError(str(exc)) from None
     nsdp = _read_token(args.nsdp_token_file, 'NSDP_TOKEN')
     jira = _read_token(args.jira_token_file, 'JIRA_TOKEN')
     config = StackConfig(
@@ -304,7 +312,11 @@ def command_replay(args) -> int:
         if args.mode == 'auto':
             result = run.run_auto()
         else:
-            result = _run_step(run, args)
+            assert paced_seconds is not None
+            if not args.json:
+                print(f'paced: {len(transcript.human_turns)} 行，'
+                      f'间隔 {paced_seconds:g}s')
+            result = run.run_paced(paced_seconds)
     finally:
         stack.stop()
     if result is None:
@@ -321,27 +333,6 @@ def command_replay(args) -> int:
         return 1
     return 0
 
-
-def _run_step(run: ReplayRun, args) -> ReplayResult:
-    pause = (not args.no_pause and not args.json and sys.stdin.isatty())
-    run.open()
-    try:
-        while True:
-            turn = run.send_next()
-            if turn is None:
-                break
-            if not args.json:
-                print(f'\n[{turn.speaker or "未识别"}] {turn.text}')
-                _print_latest_decision(run.collect())
-            if pause:
-                try:
-                    input('按 Enter 继续...')
-                except EOFError:
-                    pause = False
-        run.finish()
-        return run.collect()
-    finally:
-        run.close()
 
 
 def _print_latest_decision(result: ReplayResult):

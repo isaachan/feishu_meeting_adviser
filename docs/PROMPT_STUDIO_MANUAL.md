@@ -138,17 +138,17 @@ Web/CLI 可保存和复用场景：
 - 自定义 provider 需要 `--opencode-provider-config`。
 - 真实 NSDP/Jira token 必须已提交，否则 scoped tool 查询会失败。
 
-### 5.2 auto / step
+### 5.2 auto / paced
 
 ```bash
 # 一次发完所有人类字幕，等待最终决策
 prompt-studio replay ... --mode auto
 
-# 每发一条，等字幕落库 + 决策 settle 后停顿；交互终端按 Enter 继续
-prompt-studio replay ... --mode step
+# 每行之间等待 5 秒，发送期间不等待模型回复
+prompt-studio replay ... --mode paced --paced-seconds 5
 ```
 
-`--json` 只输出结果 JSON；`--no-pause` 在 step 模式下不等待回车（非 TTY 默认不等待）。
+`paced` 模式适合模拟真实会议：字幕按间隔持续到达，模型任务会和后续字幕重叠。`--paced-seconds 0` 表示尽快发送。`--json` 只输出结果 JSON。
 
 ### 5.3 其他参数
 
@@ -157,6 +157,8 @@ prompt-studio replay ... --mode step
 - `--meeting-no`：6–12 位数字；默认随机新会议号。
 - `--run-id`：字母/数字/点/下划线/短横线，不能含 `..`。
 - `--owner`：固定 owner，默认 `ou_prompt_studio`。
+- `--mode`：`auto` 一次灌完；`paced` 按间隔发送。
+- `--paced-seconds`：paced 模式每行间隔秒数，默认 5；0 表示尽快。
 - `--data-dir` / `--prompt-dir`：覆盖默认目录。
 - `--nsdp-token-file` / `--jira-token-file`：本次运行临时提交凭据。
 
@@ -195,23 +197,22 @@ prompt-studio: http://<server-ip>:8765
 ### 6.3 页面操作
 
 1. 粘贴 TXT，填写标题/会议描述。
-2. 选择 `auto` 或 `step`。
+2. 选择 `auto` 或 `paced`；`paced` 可设置每行间隔秒数。
 3. 点“解析”检查识别结果，再点“开始重放”。
-4. `step` 模式用“下一句”推进，“结束”收尾。
-5. 右侧查看：
+4. 右侧查看：
    - 每条人类字幕对应的 decision / reply
    - `jobs`、`complete`、`replies` 数量
    - 每条 job 的 `control`、`reply`、snapshot 摘要
    - material（description/documents/state/context_version）
    - advisor 日志路径
-6. “提示词”区域可在线编辑三个 prompt 文件；保存为原子写。
-7. 顶部可切换模型；切换会重启 gateway。
+5. “提示词”区域可在线编辑三个 prompt 文件；保存为原子写。
+6. 顶部可切换模型；切换会重启 gateway。
 
 运行中禁止修改提示词或切换模型。提示词是完整链路：`agent_prompt.txt + snapshot_rules.txt + reply_markdown_rules.txt`，只改一个可能不够。
 
 ### 6.4 启动配置
 
-`serve` 支持与 `replay` 相同的模型/token 参数；默认模型为 `nio/DeepSeek-V4.1-Flash`：
+`serve` 支持与 `replay` 相同的模型/token 参数；默认模型为 `nio/DeepSeek-V4.1-Flash`。paced 间隔在 Web UI 上设置：
 
 ```bash
 .venv-local/bin/prompt-studio serve \

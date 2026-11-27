@@ -1,15 +1,16 @@
 """Per-run replay orchestration: fresh advisor -> material -> captions -> jobs.
 
 A run owns one advisor process and one session. The stack's auth/gateway/fake
-STT are shared and long-lived. ``mode='step'`` sends one human line and waits
-for the decision to settle; ``mode='auto'`` sends all lines, drains the source
-and waits once.
+STT are shared and long-lived. ``mode='auto'`` sends all lines immediately;
+``mode='paced'`` spaces human lines by a configurable interval so model work
+overlaps with caption arrival.
 """
 from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+import math
 import secrets
 import time
 from uuid import uuid4
@@ -29,6 +30,19 @@ class ReplayError(RuntimeError):
 
 class ReplayTimeout(ReplayError):
     pass
+
+
+DEFAULT_PACED_SECONDS = 5.0
+MAX_PACED_SECONDS = 3600.0
+
+
+def validate_paced_seconds(value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError('paced seconds must be a number')
+    seconds = float(value)
+    if not math.isfinite(seconds) or not 0 <= seconds <= MAX_PACED_SECONDS:
+        raise ValueError(f'paced seconds must be between 0 and {MAX_PACED_SECONDS:g}')
+    return seconds
 
 
 @dataclass
@@ -85,8 +99,6 @@ class ReplayRun:
         self._process_name = f'advisor-{self.run_id}'
         self._opened = False
         self._ingest_ended = False
-        self._index = 0
-        self._expected: Counter[str] = Counter()
         self._last_keepalive = time.monotonic()
         self._snapshots: dict[str, dict] = {}
 
@@ -208,27 +220,38 @@ class ReplayRun:
                 message += '; missing credentials -> ' + '; '.join(parts)
         return message
 
-    def send_next(self):
-        if not self._opened or self.ingest is None:
-            raise ReplayError('run is not open')
-        turns = self.human_turns
-        if self._index >= len(turns):
-            return None
-        turn = turns[self._index]
-        self._index += 1
-        self._expected[turn.text] += 1
-        self.ingest.send_turn()
-        self._wait_caption(turn.text, self._expected[turn.text])
-        self.wait_settled()
-        return turn
+    def run_paced(self, paced_seconds: float = DEFAULT_PACED_SECONDS) -> ReplayResult:
+        """Send lines at a fixed interval without waiting for each decision."""
+        paced_seconds = validate_paced_seconds(paced_seconds)
+        self.open()
+        try:
+            if self.ingest is None:
+                raise ReplayError('ingest missing')
+            for index, _turn in enumerate(self.human_turns):
+                if index:
+                    self._wait_paced(paced_seconds)
+                self.ingest.send_turn()
+            self._wait_captions(Counter(turn.text for turn in self.human_turns))
+            self.finish()
+            self.wait_settled()
+            return self.collect()
+        finally:
+            self.close()
+
+    def _wait_paced(self, seconds: float):
+        deadline = time.monotonic() + seconds
+        while True:
+            self._ensure_alive()
+            self._keepalive()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            time.sleep(min(remaining, 1.0))
 
     def finish(self):
         if self.ingest is not None and not self._ingest_ended:
             self.ingest.end()
             self._ingest_ended = True
-
-    def _wait_caption(self, text: str, expected: int):
-        self._wait_captions(Counter({text: expected}))
 
     def _wait_captions(self, expected: Counter[str]):
         deadline = time.monotonic() + self.options.caption_timeout_s

@@ -95,10 +95,6 @@ def make_handler(app: StudioApp):
                     return self._json(200, app.parse(self._body()))
                 if path == '/api/run/start':
                     return self._json(201, app.start_run(self._body()))
-                if path == '/api/run/next':
-                    return self._json(200, app.runner.next_step())
-                if path == '/api/run/finish':
-                    return self._json(200, app.runner.finish())
                 if path == '/api/config':
                     return self._json(200, app.set_model(self._body()))
                 raise WebError(404, 'not_found', 'not found')

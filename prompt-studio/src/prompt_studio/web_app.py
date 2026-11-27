@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 import threading
 
+from .replay import DEFAULT_PACED_SECONDS, validate_paced_seconds
 from .stack import PROMPT_FILES, Stack
 from .transcript import Transcript, TranscriptError, parse_text
 from .web import ACTIVE, WebError, Runner
@@ -32,6 +33,7 @@ class StudioApp:
             'model': self.stack.config.model,
             'prompt_dir': str(self.prompt_dir),
             'gateway_url': self.stack.gateway_url,
+            'paced_seconds': DEFAULT_PACED_SECONDS,
             'active': self.runner.active,
         }
 
@@ -69,11 +71,16 @@ class StudioApp:
         if not isinstance(payload, dict):
             raise WebError(400, 'bad_request', '请求必须是 JSON 对象')
         mode = payload.get('mode', 'auto')
-        if mode not in ('auto', 'step'):
-            raise WebError(400, 'bad_mode', 'mode 只能是 auto 或 step')
+        if mode not in ('auto', 'paced'):
+            raise WebError(400, 'bad_mode', 'mode 只能是 auto 或 paced')
+        try:
+            paced_seconds = validate_paced_seconds(
+                payload.get('paced_seconds', DEFAULT_PACED_SECONDS))
+        except ValueError as exc:
+            raise WebError(400, 'bad_paced_seconds', str(exc)) from None
         transcript = self._transcript(payload)
         try:
-            self.runner.start(transcript, mode)
+            self.runner.start(transcript, mode, paced_seconds)
         except TranscriptError as exc:
             raise WebError(400, 'bad_transcript', str(exc)) from None
         return self.runner.snapshot()

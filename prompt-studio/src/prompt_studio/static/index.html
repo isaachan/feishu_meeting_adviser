@@ -82,12 +82,13 @@
         <label for="mode">模式</label>
         <select id="mode" style="width:120px">
           <option value="auto">auto</option>
-          <option value="step">step</option>
+          <option value="paced">paced</option>
         </select>
+        <label for="paced-seconds">间隔(秒)</label>
+        <input id="paced-seconds" type="number" min="0" max="3600"
+               step="0.1" value="5" style="width:90px">
         <button id="parse">解析</button>
         <button id="start" class="primary">开始重放</button>
-        <button id="next" disabled>下一句</button>
-        <button id="finish" disabled>结束</button>
       </div>
       <div class="muted" id="parse-info">尚未解析</div>
     </section>
@@ -106,7 +107,6 @@
     <section>
       <h2>运行</h2>
       <div class="stat" id="run-meta"><span>等待开始</span></div>
-      <div id="steps"></div>
     </section>
     <section>
       <h2>结果</h2>
@@ -156,6 +156,8 @@ function setBusy(busy) {
   $('start').disabled = busy;
   $('apply-model').disabled = busy;
   $('save-prompt').disabled = busy;
+  $('mode').disabled = busy;
+  $('paced-seconds').disabled = busy || $('mode').value !== 'paced';
 }
 
 async function refreshConfig() {
@@ -163,6 +165,7 @@ async function refreshConfig() {
   $('owner').textContent = config.owner;
   $('backend').textContent = config.backend;
   $('model').value = config.model;
+  if (config.paced_seconds != null) $('paced-seconds').value = config.paced_seconds;
   setBusy(config.active);
 }
 
@@ -208,19 +211,10 @@ async function startRun() {
       title: $('title').value || null,
       description: $('description').value || null,
       mode: $('mode').value,
+      paced_seconds: Number($('paced-seconds').value),
     }),
   });
   applyRun(run);
-}
-
-async function nextStep() {
-  showError(null);
-  applyRun(await api('/api/run/next', { method: 'POST' }));
-}
-
-async function finishRun() {
-  showError(null);
-  applyRun(await api('/api/run/finish', { method: 'POST' }));
 }
 
 function jobSummary(job) {
@@ -235,31 +229,18 @@ function jobSummary(job) {
 function renderRun(run) {
   if (!run) return;
   if (run.error) showError(run.error);
-  const active = ['opening', 'running', 'step'].includes(run.state);
+  const active = ['opening', 'running'].includes(run.state);
   setBusy(active);
-  $('start').disabled = active;
-  $('next').disabled = run.state !== 'step';
-  $('finish').disabled = !(active && run.mode === 'step');
   $('transcript').readOnly = active;
 
   const meta = $('run-meta');
   meta.replaceChildren(
     el('span', { text: `state: ${run.state}` }),
     el('span', { text: `mode: ${run.mode || '-'}` }),
+    el('span', { text: `paced: ${run.paced_seconds ?? '-'}s` }),
     el('span', { text: `run: ${run.run_id || '-'}` }),
     el('span', { text: `session: ${run.session_id || '-'}` }),
   );
-
-  const steps = $('steps');
-  steps.replaceChildren();
-  for (const step of run.steps || []) {
-    steps.append(el('div', { class: 'card' },
-      el('div', { class: 'muted', text: `#${step.index} ${step.speaker || '未识别'}` }),
-      el('div', { text: step.text }),
-      el('div', { class: 'who llm', text: `decision: ${step.decision ? step.decision.control : step.job_state || '-'}` }),
-      el('div', { text: `reply: ${step.reply || '(无)'}` }),
-    ));
-  }
   if (run.result) renderResult(run.result);
 }
 
@@ -326,8 +307,7 @@ async function poll() {
 function bind() {
   $('parse').onclick = () => parseTranscript().catch(showError);
   $('start').onclick = () => startRun().catch(showError);
-  $('next').onclick = () => nextStep().catch(showError);
-  $('finish').onclick = () => finishRun().catch(showError);
+  $('mode').onchange = () => setBusy(false);
   $('prompt-name').onchange = showPrompt;
   $('reload-prompts').onclick = () => loadPrompts().catch(showError);
   $('save-prompt').onclick = async () => {

@@ -8,6 +8,7 @@ import json
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -78,26 +79,17 @@ class StackReplayTests(unittest.TestCase):
         self.assertEqual(result.material['context_version'],
                          result.session_state.material_version)
 
-    def test_step_replay_waits_after_each_line(self):
+    def test_paced_replay_spaces_lines_without_waiting(self):
         transcript = self.transcript()
-        run = ReplayRun(self.stack, transcript, mode='step', owner=self.owner,
-                        settle_timeout_s=90)
-        run.open()
-        try:
-            first = run.send_next()
-            assert first is not None
-            self.assertEqual(first.text, '我们过一下预算')
-            self.assertTrue(run.collect().complete_jobs)
-            second = run.send_next()
-            assert second is not None
-            self.assertEqual(second.text, '我补充一点')
-            self.assertIsNone(run.send_next())
-            result = run.collect()
-            self.assertGreaterEqual(len(result.complete_jobs), 2)
-            self.assertTrue(result.replies)
-            run.finish()
-        finally:
-            run.close()
+        started = time.monotonic()
+        result = ReplayRun(self.stack, transcript, mode='paced',
+                           owner=self.owner, settle_timeout_s=90).run_paced(0.05)
+        self.assertGreaterEqual(time.monotonic() - started, 0.05)
+        self.assertTrue(result.complete_jobs, result.jobs)
+        human = [record['text'] for record in result.records
+                 if record['type'] == 'human']
+        self.assertEqual(human, [turn.text for turn in transcript.human_turns])
+        self.assertIn('网关合成回答', result.replies)
 
 
 if __name__ == '__main__':

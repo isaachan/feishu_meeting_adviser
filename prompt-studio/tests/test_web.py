@@ -120,11 +120,13 @@ class WebIntegrationTests(unittest.TestCase):
         self.assertEqual(config['owner'], self.owner)
         self.assertEqual(config['backend'], 'fake')
         self.assertEqual(config['model'], 'nio/DeepSeek-V4.1-Flash')
+        self.assertEqual(config['paced_seconds'], 5.0)
         opener = request.build_opener(request.ProxyHandler({}))
         with opener.open(self.base + '/', timeout=10) as response:
             html = response.read().decode('utf-8')
         self.assertEqual(response.status, 200)
         self.assertIn('Prompt Studio', html)
+        self.assertIn('paced-seconds', html)
 
     def test_can_listen_on_all_interfaces(self):
         server = ThreadingHTTPServer(('0.0.0.0', 0),
@@ -196,25 +198,27 @@ class WebIntegrationTests(unittest.TestCase):
             [record['text'] for record in result['records']
              if record['type'] == 'human'])
 
-    def test_step_replay_over_http(self):
-        status, run = self.call('POST', '/api/run/start',
-                                {'text': SAMPLE, 'mode': 'step'})
+    def test_paced_replay_over_http(self):
+        status, run = self.call('POST', '/api/run/start', {
+            'text': SAMPLE, 'mode': 'paced', 'paced_seconds': 0.05})
         self.assertEqual(status, 201, run)
-        run = self.wait_run(lambda item: item['state'] == 'step')
-        for expected in (1, 2):
-            status, body = self.call('POST', '/api/run/next')
-            self.assertEqual(status, 200, body)
-            run = self.wait_run(
-                lambda item: len(item['steps']) >= expected, timeout=90)
-        status, body = self.call('POST', '/api/run/finish')
-        self.assertEqual(status, 200, body)
+        self.assertEqual(run['state'], 'opening')
+        self.assertEqual(run['mode'], 'paced')
+        self.assertEqual(run['paced_seconds'], 0.05)
         run = self.wait_run(lambda item: item['state'] in ('done', 'error'))
         self.assertEqual(run['state'], 'done', run.get('error'))
-        self.assertEqual(len(run['steps']), 2)
         self.assertTrue(run['result']['jobs'])
         self.assertIn('网关合成回答',
                       [record['text'] for record in run['result']['records']
                        if record['type'] == 'llm'])
+
+    def test_rejects_step_and_bad_pace(self):
+        status, body = self.call('POST', '/api/run/start',
+                                 {'text': SAMPLE, 'mode': 'step'})
+        self.assertEqual(status, 400, body)
+        status, body = self.call('POST', '/api/run/start', {
+            'text': SAMPLE, 'mode': 'paced', 'paced_seconds': -1})
+        self.assertEqual(status, 400, body)
 
     def test_switch_model_restarts_gateway(self):
         status, config = self.call('POST', '/api/config',

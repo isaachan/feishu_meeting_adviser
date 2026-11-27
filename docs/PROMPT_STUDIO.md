@@ -65,7 +65,7 @@ prompt-studio/
 │   ├── replay.py          # 编排：建会话/patch/喂字幕/等决策/读结果
 │   ├── doc_fetch.py       # 个人 noam/my-lark 抓取飞书文档
 │   ├── results.py         # decision/log 读取与对照
-│   ├── web.py             # 单次 run 的后台 worker 与 step 视图
+│   ├── web.py             # 单次 run 的后台 worker 与状态视图
 │   ├── web_app.py         # UI 应用状态：parse/prompt/model/run
 │   ├── web_http.py        # stdlib HTTP 路由与服务启动
 │   └── static/index.html
@@ -154,27 +154,27 @@ admin-site 导出的 TXT（`admin-site/src/admin_site/static/index.html`）：
   - 验收：parser 覆盖头部/LLM/未知时间/续行/speaker 冒号；material patch 对最小 schema 生效；客户端错误映射。
 
 - [x] **PS3 · 脚本化 fake STT + ingest keepalive**
-  - `fake_stt.py`：v2 协议；`started`/`final`/`stopped`/`error`；按 `source_id` 路由；可单步/自动发字幕。
+  - `fake_stt.py`：v2 协议；`started`/`final`/`stopped`/`error`；按 `source_id` 路由；每个静音帧发一条字幕。
   - `ingest.py`：`start` + 静音帧 + `stream_end`。
   - 验收：协议单测；advisor 能连上并落字幕。
 
 - [x] **PS4 · Stack 启动 + replay 编排 + 结果读取**
   - `stack.py`：auth/gateway/advisor 子进程、healthz、日志、停止。
-  - `replay.py`：固定 owner/新 meeting_no/新 advisor；建会话 → patch → 喂字幕 → 等决策；step/auto。
+  - `replay.py`：固定 owner/新 meeting_no/新 advisor；建会话 → patch → 喂字幕 → 等决策；auto/paced。
   - `results.py`：读 `jobs`/transcript，输出决策记录。
-  - 验收：测试内部 fake backend 下端到端产出至少一个 decision + reply；step 模式在每条后等待。
+  - 验收：测试内部 fake backend 下端到端产出至少一个 decision + reply；paced 模式按间隔发送。
 
 - [x] **PS5 · CLI + 配置**
   - `prompt-studio init`：创建 data-dir/prompts（从已安装 gateway prompts 复制）。
-  - `prompt-studio replay --transcript ... --description ... --mode step|auto --model ...`
+  - `prompt-studio replay --transcript ... --description ... --mode paced|auto --model ...`
   - `prompt-studio submit-tokens`：从 `NSDP_TOKEN`/`JIRA_TOKEN` 或 token 文件提交，不回显 token。
   - `serve` 在 PS6 接入。
   - 验收：CLI 固定 opencode；端到端由测试内部 fake Stack 覆盖；参数错误清晰；不泄露 token。
 
 - [x] **PS6 · 极简 Web UI**
-  - `web.py`/`web_app.py`/`web_http.py` + `static/index.html`：导入/编辑 TXT、设描述、prompt 编辑、模型切换、step/auto、结果与 snapshot/decision 展示。
+  - `web.py`/`web_app.py`/`web_http.py` + `static/index.html`：导入/编辑 TXT、设描述、prompt 编辑、模型切换、paced/auto 与间隔设置、结果与 snapshot/decision 展示。
   - `prompt-studio serve --port 8765`：默认只绑 loopback；显式 `--host 0.0.0.0` 可内网访问（启动告警）。prompt 原子写、运行中禁止改 prompt/模型。
-  - 验收：HTTP 路由单测覆盖 auto/step（测试内部 fake replay）、prompt 读写/越界、模型切换；`tests/test_web.py` 全绿。
+  - 验收：HTTP 路由单测覆盖 auto/paced（测试内部 fake replay）、prompt 读写/越界、模型切换；`tests/test_web.py` 全绿。
 
 - [x] **PS7 · 隔离/文档/CI 接线**
   - `prompt-studio/README.md`：隔离 server 部署、token、SSH 隧道、常见问题；说明 advisor ingest 仍绑 `0.0.0.0` 的防火墙边界。

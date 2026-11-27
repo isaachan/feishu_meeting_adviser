@@ -142,6 +142,20 @@ class ReplayArgumentTests(unittest.TestCase):
                       '--backend', 'fake'])
         self.assertEqual(caught.exception.code, 2)
 
+    def test_step_mode_removed(self):
+        with self.assertRaises(SystemExit) as caught, \
+                redirect_stderr(io.StringIO()):
+            cli.main(['replay', '--transcript', str(self.transcript),
+                      '--mode', 'step'])
+        self.assertEqual(caught.exception.code, 2)
+
+    def test_rejects_bad_paced_seconds(self):
+        code, _, err = self.run_cli(
+            'replay', '--transcript', str(self.transcript),
+            '--mode', 'paced', '--paced-seconds', '-1')
+        self.assertEqual(code, 1)
+        self.assertIn('paced seconds', err)
+
     def test_rejects_both_sources(self):
         with self.assertRaises(SystemExit) as caught, \
                 redirect_stderr(io.StringIO()):

@@ -30,14 +30,14 @@ NSDP_TOKEN=... JIRA_TOKEN=... .venv-local/bin/prompt-studio submit-tokens
   --description "预算评审" --mode auto
 ```
 
-`--mode step` 在每条人类字幕落库并产生决策后停顿，交互终端按 Enter 继续；`--json` 只输出结果 JSON。默认 data-dir 为 `data/prompt-studio/`，prompt 目录为其中的 `prompts/`。
+`--mode paced --paced-seconds 5` 按固定间隔喂字幕（默认 5 秒/行；0 表示尽快），模型任务会和字幕到达重叠，接近真实会议；`--mode auto` 则一次灌完。`--json` 只输出结果 JSON。默认 data-dir 为 `data/prompt-studio/`，prompt 目录为其中的 `prompts/`。
 
 advisor 建会话始终需要 NSDP/Jira 凭据。第 2 步会把凭据持久化到 data-dir，之后的 `replay`/`serve` 复用；也可以直接给 `serve`/`replay` 传 `--nsdp-token-file`/`--jira-token-file`。CLI 固定使用真实 `opencode` 后端；无模型的 fake backend 仅用于仓库自动化测试。
 
 ## Web UI
 
-- 粘贴 TXT，填写标题/会议描述，选择 `auto` 或 `step` 后开始。
-- `step` 模式用“下一句”推进，“结束”收尾；`auto` 一次跑完。
+- 粘贴 TXT，填写标题/会议描述，选择 `auto` 或 `paced` 后开始。
+- `paced` 模式可设置“间隔(秒)”，按间隔逐行喂字幕；`auto` 一次跑完。
 - 右侧展示每条决策、reply、snapshot 摘要、material 与完整记录。
 - 提示词在线编辑；保存为原子写。运行中禁止修改提示词或切换模型。
 - 切换模型会重启 gateway；NSDP catalog 按 session 冻结，首个决策可能较慢。
