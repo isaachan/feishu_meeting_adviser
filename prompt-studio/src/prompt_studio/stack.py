@@ -102,7 +102,7 @@ class StackConfig:
     data_dir: Path | None = None
     prompt_dir: Path | None = None
     backend: str = 'opencode'
-    model: str = 'zai-coding-plan/glm-5.3'
+    model: str = 'nio/DeepSeek-V4.1-Flash'
     health_timeout: float = 40.0
     opencode_auth: Path | None = None
     opencode_provider_config: Path | None = None

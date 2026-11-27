@@ -18,7 +18,7 @@ from .results import ReplayResult
 from .stack import PROMPT_FILES, ROOT, Stack, StackConfig, StackError
 from .transcript import Transcript, TranscriptError, parse_text
 
-DEFAULT_MODEL = 'zai-coding-plan/glm-5.3'
+DEFAULT_MODEL = 'nio/DeepSeek-V4.1-Flash'
 DEFAULT_OWNER = 'ou_prompt_studio'
 
 
@@ -57,7 +57,6 @@ def build_parser() -> argparse.ArgumentParser:
     replay.add_argument('--owner', default=None)
     replay.add_argument('--mode', choices=['auto', 'step'], default='auto')
     replay.add_argument('--model', default=None)
-    replay.add_argument('--backend', choices=['fake', 'opencode'], default=None)
     replay.add_argument('--data-dir', type=Path, default=None)
     replay.add_argument('--prompt-dir', type=Path, default=None)
     replay.add_argument('--opencode-auth', type=Path, default=None)
@@ -86,7 +85,6 @@ def build_parser() -> argparse.ArgumentParser:
     web.add_argument('--prompt-dir', type=Path, default=None)
     web.add_argument('--owner', default=None)
     web.add_argument('--model', default=None)
-    web.add_argument('--backend', choices=['fake', 'opencode'], default=None)
     web.add_argument('--opencode-auth', type=Path, default=None)
     web.add_argument('--opencode-provider-config', type=Path, default=None)
     web.add_argument('--nsdp-token-file', type=Path, default=None)
@@ -238,13 +236,12 @@ def command_serve(args) -> int:
 
     data_dir = _data_dir(args)
     owner = _owner(args)
-    backend = args.backend or os.environ.get('PROMPT_STUDIO_BACKEND') or 'opencode'
     model = args.model or os.environ.get('PROMPT_STUDIO_MODEL') or DEFAULT_MODEL
     prompt_dir = _ensure_web_prompts(data_dir, args.prompt_dir)
     nsdp = _read_token(args.nsdp_token_file, 'NSDP_TOKEN')
     jira = _read_token(args.jira_token_file, 'JIRA_TOKEN')
     config = StackConfig(
-        root=ROOT, data_dir=data_dir, prompt_dir=prompt_dir, backend=backend,
+        root=ROOT, data_dir=data_dir, prompt_dir=prompt_dir,
         model=model, owner=owner, opencode_auth=args.opencode_auth,
         opencode_provider_config=args.opencode_provider_config)
     stack = Stack(config)
@@ -283,7 +280,6 @@ def _ensure_web_prompts(data_dir: Path, explicit: Path | None) -> Path:
 def command_replay(args) -> int:
     data_dir = _data_dir(args)
     owner = _owner(args)
-    backend = args.backend or os.environ.get('PROMPT_STUDIO_BACKEND') or 'opencode'
     model = args.model or os.environ.get('PROMPT_STUDIO_MODEL') or DEFAULT_MODEL
     prompt_dir = _prompt_dir(data_dir, args.prompt_dir)
     transcript = _load_transcript(args)
@@ -294,7 +290,7 @@ def command_replay(args) -> int:
     nsdp = _read_token(args.nsdp_token_file, 'NSDP_TOKEN')
     jira = _read_token(args.jira_token_file, 'JIRA_TOKEN')
     config = StackConfig(
-        root=ROOT, data_dir=data_dir, prompt_dir=prompt_dir, backend=backend,
+        root=ROOT, data_dir=data_dir, prompt_dir=prompt_dir,
         model=model, owner=owner, opencode_auth=args.opencode_auth,
         opencode_provider_config=args.opencode_provider_config)
     stack = Stack(config)

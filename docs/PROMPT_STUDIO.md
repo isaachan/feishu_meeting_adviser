@@ -111,7 +111,7 @@ admin-site 导出的 TXT（`admin-site/src/admin_site/static/index.html`）：
 - 端口：auth / gateway / advisor api / advisor ingest / fake STT 均为临时端口；不占用 `scripts/local-up.sh` 的 8380/8381/8377/8400。
 - timeout：advisor 决策用 `--model-timeout-s`（建议 220）；studio 等待加上余量；gateway deadline 上限 240。
 - prompt：`data/prompt-studio/prompts/` 固定目录；UI 用临时文件 + `os.replace` 原子写；gateway 每次 decide 读取。
-- 模型：`Stack.restart_gateway(model=...)`；同 provider 换 model 只改启动参数。
+- 模型：默认 `nio/DeepSeek-V4.1-Flash`；`Stack.restart_gateway(model=...)`；同 provider 换 model 只改启动参数。
 
 ## 7. 结果与展示
 
@@ -162,23 +162,23 @@ admin-site 导出的 TXT（`admin-site/src/admin_site/static/index.html`）：
   - `stack.py`：auth/gateway/advisor 子进程、healthz、日志、停止。
   - `replay.py`：固定 owner/新 meeting_no/新 advisor；建会话 → patch → 喂字幕 → 等决策；step/auto。
   - `results.py`：读 `jobs`/transcript，输出决策记录。
-  - 验收：fake backend 下端到端产出至少一个 decision + reply；step 模式在每条后等待。
+  - 验收：测试内部 fake backend 下端到端产出至少一个 decision + reply；step 模式在每条后等待。
 
 - [x] **PS5 · CLI + 配置**
   - `prompt-studio init`：创建 data-dir/prompts（从已安装 gateway prompts 复制）。
   - `prompt-studio replay --transcript ... --description ... --mode step|auto --model ...`
   - `prompt-studio submit-tokens`：从 `NSDP_TOKEN`/`JIRA_TOKEN` 或 token 文件提交，不回显 token。
   - `serve` 在 PS6 接入。
-  - 验收：命令可跑通 fake backend；参数错误清晰；不泄露 token。
+  - 验收：CLI 固定 opencode；端到端由测试内部 fake Stack 覆盖；参数错误清晰；不泄露 token。
 
 - [x] **PS6 · 极简 Web UI**
   - `web.py`/`web_app.py`/`web_http.py` + `static/index.html`：导入/编辑 TXT、设描述、prompt 编辑、模型切换、step/auto、结果与 snapshot/decision 展示。
   - `prompt-studio serve --port 8765`：默认只绑 loopback；显式 `--host 0.0.0.0` 可内网访问（启动告警）。prompt 原子写、运行中禁止改 prompt/模型。
-  - 验收：HTTP 路由单测覆盖 auto/step fake replay、prompt 读写/越界、模型切换；`tests/test_web.py` 全绿。
+  - 验收：HTTP 路由单测覆盖 auto/step（测试内部 fake replay）、prompt 读写/越界、模型切换；`tests/test_web.py` 全绿。
 
 - [x] **PS7 · 隔离/文档/CI 接线**
   - `prompt-studio/README.md`：隔离 server 部署、token、SSH 隧道、常见问题；说明 advisor ingest 仍绑 `0.0.0.0` 的防火墙边界。
-  - `.github/workflows/quality.yml` 加 `prompt-studio`（module + paths），integration 装 `./prompt-studio[dev]` 并跑其全部测试（fake backend，无需真实模型）。
+  - `.github/workflows/quality.yml` 加 `prompt-studio`（module + paths），integration 装 `./prompt-studio[dev]` 并跑其全部测试（测试内部 fake backend，无需真实模型）。
   - 根 README 模块列表补充。
   - 验收：CI 路径触发正确；本地 `ruff/pyright/unittest` 与 `integrations` 全绿。
 
@@ -194,7 +194,7 @@ admin-site 导出的 TXT（`admin-site/src/admin_site/static/index.html`）：
 - **speaker**：首版只开 loopback，所有字幕匿名（advisor 仅对 mic 源写 `speaker_name=本机`）。需要“本机”区分时再加 mic 通道。
 - **真实 token 过期**：NSDP/Jira token 无 refresh；过期需显式重新提交。
 - **drain/IM**：fresh advisor 每 run 丢弃旧 DB，不触发未投递 IM 行的 drain 等待；若改为长跑单一 advisor，需要 `--drain-deadline-s` 兜底。
-- **fake backend 不能评估提示词质量**：fake 只验证链路；真实质量必须用 opencode + 真实模型。
+- **fake backend 仅用于测试**：CLI 固定 opencode，不暴露 fake；fake 只验证链路，不能评估提示词质量。
 - **prompt 目录是完整链**：`agent_prompt.txt + snapshot_rules.txt + reply_markdown_rules.txt`；只改 agent_prompt 可能不够。
 - **并发/原子性**：prompt 文件必须原子写，避免 decide 读到半截；UI 默认在两次 run 之间切换 prompt。
 

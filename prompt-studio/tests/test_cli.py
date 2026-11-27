@@ -135,6 +135,13 @@ class ReplayArgumentTests(unittest.TestCase):
             cli.main(['replay'])
         self.assertEqual(caught.exception.code, 2)
 
+    def test_backend_option_removed(self):
+        with self.assertRaises(SystemExit) as caught, \
+                redirect_stderr(io.StringIO()):
+            cli.main(['replay', '--transcript', str(self.transcript),
+                      '--backend', 'fake'])
+        self.assertEqual(caught.exception.code, 2)
+
     def test_rejects_both_sources(self):
         with self.assertRaises(SystemExit) as caught, \
                 redirect_stderr(io.StringIO()):

@@ -9,6 +9,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 from prompt_studio import cli
 from prompt_studio.replay import ReplayRun
@@ -120,13 +121,19 @@ class CliReplayTests(unittest.TestCase):
             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                 code = cli.main(['init', '--data-dir', str(data_dir)])
             self.assertEqual(code, 0)
+            real_stack = Stack
+
+            def fake_stack(config):
+                config.backend = 'fake'
+                return real_stack(config)
+
             out, err = io.StringIO(), io.StringIO()
-            with redirect_stdout(out), redirect_stderr(err):
+            with mock.patch.object(cli, 'Stack', side_effect=fake_stack), \
+                    redirect_stdout(out), redirect_stderr(err):
                 code = cli.main([
                     'replay', '--transcript', str(transcript),
                     '--description', 'CLI 测试', '--document', str(document),
-                    '--backend', 'fake', '--data-dir', str(data_dir),
-                    '--owner', 'ou_cli_test',
+                    '--data-dir', str(data_dir), '--owner', 'ou_cli_test',
                     '--nsdp-token-file', str(nsdp),
                     '--jira-token-file', str(jira), '--json'])
             self.assertEqual(code, 0, err.getvalue())

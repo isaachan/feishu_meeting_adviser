@@ -10,8 +10,8 @@
 - 仓库：`feishu_meeting_adviser`
 - Python 3.11+
 - 依赖模块：`auth`、`advisor`、`llm-gateway`、`prompt-studio`
-- fake 模式：只需要本仓库模块，不需要真实模型
-- 真实模式：额外需要 `opencode`、OpenCode `auth.json`、真实 NSDP/Jira token
+- 运行 replay/serve：需要 `opencode`、OpenCode `auth.json`、真实 NSDP/Jira token
+- 无模型自检：仓库自动化测试内部使用 fake backend，不需要模型
 - 飞书文档抓取（可选）：`noam` + 个人飞书 web session
 
 ## 2. 安装
@@ -62,16 +62,7 @@ data/prompt-studio/
 
 ### 3.2 提交 NSDP/Jira 凭据
 
-advisor 建会话前会校验 NSDP/Jira 凭据，**即使使用 `--backend fake`**。
-
-fake/链路验证：
-
-```bash
-NSDP_TOKEN=stub-nsdp-token JIRA_TOKEN=stub-jira-token \
-  .venv-local/bin/prompt-studio submit-tokens
-```
-
-真实模型：
+advisor 建会话前会校验 NSDP/Jira 凭据。提交真实模型所需凭据：
 
 ```bash
 .venv-local/bin/prompt-studio submit-tokens \
@@ -124,42 +115,30 @@ Web/CLI 可保存和复用场景：
 使用：
 
 ```bash
-.venv-local/bin/prompt-studio replay --scene meeting.json --backend fake
+.venv-local/bin/prompt-studio replay --scene meeting.json
 ```
 
 `description` 和 `documents` 会在建会话后、第一条字幕前注入 advisor 的 material；不需要改 advisor 代码。
 
 ## 5. 命令行重放
 
-### 5.1 fake 链路
+### 5.1 真实模型
 
 ```bash
 .venv-local/bin/prompt-studio replay \
   --transcript meeting.txt \
   --description "预算评审" \
-  --backend fake --json
-```
-
-预期：至少一个 `complete` job，`decision.reply` 为 `网关合成回答`。fake backend 只验证链路，不评估提示词质量。
-
-### 5.2 真实模型
-
-```bash
-.venv-local/bin/prompt-studio replay \
-  --transcript meeting.txt \
-  --description "预算评审" \
-  --backend opencode \
-  --model zai-coding-plan/glm-5.3 \
+  --model nio/DeepSeek-V4.1-Flash \
   --opencode-auth ~/.local/share/opencode/auth.json \
   --opencode-provider-config /path/to/provider.json
 ```
 
-- `opencode` 必须在 `PATH` 中。
+- `opencode` 必须在 `PATH` 中。CLI 固定使用 `opencode`，没有 `--backend` 选项。
 - `--opencode-auth` 指向包含对应 provider API key 的 `auth.json`。
 - 自定义 provider 需要 `--opencode-provider-config`。
 - 真实 NSDP/Jira token 必须已提交，否则 scoped tool 查询会失败。
 
-### 5.3 auto / step
+### 5.2 auto / step
 
 ```bash
 # 一次发完所有人类字幕，等待最终决策
@@ -171,7 +150,7 @@ prompt-studio replay ... --mode step
 
 `--json` 只输出结果 JSON；`--no-pause` 在 step 模式下不等待回车（非 TTY 默认不等待）。
 
-### 5.4 其他参数
+### 5.3 其他参数
 
 - `--title`：覆盖场景标题。
 - `--document <file>`：追加文档（可重复），title 取文件名。
@@ -186,7 +165,7 @@ prompt-studio replay ... --mode step
 ### 6.1 默认：只绑 loopback
 
 ```bash
-.venv-local/bin/prompt-studio serve --backend fake --port 8765
+.venv-local/bin/prompt-studio serve --port 8765
 ```
 
 本机打开 `http://127.0.0.1:8765`。远端通过 SSH 隧道：
@@ -200,7 +179,7 @@ ssh -N -L 8765:127.0.0.1:8765 user@server
 
 ```bash
 .venv-local/bin/prompt-studio serve \
-  --host 0.0.0.0 --port 8765 --backend fake
+  --host 0.0.0.0 --port 8765
 ```
 
 启动后会打印：
@@ -232,12 +211,11 @@ prompt-studio: http://<server-ip>:8765
 
 ### 6.4 启动配置
 
-`serve` 支持与 `replay` 相同的模型/token 参数：
+`serve` 支持与 `replay` 相同的模型/token 参数；默认模型为 `nio/DeepSeek-V4.1-Flash`：
 
 ```bash
 .venv-local/bin/prompt-studio serve \
-  --backend opencode \
-  --model zai-coding-plan/glm-5.3 \
+  --model nio/DeepSeek-V4.1-Flash \
   --opencode-auth ~/.local/share/opencode/auth.json \
   --opencode-provider-config /path/to/provider.json \
   --nsdp-token-file /path/nsdp.txt \
@@ -309,7 +287,7 @@ CLI `--json` 与 Web 结果都来自 advisor DB 的只读查询：
 
 | 现象 | 处理 |
 |---|---|
-| `authorization_required: join credentials missing` | 先 `submit-tokens`，或给命令传 `--nsdp-token-file`/`--jira-token-file`。fake 模式也需要。 |
+| `authorization_required: join credentials missing` | 先 `submit-tokens`，或给命令传 `--nsdp-token-file`/`--jira-token-file`。 |
 | `prompt dir missing files` | 运行 `init`，或给 `--prompt-dir` 指向包含三个 prompt 文件的目录。 |
 | `run directory already exists` | `--run-id` 重复；换一个 run-id 或删除对应 `runs/<id>`。 |
 | `healthz timeout` / advisor exited | 看结果里的 advisor log 或 `data/prompt-studio/logs/`；常见是端口/依赖/opencode 启动失败。 |
@@ -325,7 +303,7 @@ CLI `--json` 与 Web 结果都来自 advisor DB 的只读查询：
 
 ## 11. 已知边界
 
-- fake backend 只验证链路，不评估提示词质量。
+- CLI 固定使用真实 `opencode`；fake backend 仅用于仓库自动化测试，不评估提示词质量。
 - 每次 run 仍是人工指定的场景；不是通用压测/评测平台。
 - 不重放历史 LLM 回复到 `sent_replies`。
 - 不做 bot/IM 分发、订阅审批、GUI。

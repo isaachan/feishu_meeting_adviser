@@ -23,19 +23,16 @@
 NSDP_TOKEN=... JIRA_TOKEN=... .venv-local/bin/prompt-studio submit-tokens
 
 # 3a) Web UI（默认只绑 loopback；远端用 SSH 隧道）
-.venv-local/bin/prompt-studio serve --backend opencode
+.venv-local/bin/prompt-studio serve
 
-# 3b) 或命令行重放
+# 3b) 或命令行重放（默认模型 nio/DeepSeek-V4.1-Flash）
 .venv-local/bin/prompt-studio replay --transcript meeting.txt \
-  --description "预算评审" --mode auto --model zai-coding-plan/glm-5.3
-
-# 无模型依赖的确定性验证
-.venv-local/bin/prompt-studio replay --transcript meeting.txt --backend fake
+  --description "预算评审" --mode auto
 ```
 
 `--mode step` 在每条人类字幕落库并产生决策后停顿，交互终端按 Enter 继续；`--json` 只输出结果 JSON。默认 data-dir 为 `data/prompt-studio/`，prompt 目录为其中的 `prompts/`。
 
-advisor 建会话始终需要 NSDP/Jira 凭据（即使 `--backend fake`）。第 2 步会把凭据持久化到 data-dir，之后的 `replay`/`serve` 复用；也可以直接给 `serve`/`replay` 传 `--nsdp-token-file`/`--jira-token-file`。
+advisor 建会话始终需要 NSDP/Jira 凭据。第 2 步会把凭据持久化到 data-dir，之后的 `replay`/`serve` 复用；也可以直接给 `serve`/`replay` 传 `--nsdp-token-file`/`--jira-token-file`。CLI 固定使用真实 `opencode` 后端；无模型的 fake backend 仅用于仓库自动化测试。
 
 ## Web UI
 
@@ -89,7 +86,7 @@ token 只从环境变量或 `--nsdp-token-file`/`--jira-token-file` 读取，不
 
 ## 常见问题
 
-- **`authorization_required: join credentials missing`**：先跑 `submit-tokens`（或给命令传 token 文件）。`--backend fake` 仍需要凭据，因为 advisor 建会话前会校验 NSDP/Jira。
+- **`authorization_required: join credentials missing`**：先跑 `submit-tokens`（或给命令传 token 文件）。advisor 建会话前会校验 NSDP/Jira。
 - **第一个决策很慢**：每个 session 会后台执行 `noam nsdp info` 拉取版本目录；等待即可。没有 catalog 时早期决策可能缺少版本事实。
 - **有字幕但没有 reply**：看右侧 `decision.control` 与 `snapshot_summary.pending_reply`。`ignore`/`pending` 是正常决策；错误看结果里的 advisor log 路径。
 - **改了提示词不生效**：gateway 在每次 decide 重新读取文件；运行中平台禁止编辑。最稳妥是保存后开新 run，并确认三个提示词文件是一套完整链路。

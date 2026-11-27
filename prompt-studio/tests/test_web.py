@@ -119,6 +119,7 @@ class WebIntegrationTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(config['owner'], self.owner)
         self.assertEqual(config['backend'], 'fake')
+        self.assertEqual(config['model'], 'nio/DeepSeek-V4.1-Flash')
         opener = request.build_opener(request.ProxyHandler({}))
         with opener.open(self.base + '/', timeout=10) as response:
             html = response.read().decode('utf-8')
