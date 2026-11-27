@@ -15,7 +15,7 @@ from urllib import error, request
 from prompt_studio.stack import PROMPT_FILES, Stack, StackConfig
 from prompt_studio.transcript import parse_text
 from prompt_studio.web_app import StudioApp
-from prompt_studio.web_http import make_handler
+from prompt_studio.web_http import make_handler, validate_bind
 
 SAMPLE = """会参谋 · 文字记录
 会话 s-old · 会议 111111111 · 预算会
@@ -33,6 +33,18 @@ def modules_installed() -> bool:
                    for name in ('auth', 'advisor', 'llm_gateway'))
     except (ImportError, ValueError):
         return False
+
+
+class BindTests(unittest.TestCase):
+    def test_allows_loopback_and_all_interfaces(self):
+        self.assertEqual(validate_bind('127.0.0.1'), '127.0.0.1')
+        self.assertEqual(validate_bind('0.0.0.0'), '0.0.0.0')
+
+    def test_rejects_other_hosts(self):
+        for host in ('', 'localhost', '::1', '10.0.0.2', '0.0.0.0,127.0.0.1'):
+            with self.subTest(host=host):
+                with self.assertRaises(ValueError):
+                    validate_bind(host)
 
 
 @unittest.skipUnless(modules_installed(), 'auth/advisor/llm-gateway not installed')
@@ -112,6 +124,27 @@ class WebIntegrationTests(unittest.TestCase):
             html = response.read().decode('utf-8')
         self.assertEqual(response.status, 200)
         self.assertIn('Prompt Studio', html)
+
+    def test_can_listen_on_all_interfaces(self):
+        server = ThreadingHTTPServer(('0.0.0.0', 0),
+                                     make_handler(self.app))
+        server.daemon_threads = True
+        thread = threading.Thread(target=server.serve_forever,
+                                  kwargs={'poll_interval': 0.05},
+                                  daemon=True)
+        thread.start()
+        try:
+            port = server.server_address[1]
+            opener = request.build_opener(request.ProxyHandler({}))
+            with opener.open(f'http://127.0.0.1:{port}/api/health',
+                             timeout=10) as response:
+                body = json.loads(response.read())
+            self.assertEqual(response.status, 200)
+            self.assertEqual(body['status'], 'ok')
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
 
     def test_prompts_read_write_and_traversal(self):
         status, body = self.call('GET', '/api/prompts')

@@ -20,7 +20,7 @@
 4. **会话隔离**：固定真实 owner（真实 NSDP/Jira token 只提交一次）+ **每次 run 新 9 位 meeting_no + 新 session** + **每次 run 一个 fresh advisor data-dir**，避开 single-claim 与未投递 IM 行导致的 drain 卡住。
 5. **clean replay**：只重放人类字幕（TXT 中非 `LLM` 行）；历史 `LLM` 行仅作对照展示，不进入 `sent_replies`。
 6. **观察不依赖 bot**：decision 落库时 advisor 会写 `channel='local'` 的 outbox；读 `GET /admin/sessions/{id}/transcript` 即可看到 LLM 行，control/evidence/timings 读 advisor `jobs` 表。
-7. **隔离 server**：UI 只绑 `127.0.0.1`，通过 SSH 隧道访问；token 只从环境变量/私有文件读取，不写日志、不入库。
+7. **隔离 server**：UI 默认只绑 `127.0.0.1`，通过 SSH 隧道访问；显式 `--host 0.0.0.0` 可供可信内网访问（无认证，必须配防火墙）。token 只从环境变量/私有文件读取，不写日志、不入库。
 
 ## 3. 架构与数据流
 
@@ -122,7 +122,8 @@ admin-site 导出的 TXT（`admin-site/src/admin_site/static/index.html`）：
 
 ## 8. 安全与隔离
 
-- 只绑 `127.0.0.1`；不暴露公网；通过 SSH 隧道访问。
+- 默认只绑 `127.0.0.1`；远端通过 SSH 隧道访问。
+- 显式 `--host 0.0.0.0` 时绑定所有网卡：UI 没有登录，任何能访问端口的人都能启动 replay、改 prompt、读会议内容；只允许可信内网，并加防火墙。绝不暴露公网。
 - NSDP/Jira token 从 `NSDP_TOKEN`/`JIRA_TOKEN` 或私有文件读取；不写入日志、不入库、不提交 Git。
 - 真实 token 是长寿命凭据；过期需重新提交（studio 提供显式 `submit-tokens`）。
 - data-dir 独立；不读写 dev/prod 的 `data/local`、`data/prod`。
@@ -170,7 +171,7 @@ admin-site 导出的 TXT（`admin-site/src/admin_site/static/index.html`）：
 
 - [x] **PS6 · 极简 Web UI**
   - `web.py`/`web_app.py`/`web_http.py` + `static/index.html`：导入/编辑 TXT、设描述、prompt 编辑、模型切换、step/auto、结果与 snapshot/decision 展示。
-  - `prompt-studio serve --host 127.0.0.1 --port 8765`：只绑 loopback；prompt 原子写、运行中禁止改 prompt/模型。
+  - `prompt-studio serve --port 8765`：默认只绑 loopback；显式 `--host 0.0.0.0` 可内网访问（启动告警）。prompt 原子写、运行中禁止改 prompt/模型。
   - 验收：HTTP 路由单测覆盖 auto/step fake replay、prompt 读写/越界、模型切换；`tests/test_web.py` 全绿。
 
 - [x] **PS7 · 隔离/文档/CI 接线**

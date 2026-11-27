@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+import socket
 import sys
 import traceback
 from urllib.parse import unquote, urlsplit
@@ -17,7 +18,23 @@ from .web_app import StudioApp
 
 MAX_BODY = 2_100_000
 STATIC = Path(__file__).resolve().parent / 'static'
-LOOPBACK = {'127.0.0.1'}
+ALLOWED_BINDS = ('127.0.0.1', '0.0.0.0')
+
+
+def validate_bind(host: str) -> str:
+    if host not in ALLOWED_BINDS:
+        raise ValueError('host 只能是 127.0.0.1（默认）或 0.0.0.0（内网）')
+    return host
+
+
+def _primary_ipv4() -> str | None:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(('8.8.8.8', 80))
+            address = sock.getsockname()[0]
+    except OSError:
+        return None
+    return address if address and not address.startswith('127.') else None
 
 
 def make_handler(app: StudioApp):
@@ -156,16 +173,24 @@ def make_handler(app: StudioApp):
 
 def serve(stack: Stack, host: str, port: int, prompt_dir: str | Path,
           owner: str):
-    if host not in LOOPBACK:
-        raise ValueError('web UI 只能绑定 127.0.0.1')
+    host = validate_bind(host)
     if not 0 <= port <= 65535:
         raise ValueError('port 必须在 0-65535')
     app = StudioApp(stack, prompt_dir, owner)
     server = ThreadingHTTPServer((host, port), make_handler(app))
     server.daemon_threads = True
     actual_port = server.server_address[1]
-    print(f'prompt-studio: http://{host}:{actual_port}')
-    print('按 Ctrl-C 停止；建议通过 SSH 隧道访问。')
+    print(f'prompt-studio: listening on {host}:{actual_port}')
+    if host == '0.0.0.0':
+        address = _primary_ipv4()
+        target = (f'{address}:{actual_port}' if address
+                  else f'<server-ip>:{actual_port}')
+        print(f'prompt-studio: http://{target}')
+        print('警告: UI 未认证，已绑定所有网卡；仅限可信内网，并配防火墙。')
+    else:
+        print(f'prompt-studio: http://{host}:{actual_port}')
+        print('远端可通过 SSH 隧道访问。')
+    print('按 Ctrl-C 停止。')
     try:
         server.serve_forever(poll_interval=0.25)
     except KeyboardInterrupt:

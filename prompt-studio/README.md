@@ -22,7 +22,7 @@
 # 2) 提交一次 NSDP/Jira token（值不会回显；也可用 --*-token-file）
 NSDP_TOKEN=... JIRA_TOKEN=... .venv-local/bin/prompt-studio submit-tokens
 
-# 3a) Web UI（只绑 loopback；远端请用 SSH 隧道）
+# 3a) Web UI（默认只绑 loopback；远端用 SSH 隧道）
 .venv-local/bin/prompt-studio serve --backend opencode
 
 # 3b) 或命令行重放
@@ -67,12 +67,19 @@ noam my-lark auth qr-login
 
 ## 隔离 server
 
-UI 只监听 `127.0.0.1`，不要在公网直接暴露。远端部署：
+UI 默认只监听 `127.0.0.1`。远端访问：
 
 ```bash
+# 方式 A：SSH 隧道（默认，推荐）
 ssh -L 8765:127.0.0.1:8765 user@server
 # 然后在本地打开 http://127.0.0.1:8765
+
+# 方式 B：可信内网直连（UI 没有登录）
+.venv-local/bin/prompt-studio serve --host 0.0.0.0 --port 8765
+# 在服务器内网 IP 上打开 http://<server-ip>:8765
 ```
+
+`--host 0.0.0.0` 会绑定所有网卡并在启动时告警。任何能访问端口的人都能启动 replay、修改提示词、切换模型、读取会议内容；只允许可信内网，并用安全组/防火墙限制来源，绝不能暴露公网。
 
 token 只从环境变量或 `--nsdp-token-file`/`--jira-token-file` 读取，不会写入日志或结果。advisor 的 ingest 端口当前绑 `0.0.0.0`，隔离 server 需配合防火墙/安全组限制来源。
 
@@ -86,6 +93,6 @@ token 只从环境变量或 `--nsdp-token-file`/`--jira-token-file` 读取，不
 - **第一个决策很慢**：每个 session 会后台执行 `noam nsdp info` 拉取版本目录；等待即可。没有 catalog 时早期决策可能缺少版本事实。
 - **有字幕但没有 reply**：看右侧 `decision.control` 与 `snapshot_summary.pending_reply`。`ignore`/`pending` 是正常决策；错误看结果里的 advisor log 路径。
 - **改了提示词不生效**：gateway 在每次 decide 重新读取文件；运行中平台禁止编辑。最稳妥是保存后开新 run，并确认三个提示词文件是一套完整链路。
-- **端口被占用/远端访问**：用 `--port` 换端口；远端只做 `ssh -L 8765:127.0.0.1:8765`，不要把 UI 反代到公网。advisor ingest 端口由 advisor 绑 `0.0.0.0`，隔离机需用防火墙限制来源。
+- **端口被占用/远端访问**：用 `--port` 换端口；默认走 `ssh -L 8765:127.0.0.1:8765`。可信内网可 `--host 0.0.0.0` 直连，但 UI 无认证，必须配防火墙；不要把 UI 暴露到公网。advisor ingest 端口由 advisor 绑 `0.0.0.0`，隔离机同样需限制来源。
 - **token 过期**：NSDP/Jira token 无 refresh，重新 `submit-tokens` 即可。
 - **磁盘增长**：每次 run 在 `data/prompt-studio/runs/<run-id>/` 保留独立 advisor DB 与日志；确认不再需要后可整目录删除。

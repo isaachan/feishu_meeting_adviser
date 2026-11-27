@@ -190,13 +190,13 @@ class ServeTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.data_dir = Path(self.temp.name) / 'data'
 
-    def test_rejects_non_loopback_host(self):
+    def test_rejects_unknown_host(self):
         out, err = io.StringIO(), io.StringIO()
         with redirect_stdout(out), redirect_stderr(err):
-            code = cli.main(['serve', '--host', '0.0.0.0',
+            code = cli.main(['serve', '--host', '10.0.0.2',
                              '--data-dir', str(self.data_dir)])
         self.assertEqual(code, 1)
-        self.assertIn('127.0.0.1', err.getvalue())
+        self.assertIn('0.0.0.0', err.getvalue())
 
     def test_rejects_bad_port(self):
         out, err = io.StringIO(), io.StringIO()

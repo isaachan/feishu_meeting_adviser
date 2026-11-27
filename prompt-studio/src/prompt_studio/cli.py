@@ -78,7 +78,9 @@ def build_parser() -> argparse.ArgumentParser:
     submit.add_argument('--debug', action='store_true')
 
     web = sub.add_parser('serve', help='启动本地 Web UI')
-    web.add_argument('--host', default='127.0.0.1')
+    web.add_argument(
+        '--host', default='127.0.0.1',
+        help='绑定地址：127.0.0.1（默认）或 0.0.0.0（可信内网）')
     web.add_argument('--port', type=int, default=8765)
     web.add_argument('--data-dir', type=Path, default=None)
     web.add_argument('--prompt-dir', type=Path, default=None)
@@ -225,11 +227,14 @@ def command_doc_fetch(args) -> int:
 
 
 def command_serve(args) -> int:
-    if args.host != '127.0.0.1':
-        raise CommandError('Web UI 只能绑定 127.0.0.1（请用 SSH 隧道访问）')
+    from .web_http import serve, validate_bind
+
+    try:
+        validate_bind(args.host)
+    except ValueError as exc:
+        raise CommandError(str(exc)) from None
     if not 0 <= args.port <= 65535:
         raise CommandError('port 必须在 0-65535')
-    from .web_http import serve
 
     data_dir = _data_dir(args)
     owner = _owner(args)
