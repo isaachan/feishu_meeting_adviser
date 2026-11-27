@@ -12,10 +12,12 @@ from uuid import uuid4
 
 
 class ClientError(RuntimeError):
-    def __init__(self, status: int, code: str, message: str):
+    def __init__(self, status: int, code: str, message: str,
+                 payload: dict | None = None):
         self.status = status
         self.code = code
         self.message = message
+        self.payload = payload or {}
         super().__init__(f'{code}: {message}' if message else code)
 
 
@@ -54,15 +56,17 @@ class _JsonClient:
             finally:
                 exc.close()
             code, message = 'http_error', exc.reason or 'request failed'
+            failure: dict = {}
             try:
                 payload = json.loads(raw or b'{}')
-                failure = payload.get('error') if isinstance(payload, dict) else None
-                if isinstance(failure, dict):
+                candidate = payload.get('error') if isinstance(payload, dict) else None
+                if isinstance(candidate, dict):
+                    failure = candidate
                     code = failure.get('code') or code
                     message = failure.get('message') or message
             except ValueError:
                 pass
-            raise ClientError(exc.code, str(code), str(message)) from None
+            raise ClientError(exc.code, str(code), str(message), failure) from None
         except (error.URLError, OSError) as exc:
             raise ClientError(0, 'unreachable', str(exc)) from None
         except ValueError:

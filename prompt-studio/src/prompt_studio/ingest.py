@@ -58,6 +58,11 @@ class IngestSession:
         self._ws.send(frame)
         return self._sequence
 
+    def keepalive(self) -> None:
+        if self._ws is None or self._ended:
+            raise IngestError('ingest session is not live')
+        self._ws.send(json.dumps({'type': 'gap'}))
+
     def end(self, timeout: float = 10.0) -> dict:
         if self._ws is None:
             raise IngestError('ingest session is not live')

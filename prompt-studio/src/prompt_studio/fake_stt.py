@@ -78,6 +78,15 @@ class FakeSttServer:
         with self._condition:
             self._scripts[f'{session_id}:{source}'] = list(texts)
 
+    def forget(self, session_id: str) -> None:
+        with self._condition:
+            for key in [key for key in self._scripts
+                        if key.startswith(f'{session_id}:')]:
+                self._scripts.pop(key, None)
+            self._finals = [item for item in self._finals
+                            if not item.source_id.startswith(f'{session_id}:')]
+            self._condition.notify_all()
+
     def finals_for(self, session_id: str) -> list[Final]:
         with self._condition:
             return [item for item in self._finals
@@ -96,6 +105,13 @@ class FakeSttServer:
                 self._condition.wait(remaining)
 
     async def _handle(self, ws):
+        from websockets.exceptions import ConnectionClosed
+        try:
+            await self._serve_connection(ws)
+        except ConnectionClosed:
+            pass
+
+    async def _serve_connection(self, ws):
         try:
             start = json.loads(await ws.recv())
         except (ValueError, UnicodeDecodeError):

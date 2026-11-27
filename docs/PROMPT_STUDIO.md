@@ -153,7 +153,7 @@ admin-site 导出的 TXT（`admin-site/src/admin_site/static/index.html`）：
   - `ingest.py`：`start` + 静音帧 + `stream_end`。
   - 验收：协议单测；advisor 能连上并落字幕。
 
-- [ ] **PS4 · Stack 启动 + replay 编排 + 结果读取**
+- [x] **PS4 · Stack 启动 + replay 编排 + 结果读取**
   - `stack.py`：auth/gateway/advisor 子进程、healthz、日志、停止。
   - `replay.py`：固定 owner/新 meeting_no/新 advisor；建会话 → patch → 喂字幕 → 等决策；step/auto。
   - `results.py`：读 `jobs`/transcript，输出决策记录。
