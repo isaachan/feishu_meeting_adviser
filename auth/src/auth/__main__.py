@@ -27,6 +27,9 @@ def main() -> None:
     serve.add_argument('--base-url', required=True,
                        help='externally reachable base, e.g. https://auth.example.internal')
     serve.add_argument('--state-ttl', type=int, default=600)
+    serve.add_argument('--admin-callback-url', default=None,
+                       help='admin-site login callback (default <base-url>'
+                            + '/admin/oauth/callback)')
     serve.add_argument('--host', default='127.0.0.1')
     serve.add_argument('--stub', action='store_true',
                        help='stub OAuth transport (integration bed only; code=open_id)')
@@ -54,7 +57,8 @@ def main() -> None:
         from .stub_transport import StubTransport
         transport = StubTransport()
     service = AuthService(config.credentials, config.data_dir, base_url=config.base_url,
-                          state_ttl_s=config.state_ttl_s, transport=transport)
+                          state_ttl_s=config.state_ttl_s, transport=transport,
+                          admin_callback_url=args.admin_callback_url)
     server = build_server(service, host=args.host, port=args.port)
     LOG.info('auth %s listening on %s (redirect %s)%s', __version__,
              server.server_address, service.redirect_uri,

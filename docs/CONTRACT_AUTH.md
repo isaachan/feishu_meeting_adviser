@@ -1,6 +1,6 @@
 # Auth 服务契约（OAuth 凭据托管）
 
-> **v1.8（2026-11-28，admin-site 登录）**：`/authorize/start` 的发现式登录扩展 `intent:"admin:login"`（`open_id` 必须缺省）。回调成功后不再渲染页面，而是 302 到 `<base_url>/admin/oauth/callback?state=…`，由 admin-site 校验自身 state cookie、调用 `/authorize/status` 读取身份并按 `ADMIN_USERS` 白名单决定是否建会话。其他 intent（`gui:login`、`join:*`、`prompt-studio`、集成床 `bed`）行为完全不变；回归用例见 `auth/tests/test_api.py`。additive，存量消费方不受影响。
+> **v1.8（2026-11-28，admin-site 登录）**：`/authorize/start` 的发现式登录扩展 `intent:"admin:login"`（`open_id` 必须缺省）。回调成功后不再渲染页面，而是 302 到 admin-site 回调（默认 `<base_url>/admin/oauth/callback`，可用 `auth serve --admin-callback-url` 覆盖；本地开发为 `http://127.0.0.1:8390/oauth/callback`），由 admin-site 校验自身 state cookie、调用 `/authorize/status` 读取身份并按 `ADMIN_USERS` 白名单决定是否建会话。其他 intent（`gui:login`、`join:*`、`prompt-studio`、集成床 `bed`）行为完全不变；回归用例见 `auth/tests/test_api.py`。additive，存量消费方不受影响。
 >
 > **v1.7（2026-11-17，supervisor login 解析）**：身份摘要（§2.3 status、§2.4 profile、§4.1 落存）新增 `user_id` 字段——飞书 user_info 返回的租户内登录名（如 `kai.han`），可为 `null`（以实际返回为准）。存量档案缺 `user_id` 时，§2.4 的惰性补档同样适用（下次凭据读取时 best-effort 重取一次）。供 advisor supervisor grant 按 login 解析（CONTRACT_ADVISOR_API §9.4）。additive，存量消费方不受影响。
 >
@@ -52,7 +52,7 @@
 - `intent` 为待续接意图（如 `join:<会议号>`），仅用于回调成功页提示，不含敏感信息。
 - advisor 将 `authorize_url` 经 CONTRACT_ADVISOR_API 的 `authorization_required` 响应转给 bot → 小A。
 - **发现式登录变体（v1.2）**：`intent` 为 `gui:login` 时允许 `open_id` 缺省（`null`）——state 记录 `discovery=true`、不绑定 open_id；用于 gui 扫码登录（身份即待发现项）。回调时以 user_info 的 open_id **采纳**为主体（跳过防串换相等校验，见 §4.1）；非 discovery state 不受影响。
-- **admin-site 登录变体（v1.8）**：`intent` 为 `admin:login` 时同样允许 `open_id` 缺省（`null`），语义同 discovery；回调成功后 302 到 `<base_url>/admin/oauth/callback?state=…`（见 §4.1）。
+- **admin-site 登录变体（v1.8）**：`intent` 为 `admin:login` 时同样允许 `open_id` 缺省（`null`），语义同 discovery；回调成功后 302 到 admin-site 回调（默认 `<base_url>/admin/oauth/callback?state=…`，`--admin-callback-url` 可覆盖，见 §4.1）。
 
 ### 2.2 `GET /credentials/{open_id}/token[?rejected=<token>]`
 

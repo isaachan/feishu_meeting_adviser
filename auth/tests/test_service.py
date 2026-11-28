@@ -71,9 +71,10 @@ class ManualClock:
         self.now += seconds
 
 
-def make_service(tmp, transport=None, clock=None):
+def make_service(tmp, transport=None, clock=None, **overrides):
     return AuthService(APP, Path(tmp), base_url='https://auth.internal',
-                       transport=transport, clock=clock or ManualClock())
+                       transport=transport, clock=clock or ManualClock(),
+                       **overrides)
 
 
 def authorize(service, transport, *, intent='join:123456789'):
@@ -292,6 +293,18 @@ class DiscoveryLoginTests(unittest.TestCase):
                 f'https://auth.internal/admin/oauth/callback?state={state}')
             with self.assertRaises(AuthError):
                 service.authorize_start('ou_A', 'admin:login')
+
+    def test_admin_callback_url_is_configurable_for_local_dev(self):
+        with TemporaryDirectory() as tmp:
+            service = make_service(
+                tmp, FakeTransport(),
+                admin_callback_url='http://127.0.0.1:8390/oauth/callback')
+            self.assertEqual(
+                service.admin_callback_url('st-1'),
+                'http://127.0.0.1:8390/oauth/callback?state=st-1')
+            with self.assertRaises(AuthError):
+                make_service(tmp, FakeTransport(),
+                             admin_callback_url='http://127.0.0.1:8390/x?y=1')
 
     def test_non_discovery_identity_mismatch_still_rejects(self):
         with TemporaryDirectory() as tmp:

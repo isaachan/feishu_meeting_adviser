@@ -76,7 +76,8 @@ start() { # name port cmd...
 start auth    8381 env AUTH_FEISHU_APP_ID="$AUTH_FEISHU_APP_ID" \
                      AUTH_FEISHU_APP_SECRET="$AUTH_FEISHU_APP_SECRET" \
   "$VENV/bin/auth" serve --data-dir "$DATA/auth" --host 0.0.0.0 --port 8381 \
-    --base-url "$AUTH_BASE_URL"
+    --base-url "$AUTH_BASE_URL" \
+    --admin-callback-url "http://127.0.0.1:8390/oauth/callback"
 
 start stt     8393 "$VENV/bin/stt-server" serve --host 0.0.0.0 --port 8392 \
   --health-port 8393 --auth none --model-dir "$STT_MODEL_DIR"

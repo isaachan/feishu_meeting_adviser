@@ -27,7 +27,8 @@ _CODE = re.compile(r'[A-Za-z0-9_-]{1,4096}\Z')
 
 class AuthService:
     def __init__(self, credentials, data_dir, *, base_url, transport=None,
-                 clock=time.time, state_ttl_s=DEFAULT_STATE_TTL_S):
+                 clock=time.time, state_ttl_s=DEFAULT_STATE_TTL_S,
+                 admin_callback_url=None):
         self.credentials = credentials
         self.clock = clock
         self.base_url = base_url.rstrip('/')
@@ -35,6 +36,12 @@ class AuthService:
         if parsed.scheme not in ('http', 'https') or not parsed.netloc or parsed.query or parsed.fragment:
             raise AuthError('oauth_invalid_callback')
         self.redirect_uri = self.base_url + CALLBACK_PATH
+        admin_callback = admin_callback_url or (self.base_url + ADMIN_CALLBACK_PATH)
+        parsed_admin = parse.urlsplit(admin_callback)
+        if (parsed_admin.scheme not in ('http', 'https') or not parsed_admin.netloc
+                or parsed_admin.query or parsed_admin.fragment):
+            raise AuthError('oauth_invalid_callback')
+        self.admin_callback = admin_callback
         self.transport = transport or FeishuTransport(credentials)
         data = Path(data_dir)
         self.store = CredentialStore(data / 'credentials')
@@ -114,7 +121,7 @@ class AuthService:
 
     def admin_callback_url(self, state):
         """Where the admin site finishes its discovery login (v1.8)."""
-        return f'{self.base_url}{ADMIN_CALLBACK_PATH}?state={parse.quote(state, safe="")}'
+        return f'{self.admin_callback}?state={parse.quote(state, safe="")}'
 
     def authorize_status(self, state):
         """Poll a login state (CONTRACT_AUTH v1.2 §2.3): pending/completed.
