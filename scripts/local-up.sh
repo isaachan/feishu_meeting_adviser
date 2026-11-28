@@ -10,6 +10,7 @@ source "$ENV_FILE"
 
 : "${AUTH_FEISHU_APP_ID:?}" "${AUTH_FEISHU_APP_SECRET:?}"
 : "${BOT_APP_ID:?}" "${BOT_APP_SECRET:?}"
+: "${ADMIN_USERS:?请设置 ADMIN_USERS（逗号分隔的飞书 user_id）}"
 : "${STT_MODEL_DIR:?请设置 STT_MODEL_DIR（模型下载见 docs/LOCAL_TESTING.md）}"
 [ -d "$STT_MODEL_DIR" ] || { echo "STT_MODEL_DIR 不存在: $STT_MODEL_DIR"; exit 1; }
 REMOTE_BACKEND="${REMOTE_BACKEND:-fake}"

@@ -31,6 +31,6 @@ case "$1" in
     exec "$VENV/bin/bot" serve --advisor-url http://127.0.0.1:8380 ;;
   admin-site)
     exec >>"$DATA/logs/admin-site.log" 2>&1
-    exec "$VENV/bin/admin-site" serve --advisor-url http://127.0.0.1:8380 --logs-dir "$DATA/logs" --host 127.0.0.1 --port 8390 ;;
+    exec "$VENV/bin/admin-site" serve --advisor-url http://127.0.0.1:8380 --auth-url http://127.0.0.1:8381 --public-prefix /admin --logs-dir "$DATA/logs" --host 127.0.0.1 --port 8390 ;;
   *) exit 2 ;;
 esac

@@ -1,6 +1,6 @@
 # 部署 · 节点与基线（v0.5 草案）
 
-> **生产实施更新（2026-11-16）**：服务器为 Ubuntu `10.132.67.11`，对外域名 `meeting-advisor.nioint.com`；OAuth、提交页面、GUI 和 admin-site 暂用 HTTP/域名，运维台通过 `http://meeting-advisor.nioint.com/admin` 访问（登录功能后续增加）。systemd 管理六个服务，具体操作以本文末 §7 为准；下文原 HTTPS、五个服务的设计基线在首期以此更新为准。
+> **生产实施更新（2026-11-16）**：服务器为 Ubuntu `10.132.67.11`，对外域名 `meeting-advisor.nioint.com`；OAuth、提交页面、GUI 和 admin-site 暂用 HTTP/域名，运维台通过 `http://meeting-advisor.nioint.com/admin` 访问，需飞书 OAuth 登录，且仅 `ADMIN_USERS` 白名单内的 `user_id` 可进入。systemd 管理六个服务，具体操作以本文末 §7 为准；下文原 HTTPS、五个服务的设计基线在首期以此更新为准。
 
 状态：设计基线。组件职责见 [ARCHITECTURE](ARCHITECTURE.md)。
 修订：v0.3 将 bot 与 OAuth 鉴权服务从 advisor 拆出，连同 advisor 共三个**独立部署节点**（v0.2 曾为 advisor 子系统）；v0.4 评审修订：v1 最简网络基线——后端不接公网，ingest 走受信网络明文 ws，auth 内部 API 仅 advisor 调用（bot 不直连）；**v0.5（2026-11-12）**：advisor 新增第三个对外入口 `/gui/*`（HTTPS 反代，gui 客户端用，CONTRACT_ADVISOR_API §8），组织者 laptop 承载增加 gui，凭据面新增 device_token。
@@ -69,7 +69,7 @@ bot 无业务持久状态（重启丢失的仅 IM 去重缓存，飞书事件重
 - 部署前置：飞书应用后台注册 OAuth 回调 URI（与 §2 精确一致，指向 auth 节点）、开通 IM 三权限与长连接事件（沿用旧 docs/APP_PERMISSIONS_EVENTS.md 清单）。
 - **状态机 v2 运行参数（2026-11-17，SM-13）**：advisor `serve` 新增可配置预算——`--observe-poll-s`（owner 在会轮询间隔，默认 15）、`--observe-timeout-s`（单次观测调用超时，默认 10）、`--max-observation-age-s`（快照时效，默认 60）、`--approval-ttl-s`（订阅审批等待，默认 1800）、`--drain-deadline-s`（排空总截止，默认 600）、`--reply-validity-s`（回答有效期，默认 3600）。除无音频 900 秒外均为工程默认值（STATE_MACHINES v2 §5），生产按真实耗时校准。用户 OAuth 请求 scope 新增用户版 `vc:meeting.meetingevent:read`（CONTRACT_AUTH v1.6）：存量凭据不受影响，缺该 scope 的用户由 advisor 经 outbox 一次性提醒重新授权（会话观测降级为 unknown，不伪造离会）。2026-11-27 起请求集合再增 `docx:document:readonly`、`wiki:wiki:readonly`（CONTRACT_AUTH v1.7，用于建会时读取会议描述中的飞书文档）：飞书应用后台需开通这两个权限并发布版本；存量凭据缺 scope 时 advisor 降级为只带描述建会并一次性提示重新授权，不阻塞入会。
 - **富文本回答（2026-11-22，T17）**：advisor 默认 `--decision-output decision-v2`，bot 默认 `--rich-text` 开启（`BOT_RICH_TEXT=0` 或 `--no-rich-text` 关闭）；关闭时 Markdown 按纯文本显示。回滚：`advisor --decision-output decision-v1` 和/或 `bot --no-rich-text`；bot 渲染失败自动回退纯文本。方言与安全边界见 [FEISHU_RICH_TEXT_REPLY](FEISHU_RICH_TEXT_REPLY.md)。
-- **schema 升级**：advisor 数据库自动按 v4→…→v8 链式迁移（STATE_MACHINES v2 §6：实例键/claims/观测列/审批 deadline/回答有效期），升级前备份 adviser.sqlite3；回滚不可逆，靠备份恢复。admin-site 的「小C 名单」是 owner 权限面：仅受信网络使用（现状 localhost/内网域名），扩大暴露面前必须先加认证。
+- **schema 升级**：advisor 数据库自动按 v4→…→v8 链式迁移（STATE_MACHINES v2 §6：实例键/claims/观测列/审批 deadline/回答有效期），升级前备份 adviser.sqlite3；回滚不可逆，靠备份恢复。admin-site 的「小C 名单」是 owner 权限面：现已要求飞书 OAuth 登录 + `ADMIN_USERS` 白名单；扩大暴露面前仍需评估会话与网络边界。
 - llm-gateway 节点前置：安装 noam CLI；使用 `--noam-bin` 指定路径、`--auth-url` 指定受信 auth 服务，正式 skill 根目录用 `--skills-dir` 指定。NSDP 查询按需执行，token 仅经查询子进程环境传递；缺少 noam 或 auth 不可达时工具返回失败。advisor 与 gateway 的身份扩展须同步部署。
 - Jira 查询：在 gateway 配置 `--jira-url https://<Jira Data Center 地址>` 或环境变量 `JIRA_URL`，确保服务器可访问该地址；地址必须为 HTTPS。组织者按通知通过 `/jira/submit` 提交个人 PAT，工具只对 noam 子进程注入 PAT 并启用 `JIRA_READ_ONLY=true`。未配置地址时 Jira 查询不可用。auth、advisor、gateway 须同步部署。
 - 进程管理：systemd 五个独立单元（`advisor`、`bot`、`auth`、`stt-server`、`llm-gateway`），各自有界停机（advisor 需 draining 会话排空后再退出；bot/auth 可直接重启）。
@@ -90,7 +90,7 @@ bot 无业务持久状态（重启丢失的仅 IM 去重缓存，飞书事件重
 
 - 服务器 `10.132.67.11`，代码放在部署用户的 `$HOME/feishu_meeting_advisor`。以该用户执行下列命令；需有 sudo/systemd 权限。六个服务使用该 Linux 用户运行，因而可使用该用户已有的 noam、OpenCode 登录凭据和模型文件。
 - 安装 Python 3.11+、`python3-venv`、pip 所需构建环境、curl、git 和 nginx；服务器需能安装各模块 Python 依赖。确认模型目录、noam 和 OpenCode 在该用户下可用。OpenCode 默认读取该用户的 `~/.local/share/opencode/auth.json`，也可通过 `OPENCODE_AUTH` 指定。
-- 飞书后台 OAuth 回调设置为 **`http://meeting-advisor.nioint.com/oauth/callback`**，需与 `PUBLIC_BASE_URL` 拼出的地址完全一致。确保浏览器及手机可访问服务器端口 80，laptop 可访问 8400；admin-site 经 nginx `/admin` 访问，无需对外开放 8390。
+- 飞书后台 OAuth 回调设置为 **`http://meeting-advisor.nioint.com/oauth/callback`**，需与 `PUBLIC_BASE_URL` 拼出的地址完全一致。确保浏览器及手机可访问服务器端口 80，laptop 可访问 8400；admin-site 经 nginx `/admin` 访问，无需对外开放 8390；`prod.env` 必须配置 `ADMIN_USERS`（逗号分隔的飞书 `user_id`），否则 admin-site 拒绝启动。
 - 拷贝并编辑配置（填写真实的飞书凭据及三个绝对路径）：
 
 ```bash
@@ -98,7 +98,7 @@ cp scripts/prod.env.example scripts/prod.env
 chmod 600 scripts/prod.env
 ```
 
-`scripts/prod.env` 是 shell 格式，仅保存可信的配置内容，不提交 Git。按需设置 `JIRA_URL`、`OPENCODE_MODEL`、`OPENCODE_AUTH`、`OPENCODE_PROVIDER_CONFIG`、`SKILLS_DIR`；更换 LLM 模型的完整步骤、验证与回滚见 [PROD_MODEL_SWITCH](PROD_MODEL_SWITCH.md)。将已有 `prod.env` 的 `PUBLIC_BASE_URL`、`INGEST_URL` 改为域名值（参见 `prod.env.example`）；admin-site 固定监听 localhost，旧的 `ADMIN_HOST` 可删除。默认真实模型 `REMOTE_BACKEND=opencode`；如需先验收假模型，可暂设 `fake`。GUI 的服务器地址填写 `http://meeting-advisor.nioint.com`。
+`scripts/prod.env` 是 shell 格式，仅保存可信的配置内容，不提交 Git。按需设置 `JIRA_URL`、`OPENCODE_MODEL`、`OPENCODE_AUTH`、`OPENCODE_PROVIDER_CONFIG`、`SKILLS_DIR`；更换 LLM 模型的完整步骤、验证与回滚见 [PROD_MODEL_SWITCH](PROD_MODEL_SWITCH.md)。将已有 `prod.env` 的 `PUBLIC_BASE_URL`、`INGEST_URL` 改为域名值（参见 `prod.env.example`）；admin-site 固定监听 localhost，旧的 `ADMIN_HOST` 可删除；新增必填 `ADMIN_USERS`（运维台登录白名单，逗号分隔飞书 `user_id`），会话保存在 admin-site 内存中，进程重启后需重新登录。默认真实模型 `REMOTE_BACKEND=opencode`；如需先验收假模型，可暂设 `fake`。GUI 的服务器地址填写 `http://meeting-advisor.nioint.com`。
 
 ### 7.2 部署、停止与升级
 
@@ -121,7 +121,7 @@ scripts/prod-down.sh --drain --timeout 600
 |---|---|
 | nginx | `80`；仅转发 `/oauth/callback`、`/nsdp/submit`、`/jira/submit`、`/gui/` 和 `/admin/`；`/admin` 重定向到 `/admin/` |
 | advisor ingest | `0.0.0.0:8400`；默认下发 `ws://meeting-advisor.nioint.com:8400/ingest` |
-| admin-site | `127.0.0.1:8390`（nginx 反代）；浏览器 `http://meeting-advisor.nioint.com/admin`，当前无登录 |
+| admin-site | `127.0.0.1:8390`（nginx 反代）；浏览器 `http://meeting-advisor.nioint.com/admin`，飞书 OAuth 登录 + `ADMIN_USERS` 白名单 |
 | auth、advisor API、STT、STT health、gateway | 分别为 localhost 的 `8381`、`8380`、`8392`、`8393`、`8377` |
 
 数据在 `data/prod/`，日志在 `data/prod/logs/`，admin-site 从该目录读取五个服务日志。服务状态也可用 `systemctl status meeting-advisor@advisor` 查看；启动器故障可用 `journalctl -u meeting-advisor@advisor` 排查。日志文件需要按服务器运维策略定期轮转；备份 advisor 数据库和 auth 凭据时先停服务，并保护备份文件。

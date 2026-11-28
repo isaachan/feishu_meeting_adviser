@@ -4,7 +4,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ENV_FILE="$ROOT/scripts/prod.env"
 [[ -f "$ENV_FILE" ]] || { echo "Copy scripts/prod.env.example to $ENV_FILE and configure it" >&2; exit 1; }
 source "$ENV_FILE"
-: "${AUTH_FEISHU_APP_ID:?}" "${AUTH_FEISHU_APP_SECRET:?}" "${BOT_APP_ID:?}" "${BOT_APP_SECRET:?}" "${STT_MODEL_DIR:?}" "${NOAM_BIN:?}" "${OPENCODE_BIN:?}" "${PUBLIC_BASE_URL:?}" "${INGEST_URL:?}"
+: "${AUTH_FEISHU_APP_ID:?}" "${AUTH_FEISHU_APP_SECRET:?}" "${BOT_APP_ID:?}" "${BOT_APP_SECRET:?}" "${STT_MODEL_DIR:?}" "${NOAM_BIN:?}" "${OPENCODE_BIN:?}" "${PUBLIC_BASE_URL:?}" "${INGEST_URL:?}" "${ADMIN_USERS:?}"
 [[ -d "$STT_MODEL_DIR" && -x "$NOAM_BIN" && -x "$OPENCODE_BIN" ]] || { echo 'Check STT_MODEL_DIR, NOAM_BIN and OPENCODE_BIN' >&2; exit 1; }
 [[ "$(uname -s)" == Linux ]] || { echo 'Production deployment requires Linux/systemd' >&2; exit 1; }
 command -v nginx >/dev/null || { echo 'Install nginx first' >&2; exit 1; }
