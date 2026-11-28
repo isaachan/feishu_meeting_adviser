@@ -2,10 +2,12 @@
 
 import argparse
 import logging
+import os
 from pathlib import Path
 
 from . import __version__
 from .advisor_client import AdvisorAdminClient
+from .auth import AuthClient
 from .server import SERVICES, build_server
 
 LOG = logging.getLogger(__name__)
@@ -22,8 +24,14 @@ def main() -> None:
                        help='log directory as written by scripts/local-up.sh '
                             '(default data/local/logs; files: '
                             + ', '.join(SERVICES.values()) + ')')
+    serve.add_argument('--auth-url', default='http://127.0.0.1:8381',
+                       help='auth node internal URL (default http://127.0.0.1:8381)')
+    serve.add_argument('--public-prefix', default='',
+                       help='public path prefix (prod behind nginx: /admin)')
+    serve.add_argument('--session-ttl-s', type=float, default=28800,
+                       help='admin session lifetime seconds (default 28800)')
     serve.add_argument('--host', default='127.0.0.1',
-                       help='bind address (default 127.0.0.1; no login yet)')
+                       help='bind address (default 127.0.0.1)')
     serve.add_argument('--port', type=int, default=8390)
     serve.add_argument('--bootstrap-bytes', type=int, default=65536,
                        help='initial tail bytes per log stream (default 65536)')
@@ -31,14 +39,23 @@ def main() -> None:
                        help='log follow poll interval seconds (default 0.5)')
 
     args = parser.parse_args()
+    admin_users = [part for part in os.environ.get('ADMIN_USERS', '').split(',')
+                   if part.strip()]
+    if not admin_users:
+        parser.error('ADMIN_USERS is required (comma-separated Feishu user_id)')
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(levelname)s %(message)s')
 
     advisor = AdvisorAdminClient(args.advisor_url)
-    server = build_server(advisor, args.logs_dir, host=args.host, port=args.port,
+    server = build_server(advisor, args.logs_dir, admin_users=admin_users,
+                          auth_client=AuthClient(args.auth_url),
+                          public_prefix=args.public_prefix,
+                          session_ttl_s=args.session_ttl_s,
+                          host=args.host, port=args.port,
                           bootstrap_bytes=args.bootstrap_bytes, poll_s=args.poll_s)
-    LOG.info('admin-site %s on http://%s:%s (advisor=%s, logs-dir=%s)',
-             __version__, args.host, args.port, args.advisor_url, args.logs_dir)
+    LOG.info('admin-site %s on http://%s:%s (advisor=%s, logs-dir=%s, users=%d)',
+             __version__, args.host, args.port, args.advisor_url, args.logs_dir,
+             len(admin_users))
     try:
         server.serve_forever()
     except KeyboardInterrupt:
