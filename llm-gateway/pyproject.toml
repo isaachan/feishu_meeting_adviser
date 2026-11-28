@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "llm-gateway"
-version = "0.1.1"
+version = "0.1.2"
 description = "Local inference gateway executing OpenCode-backed meeting decisions"
 requires-python = ">=3.11"
 dependencies = []

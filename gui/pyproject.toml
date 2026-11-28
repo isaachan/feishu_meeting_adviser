@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gui"
-version = "0.1.0"
+version = "0.1.1"
 description = "Organizer GUI: QR login, session discovery, capture control"
 requires-python = ">=3.11"
 dependencies = ["keyring>=25"]
