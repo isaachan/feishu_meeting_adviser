@@ -262,10 +262,15 @@ def build_server(advisor: AdvisorAdminClient, logs_dir, *, admin_users, auth_cli
             if parsed.path == '/logout':
                 self._handle_logout()
                 return
-            if self._require_session() is None:
+            record = self._require_session()
+            if record is None:
                 return
             if parsed.path in ('/', '/index.html'):
                 self._reply_file(static_root / 'index.html', 'text/html; charset=utf-8')
+            elif parsed.path == '/api/me':
+                self._reply_json(200, {'open_id': record['open_id'],
+                                       'user_id': record['user_id'],
+                                       'name': record['name']})
             elif parsed.path == '/api/sessions':
                 self._proxy(advisor.admin_sessions)
             elif parsed.path.startswith('/api/sessions/') and parsed.path.endswith('/transcript'):

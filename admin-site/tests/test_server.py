@@ -224,9 +224,10 @@ class AuthenticationTests(AdminSiteBase):
         self.assertEqual(location, '/login')
 
     def test_unauthenticated_api_is_401(self):
-        status, body, _, _ = self.raw('/api/sessions')
-        self.assertEqual(status, 401)
-        self.assertEqual(json.loads(body)['error']['code'], 'unauthorized')
+        for path in ('/api/sessions', '/api/me'):
+            status, body, _, _ = self.raw(path)
+            self.assertEqual(status, 401, msg=path)
+            self.assertEqual(json.loads(body)['error']['code'], 'unauthorized')
 
     def test_unauthenticated_log_stream_is_401(self):
         status, body, _, _ = self.raw('/api/logs/advisor/stream')
@@ -256,6 +257,11 @@ class AuthenticationTests(AdminSiteBase):
         status, page, _, _ = self.raw('/', cookie=f'admin_session={token}')
         self.assertEqual(status, 200)
         self.assertIn('运维台', page.decode('utf-8'))
+        status, body, _, _ = self.raw('/api/me', cookie=f'admin_session={token}')
+        self.assertEqual(status, 200)
+        me = json.loads(body)
+        self.assertEqual((me['open_id'], me['user_id'], me['name']),
+                         ('ou_KAI', 'kai.han', 'Kai Han'))
 
     def test_callback_rejects_state_mismatch(self):
         status, page, _, _ = self.raw(
@@ -514,6 +520,13 @@ class ConfigProxyTests(AdminSiteBase):
         with self.open(self.url('/')) as response:
             html = response.read().decode('utf-8')
         for marker in ('tab-settings', 'view-settings', 'api/config', 'idle-save'):
+            self.assertIn(marker, html)
+
+    def test_index_shows_current_user_and_logout(self):
+        with self.open(self.url('/')) as response:
+            html = response.read().decode('utf-8')
+        for marker in ('id="admin-user"', 'id="logout"', "fetch('api/me')",
+                       "location.href = 'logout'"):
             self.assertIn(marker, html)
 
     def test_index_has_export_button_and_menu(self):

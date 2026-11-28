@@ -24,6 +24,7 @@
                padding: 5px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; }
   nav button.active { color: var(--fg); background: var(--bg);
                       border-color: var(--border); }
+  #admin-user { color: var(--dim); font-size: 13px; font-family: var(--mono); }
   main { padding: 16px 18px; max-width: 1200px; margin: 0 auto; }
   .toolbar { display: flex; align-items: center; gap: 14px; margin-bottom: 12px;
              color: var(--dim); font-size: 13px; flex-wrap: wrap; }
@@ -95,6 +96,8 @@
     <button id="tab-settings">设置</button>
     <button id="tab-logs">日志</button>
   </nav>
+  <span id="admin-user"></span>
+  <button class="btn" id="logout">退出登录</button>
 </header>
 <main>
   <div id="banner"></div>
@@ -587,6 +590,17 @@ document.addEventListener('click', (ev) => {
       && !ev.target.closest('button[data-export]')) hideExportMenu();
 });
 
+async function loadMe() {
+  try {
+    const resp = await fetch('api/me');
+    if (!resp.ok) return;
+    const me = await resp.json();
+    $('admin-user').textContent = me.user_id || me.name || '';
+  } catch (err) { /* header identity is best-effort */ }
+}
+
+$('logout').onclick = () => { window.location.href = 'logout'; };
+loadMe();
 buildLogTabs();
 showView('sessions');
 </script>
