@@ -14,8 +14,8 @@ import time
 from pathlib import Path
 from urllib import parse
 
-from .constants import (AUTHORIZE_URL, CALLBACK_PATH, DEFAULT_STATE_TTL_S, GUI_LOGIN_INTENT,
-                        NSDP_INTENT, NSDP_SUBMIT_PATH, SCOPES)
+from .constants import (ADMIN_CALLBACK_PATH, ADMIN_LOGIN_INTENT, AUTHORIZE_URL, CALLBACK_PATH,
+                        DEFAULT_STATE_TTL_S, GUI_LOGIN_INTENT, NSDP_INTENT, NSDP_SUBMIT_PATH, SCOPES)
 from .errors import AuthError
 from .state_table import StateTable
 from .storage import digest
@@ -56,7 +56,7 @@ class AuthService:
     def authorize_start(self, open_id, intent):
         """Issue an authorize URL. Discovery variant (v1.2): intent=gui:login
         takes open_id=None; the subject is discovered at callback time."""
-        discovery = intent == GUI_LOGIN_INTENT
+        discovery = intent in (GUI_LOGIN_INTENT, ADMIN_LOGIN_INTENT)
         if discovery and open_id is not None:
             raise AuthError('oauth_invalid_open_id')
         if (not discovery and not valid_open_id(open_id)) or \
@@ -109,7 +109,12 @@ class AuthService:
             self.states.complete(state, info)
         except AuthError as exc:
             return {'outcome': 'failed', 'stage': exc.stage or 'validation', 'open_id': entry['open_id']}
-        return {'outcome': 'success', 'open_id': open_id, 'intent': entry['intent']}
+        return {'outcome': 'success', 'open_id': open_id, 'intent': entry['intent'],
+                'state': state}
+
+    def admin_callback_url(self, state):
+        """Where the admin site finishes its discovery login (v1.8)."""
+        return f'{self.base_url}{ADMIN_CALLBACK_PATH}?state={parse.quote(state, safe="")}'
 
     def authorize_status(self, state):
         """Poll a login state (CONTRACT_AUTH v1.2 §2.3): pending/completed.

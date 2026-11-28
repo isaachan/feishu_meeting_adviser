@@ -274,6 +274,25 @@ class DiscoveryLoginTests(unittest.TestCase):
             with self.assertRaises(AuthError):
                 service.authorize_status(state)
 
+    def test_admin_intent_is_discovery_and_returns_state(self):
+        from urllib import parse
+        with TemporaryDirectory() as tmp:
+            transport = FakeTransport(open_id='ou_ADMIN')
+            service = make_service(tmp, transport)
+            start = service.authorize_start(None, 'admin:login')
+            state = parse.parse_qs(parse.urlsplit(start['authorize_url']).query)['state'][0]
+            outcome = service.callback(parse.urlencode({'code': 'c-admin', 'state': state}))
+            self.assertEqual(outcome['outcome'], 'success')
+            self.assertEqual(outcome['intent'], 'admin:login')
+            self.assertEqual(outcome['state'], state)
+            self.assertEqual(outcome['open_id'], 'ou_ADMIN')
+            self.assertEqual(service.store.read('ou_ADMIN')['state'], 'ready')
+            self.assertEqual(
+                service.admin_callback_url(state),
+                f'https://auth.internal/admin/oauth/callback?state={state}')
+            with self.assertRaises(AuthError):
+                service.authorize_start('ou_A', 'admin:login')
+
     def test_non_discovery_identity_mismatch_still_rejects(self):
         with TemporaryDirectory() as tmp:
             transport = FakeTransport(open_id='ou_SOMEONE_ELSE')

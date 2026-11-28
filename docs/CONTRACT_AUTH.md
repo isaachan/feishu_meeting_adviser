@@ -1,5 +1,7 @@
 # Auth 服务契约（OAuth 凭据托管）
 
+> **v1.8（2026-11-28，admin-site 登录）**：`/authorize/start` 的发现式登录扩展 `intent:"admin:login"`（`open_id` 必须缺省）。回调成功后不再渲染页面，而是 302 到 `<base_url>/admin/oauth/callback?state=…`，由 admin-site 校验自身 state cookie、调用 `/authorize/status` 读取身份并按 `ADMIN_USERS` 白名单决定是否建会话。其他 intent（`gui:login`、`join:*`、`prompt-studio`、集成床 `bed`）行为完全不变；回归用例见 `auth/tests/test_api.py`。additive，存量消费方不受影响。
+>
 > **v1.7（2026-11-17，supervisor login 解析）**：身份摘要（§2.3 status、§2.4 profile、§4.1 落存）新增 `user_id` 字段——飞书 user_info 返回的租户内登录名（如 `kai.han`），可为 `null`（以实际返回为准）。存量档案缺 `user_id` 时，§2.4 的惰性补档同样适用（下次凭据读取时 best-effort 重取一次）。供 advisor supervisor grant 按 login 解析（CONTRACT_ADVISOR_API §9.4）。additive，存量消费方不受影响。
 >
 > **v1.6（2026-11-16，SM-01/SM-08）**：用户 OAuth scope 集扩展——新增用户版 `vc:meeting.meetingevent:read`（会话观测轮询，见 studies/meeting-events `poll_user.py` 链路）。**请求集合**（授权 URL/code 换取/刷新均携带）= BASE ∪ {`vc:meeting.meetingevent:read`}；**校验下限** BASE = 原 3 项（§1）。存量凭据（无 vc scope）继续通过校验与刷新，不强制重授权；缺该 scope 的 token 用于会话观测时由使用方（advisor）按「观测能力缺失 → unknown + 一次性提醒重新授权」处理。stub transport（`integrations/`）同步跟随请求集合。
@@ -50,6 +52,7 @@
 - `intent` 为待续接意图（如 `join:<会议号>`），仅用于回调成功页提示，不含敏感信息。
 - advisor 将 `authorize_url` 经 CONTRACT_ADVISOR_API 的 `authorization_required` 响应转给 bot → 小A。
 - **发现式登录变体（v1.2）**：`intent` 为 `gui:login` 时允许 `open_id` 缺省（`null`）——state 记录 `discovery=true`、不绑定 open_id；用于 gui 扫码登录（身份即待发现项）。回调时以 user_info 的 open_id **采纳**为主体（跳过防串换相等校验，见 §4.1）；非 discovery state 不受影响。
+- **admin-site 登录变体（v1.8）**：`intent` 为 `admin:login` 时同样允许 `open_id` 缺省（`null`），语义同 discovery；回调成功后 302 到 `<base_url>/admin/oauth/callback?state=…`（见 §4.1）。
 
 ### 2.2 `GET /credentials/{open_id}/token[?rejected=<token>]`
 
@@ -117,7 +120,7 @@
 1. `state` 校验：存在、未过期、**未使用** → 立即标记已用（一次性）。
 2. 用 state 记录中的 `verifier` 完成 PKCE code 换取。
 3. 经 user_info 取得授权者 open_id：**非 discovery state** 必须等于 state 绑定的 open_id（防串换账号），否则显式失败页；**discovery state（v1.2，`intent:"gui:login"`）** 无绑定可校验，以 user_info 的 open_id **采纳**为主体（发现式登录语义）。
-4. 落盘成功后返回简化成功页：显示"授权成功，请回到飞书重新发送刚才的指令（<intent 摘要>）"；discovery state 显示"登录成功，请回到采集应用"。
+4. 落盘成功后返回简化成功页：显示"授权成功，请回到飞书重新发送刚才的指令（<intent 摘要>）"；discovery state 显示"登录成功，请回到采集应用"。**例外（v1.8）**：`intent:"admin:login"` 不渲染页面，改为 302 `Location: <base_url>/admin/oauth/callback?state=…`（`Cache-Control: no-store`、`Referrer-Policy: no-referrer`），其余 intent 行为不变。
 5. 任何一步失败：显式失败页（含原因），不静默重试；code 一次性，失败不重放。
 6. **user_info 摘要落 state 记录（v1.2）**：成功路径将 `{open_id, name, en_name, email, user_id}` 写入 state 记录（供 `GET /authorize/status` 读取；discovery 与非 discovery 均落）。摘要不含任何 token；state 表 TTL 回收语义不变。
 7. **身份档案持久化（v1.3）**：成功路径同时将同一摘要写入持久档案 `<数据目录>/profiles/<open_id>.json`（§5），供 `GET /users/{open_id}/profile`（§2.4）读取；写失败按第 5 条显式失败处理，不产生半凭据状态。

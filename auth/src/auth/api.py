@@ -9,7 +9,7 @@ import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib import parse
 
-from .constants import GUI_LOGIN_INTENT
+from .constants import ADMIN_LOGIN_INTENT, GUI_LOGIN_INTENT
 from .errors import AuthError
 from .service import AuthService
 
@@ -92,6 +92,14 @@ class _Handler(BaseHTTPRequestHandler):
         except OSError:
             pass
 
+    def _redirect(self, location):
+        self.send_response(302)
+        self.send_header('Location', location)
+        self.send_header('Content-Length', '0')
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('Referrer-Policy', 'no-referrer')
+        self.end_headers()
+
     def _read_json(self):
         raw_length = self.headers.get('Content-Length')
         if raw_length is None:
@@ -142,7 +150,11 @@ class _Handler(BaseHTTPRequestHandler):
             except AuthError:
                 outcome = {'outcome': 'invalid'}
             if outcome['outcome'] == 'success':
-                if outcome.get('intent') == GUI_LOGIN_INTENT:
+                if outcome.get('intent') == ADMIN_LOGIN_INTENT:
+                    # admin discovery login: hand the state back to the admin
+                    # site, which validates its own cookie and whitelist.
+                    self._redirect(self._service().admin_callback_url(outcome['state']))
+                elif outcome.get('intent') == GUI_LOGIN_INTENT:
                     self._reply_page(200, _GUI_SUCCESS_PAGE)
                 else:
                     intent = outcome.get('intent') or ''

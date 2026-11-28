@@ -75,6 +75,17 @@ class ApiTests(unittest.TestCase):
         with OPENER.open(req, timeout=5) as response:
             return response.status, json.loads(response.read())
 
+    def get_raw(self, path):
+        """GET without following redirects (http.client, no proxy)."""
+        import http.client
+        conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=5)
+        try:
+            conn.request('GET', path)
+            response = conn.getresponse()
+            return response.status, response.read(), response.getheader('Location')
+        finally:
+            conn.close()
+
     def test_healthz(self):
         status, body, _ = self.get('/healthz')
         self.assertEqual(status, 200)
@@ -192,6 +203,36 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(result['status'], 'completed')
         self.assertEqual(result['user']['open_id'], 'ou_A')
         self.assertNotIn('u-first', payload)  # no token material
+
+    def test_admin_login_redirects_to_admin_callback(self):
+        status, start = self.post('/authorize/start',
+                                  {'open_id': None, 'intent': 'admin:login'})
+        self.assertEqual(status, 200)
+        state = parse.parse_qs(parse.urlsplit(start['authorize_url']).query)['state'][0]
+        status, body, location = self.get_raw(
+            '/oauth/callback?' + parse.urlencode({'code': 'c-admin', 'state': state}))
+        self.assertEqual(status, 302)
+        self.assertEqual(location,
+                         f'https://auth.internal/admin/oauth/callback?state={state}')
+        self.assertEqual(body, b'')
+        status, payload, _ = self.get('/authorize/status?state=' + parse.quote(state))
+        self.assertEqual(status, 200)
+        result = json.loads(payload)
+        self.assertEqual(result['status'], 'completed')
+        self.assertEqual(result['user']['user_id'], 'kai.han')
+        self.assertNotIn('u-first', payload)
+
+    def test_non_admin_callback_keeps_success_page(self):
+        # Regression constraint: only admin:login redirects; other intents
+        # (prompt-studio, integration bed, join links) keep the success page.
+        status, start = self.post('/authorize/start', {'open_id': 'ou_A', 'intent': 'bed'})
+        self.assertEqual(status, 200)
+        state = parse.parse_qs(parse.urlsplit(start['authorize_url']).query)['state'][0]
+        status, page, headers = self.get(
+            '/oauth/callback?' + parse.urlencode({'code': 'c-1', 'state': state}))
+        self.assertEqual(status, 200)
+        self.assertIn('授权成功', page)
+        self.assertNotIn('Location', headers)
 
     def test_authorize_status_unknown_state_maps_404(self):
         try:

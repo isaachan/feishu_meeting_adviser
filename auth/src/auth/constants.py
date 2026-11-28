@@ -8,6 +8,8 @@ CALLBACK_PATH = '/oauth/callback'
 NSDP_SUBMIT_PATH = '/nsdp/submit'
 NSDP_INTENT = 'nsdp:token'
 GUI_LOGIN_INTENT = 'gui:login'
+ADMIN_LOGIN_INTENT = 'admin:login'
+ADMIN_CALLBACK_PATH = '/admin/oauth/callback'
 BASE_SCOPES = ('calendar:calendar:read', 'calendar:calendar.event:read', 'offline_access')
 SCOPES = BASE_SCOPES + ('vc:meeting.meetingevent:read',
                         'docx:document:readonly', 'wiki:wiki:readonly')
